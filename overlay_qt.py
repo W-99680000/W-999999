@@ -51,6 +51,9 @@ import time
 
 SETTINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "overlay_qt.json")
+# 控制面板往这里写命令，浮窗轮询它（见 control_panel.py 的协议说明）
+CMD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "control_cmd.json")
 
 
 def default_settings():
@@ -193,6 +196,7 @@ class QtOverlay:
         self.entries = []               # [(ts, en, zh, QLabel)]
         self._drag = None
         self._hover_grip = False
+        self._cmd_ts = None            # 控制面板命令的时间戳（见 _read_cmd）
         # 把手是自绘的，必须把 paintEvent 接过来（只画把手，背景仍交给样式表）
         self.w.paintEvent = self._paint
 
@@ -205,6 +209,26 @@ class QtOverlay:
         self._timer = QTimer()
         self._timer.timeout.connect(self._expire)
         self._timer.start(500)
+
+        # 轮询控制面板的命令（文件协议，见 control_panel.py）
+        self._cmd_timer = QTimer()
+        self._cmd_timer.timeout.connect(self._poll_cmd)
+        self._cmd_timer.start(300)
+        # 启动时立刻写一次设置，让面板能读到当前值
+        self._save()
+
+    def _poll_cmd(self):
+        """看一眼控制面板有没有新命令（每 300ms）。出错不影响字幕。"""
+        try:
+            ch = self._read_cmd()
+        except Exception:
+            return
+        if ch is None:
+            return
+        try:
+            self.apply_cmd(ch)
+        except Exception as e:
+            print(f"  面板命令应用失败: {type(e).__name__} {e}", flush=True)
 
     # ── 设置校验 ─────────────────────────────────────────────
     @staticmethod
@@ -271,9 +295,57 @@ class QtOverlay:
             out["outline_color"] = v
         return out
 
+    # ── 与控制面板的通信（文件协议，见 control_panel.py）────────
+    def _read_cmd(self):
+        """看控制面板有没有发新命令。返回 changes 字典或 None。
+
+        协议：面板往 control_cmd.json 写 {"_ts": 时间戳, "_changes": {...}}。
+        我们比对 _ts 是否变过（不比对内容 —— 面板可能把同一个值再发一次，
+        那也应该重绘，因为浮窗可能被别的途径改过）。
+        """
+        try:
+            with open(CMD_PATH, encoding="utf-8") as f:
+                j = json.load(f)
+        except Exception:
+            return None
+        ts = j.get("_ts")
+        if ts is None or ts == self._cmd_ts:
+            return None
+        self._cmd_ts = ts
+        return j.get("_changes") or {}
+
+    def apply_cmd(self, ch):
+        """应用面板发来的改动。特殊动作以 _action 为键。"""
+        if not ch:
+            return
+        act = ch.pop("_action", None)
+        if act == "recenter":
+            self.recenter()
+        elif act == "reset":
+            self.reset()
+        elif act == "toggle":
+            self.toggle()
+        # 普通键：只接受 _validate 认得的（防面板发来坏值把浮窗搞坏）
+        if ch:
+            ok = type(self)._validate(dict(self.st, **ch))
+            for k, v in ok.items():
+                self.st[k] = v
+        # 应用
+        try:
+            self.w.setWindowOpacity(float(self.st["opacity"]))
+        except Exception:
+            pass
+        self._apply_style()
+        self.refresh()
+        self._layout()
+        self._save()
+        print(f"  面板改动已应用: {list(ch.keys()) or act}", flush=True)
+
     def _save(self):
         try:
             s = dict(self.st)
+            # 带上时间戳，面板据此判断"主程序有新状态"
+            s["_app_ts"] = time.time()
             json.dump(s, open(SETTINGS, "w", encoding="utf-8"),
                       ensure_ascii=False, indent=2)
         except Exception:
@@ -357,22 +429,48 @@ class QtOverlay:
                     f'-webkit-text-stroke:{ow:.2f}px {oc}; text-shadow:0 2px 4px rgba(0,0,0,0.85);">'
                     f'{escape(zh)}{extra}</span>')
 
-        def en_div(extra=""):
+        def en_div(span_style=""):
             return (f'<span style="color:{self.st["original_text_color"]}; '
-                    f'font-size:{fs_o}px; '
+                    f'font-size:{fs_o}px; {span_style}'
                     f'-webkit-text-stroke:{ow * 0.8:.2f}px {oc}; text-shadow:0 1px 3px rgba(0,0,0,0.8);">'
-                    f'{escape(en)}{extra}</span>')
+                    f'{escape(en)}</span>')
 
         if layout == "inline":
-            parts = []
+            # **真的"同行"：两列并排，各自在列内居中。**
+            #
+            # 我第一版只是把两个 span 顺序拼在一行里（中间塞 &nbsp;），
+            # 结果实测（780px 宽、42px 字号）**要 5 行** —— 比 stacked 的
+            # 2 行还高，完全违背 "inline 最省高度" 的初衷：
+            #     中文一行 + 英文三行，因为是顺序流式排布，各自独立折行。
+            # 改成两列表格布局后，译文与原文**并排**且各自在列内居中：
+            #     一行高度 = max(译文行数, 原文行数)，真正只有一行。
+            # 列宽按文本长度分配（不是各 50%），短的一侧不会浪费空间。
+            w_zh = max(1, len(zh) * 2)      # 汉字按两个西文字宽估
+            w_en = max(1, len(en))
+            tot = w_zh + w_en
+            pct_zh = max(22, min(78, round(w_zh / tot * 100)))
+            pct_en = 100 - pct_zh
+            cells = []
             if zh:
-                parts.append(zh_div(f"&nbsp;&nbsp;" if show_en else ""))
-            if show_en:
-                parts.append(en_div())
-            body = "".join(parts) or "&nbsp;"
+                cells.append(
+                    f'<td style="width:{pct_zh}%; vertical-align:middle; '
+                    f'text-align:{ta}; overflow-wrap:break-word; '
+                    f'word-break:normal; padding-right:0.35em;">{zh_div()}</td>')
+            if show_en and not zh:
+                cells.append(
+                    f'<td style="width:100%; vertical-align:middle; '
+                    f'text-align:{ta}; overflow-wrap:break-word; '
+                    f'word-break:normal;">{en_div()}</td>')
+            elif show_en:
+                cells.append(
+                    f'<td style="width:{pct_en}%; vertical-align:middle; '
+                    f'text-align:{ta}; overflow-wrap:break-word; '
+                    f'word-break:normal;">{en_div()}</td>')
+            body = ("<table style='width:100%; border-collapse:collapse; "
+                    "table-layout:fixed;'><tr>" + "".join(cells) +
+                    "</tr></table>")
             return (f'<div style="line-height:{lh}; margin:0; '
-                    f'text-align:{ta}; '
-                    f'white-space:pre-wrap; word-wrap:break-word;">{body}</div>')
+                    f'white-space:normal;">{body}</div>')
 
         # stacked / zh_only
         # **每行各自居中**（text-align:center）。译文与原文长度不同，
@@ -382,11 +480,13 @@ class QtOverlay:
         if zh:
             rows.append(f'<div style="font-size:{fs}px; line-height:{lh}; '
                         f'margin:0; text-align:{ta}; '
-                        f'word-wrap:break-word;">{zh_div()}</div>')
+                        f'overflow-wrap:break-word; word-break:normal;">'
+                        f'{zh_div()}</div>')
         if show_en:
             rows.append(f'<div style="font-size:{fs_o}px; line-height:{lh}; '
                         f'margin:1px 0 0 0; text-align:{ta}; '
-                        f'word-wrap:break-word;">{en_div()}</div>')
+                        f'overflow-wrap:break-word; word-break:normal;">'
+                        f'{en_div()}</div>')
         return "".join(rows) or "&nbsp;"
 
     # ── 几何：贴底部，按内容向上长 ────────────────────────────
@@ -429,15 +529,16 @@ class QtOverlay:
     # ── 事件：拖动 / 滑轮 / 快捷键 ────────────────────────────
     # ── 拖拽把手 ─────────────────────────────────────────────
     def _grip_rect(self):
-        """把手的矩形（窗口内坐标）。右上角，26x20。
+        """把手的矩形（窗口内坐标）。**顶部整条**，不是小方块。
 
-        为什么要有把手：原来"任意处都能拖"很难用 —— 想选中字幕文本、
-        或者只是不小心按一下，字幕就被拖走了。
-        现在**只有按在把手上才能拖**，其他地方不响应。
+        操作者反馈"移动字幕的位置还是非常困难"。原来是一个 26x20 的小方块
+        藏在右上角、还只在调整模式显示 —— 几乎抓不到。
+        改成：**窗口顶部整条 22px 高都是把手**，任何位置都能按到；
+        鼠标移上去高亮、光标变手型。这样拖动不再需要瞄准。
         """
         from PyQt5.QtCore import QRect
-        s = int(self.st.get("grip_size", 26))
-        return QRect(self.w.width() - s - 3, 3, s, s - 6)
+        h = int(self.st.get("grip_h", 22))
+        return QRect(0, 0, max(60, self.w.width()), h)
 
     def _in_grip(self, pos):
         return self._grip_rect().contains(pos)
@@ -652,31 +753,32 @@ class QtOverlay:
             p.setBrush(QBrush(bg))
             p.drawRoundedRect(self.w.rect().adjusted(0, 0, -1, -1), 8, 8)
 
-        # 边框与把手**只在调整模式**画（按 M 切换）
-        if not self.st.get("edit_mode"):
-            p.end()
-            return
-        bg = QColor(self.st.get("bg_color", "#20242A"))
-        bg.setAlpha(int(255 * float(self.st.get("bg_alpha", 0.0))))
-        bw = int(self.st.get("border_width", 1))
-        pen = QPen(QColor(self.st.get("border_color", "#3A4450")), bw) \
-            if bw > 0 else Qt.NoPen
-        p.setPen(pen)
-        p.setBrush(QBrush(bg))
-        r = self.w.rect().adjusted(0, 0, -1, -1)
-        p.drawRoundedRect(r, 8, 8)
+        # 边框只在调整模式画（按 M 切换）
+        if self.st.get("edit_mode"):
+            bg = QColor(self.st.get("bg_color", "#20242A"))
+            bg.setAlpha(int(255 * float(self.st.get("bg_alpha", 0.0))))
+            bw = int(self.st.get("border_width", 1))
+            pen = QPen(QColor(self.st.get("border_color", "#3A4450")), bw) \
+                if bw > 0 else Qt.NoPen
+            p.setPen(pen)
+            p.setBrush(QBrush(bg))
+            r = self.w.rect().adjusted(0, 0, -1, -1)
+            p.drawRoundedRect(r, 8, 8)
 
-        # 拖拽把手：默认淡，鼠标移上去变亮
+        # 把手：顶部整条，鼠标移上去高亮。**始终绘制**（不再只在调整模式），
+        # 否则用户根本不知道哪里能拖 —— 这就是"移动困难"的根源。
         g = self._grip_rect()
         hover = getattr(self, "_hover_grip", False)
         p.setPen(Qt.NoPen)
-        p.setBrush(QBrush(QColor(255, 255, 255, 58 if hover else 24)))
+        # 底条：默认很淡（不干扰看字幕），悬停时明显
+        p.setBrush(QBrush(QColor(255, 255, 255, 46 if hover else 14)))
         p.drawRoundedRect(g, 4, 4)
-        p.setBrush(QBrush(QColor(255, 255, 255, 235 if hover else 125)))
-        cx, cy = g.center().x(), g.center().y()
-        for dx in (-4, 4):
-            for dy in (-4, 0, 4):
-                p.drawEllipse(cx + dx - 1, cy + dy - 1, 2, 2)
+        # 中间的点阵提示（每 9px 一个点），悬停时更亮
+        p.setBrush(QBrush(QColor(255, 255, 255, 225 if hover else 90)))
+        cy = g.center().y()
+        for i in range(3):
+            cx = g.center().x() - 10 + i * 10
+            p.drawEllipse(cx - 1, cy - 1, 3, 3)
         p.end()
 
     # ── 字幕条目管理 ─────────────────────────────────────────
@@ -1026,15 +1128,18 @@ if __name__ == "__main__":
         chk("用户真拖过的 x 保留",
             QtOverlay._validate({"x": _dx + 137, "width": 780}).get("x")
             == _dx + 137)
-        print("\n  拖拽把手")
+    print("\n  拖拽把手")
     g = o._grip_rect()
-    chk("把手在窗口右上角",
-        g.right() >= o.w.width() - 6 and g.left() > o.w.width() // 2)
-    chk("把手贴顶", g.top() <= 6)
-    chk("把手在窗口内", g.left() >= 0 and g.right() < o.w.width())
+    # 把手已从"右上角小方块"改成"顶部整条"（操作者反馈拖动困难）：
+    # 整条都能按到，不用瞄准。断言跟着改成"横跨整宽 + 够高"。
+    chk("把手横跨整宽（不是小方块）",
+        g.left() == 0 and g.width() >= o.w.width() - 2)
+    chk("把手贴顶", g.top() <= 2)
+    chk("把手够高（好按到）", g.height() >= 16)
+    chk("把手在窗口内", g.top() >= 0 and g.height() <= o.w.height())
     chk("按把手中心命中", o._in_grip(g.center()))
     from PyQt5.QtCore import QPoint as _QP
-    chk("按窗口正中不命中",
+    chk("按窗口正中不命中（把手只在顶部）",
         not o._in_grip(_QP(o.w.width() // 2, o.w.height() // 2)))
     chk("微动 2px 不触发拖动（阈值 4px）", True)   # 由 _test_grip.py 详测
     o.nudge(40, 20)
@@ -1050,7 +1155,7 @@ if __name__ == "__main__":
     print("\n  条目管理")
     o.clear()
     for i in range(3):
-            o.set(f"en {i}", f"zh {i}")
+        o.set(f"en {i}", f"zh {i}")
     chk("加了 3 条", len(o.entries) == 3)
     for i in range(6):
             o.set(f"en {i}", f"zh {i}")

@@ -27,9 +27,9 @@ import shutil
 import sys
 
 ROOT_FILES = ["live_subtitle_v2.py", "overlay_qt.py", "streaming_asr.py",
-              "streaming_asr2.py", "llm_translate.py",
+              "streaming_asr2.py", "llm_translate.py", "control_panel.py",
               "get_models.py", "get_vi_models.py", "README.md",
-              "start.bat", "stream.bat",
+              "start.bat", "stream.bat", "panel.bat",
               "publish_github.py", "sync_release.py"]
 BENCH = ["bench_latency.py", "bench_localagree.py", "bench_fastest.py",
          "bench_realtime.py", "bench_depth.py", "bench_trend.py",
