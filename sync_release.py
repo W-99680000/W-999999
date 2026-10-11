@@ -27,7 +27,7 @@ import shutil
 import sys
 
 ROOT_FILES = ["live_subtitle_v2.py", "overlay_qt.py", "streaming_asr.py",
-              "streaming_asr2.py", "llm_translate.py", "remote_asr.py", "control_panel.py",
+              "streaming_asr2.py", "llm_translate.py", "remote_asr.py", "streaming_asr_remote.py", "control_panel.py",
               "get_models.py", "get_vi_models.py", "README.md",
               "start.bat", "stream.bat", "panel.bat",
               "publish_github.py", "sync_release.py"]
@@ -48,7 +48,7 @@ TOOLS = ["test_pipeline.py", "test_borrowed.py", "test_drag2.py", "test_loopback
          "_probe_streaming_asr.py",   # 流式 WebSocket 探测
          "_probe_streaming2.py",      # 流式精确延迟（修正版）
          "_measure_e2e_lag.py",       # 端到端延迟主测量工具
-         "_measure_lag.py", "_trace_drop.py"]
+         "_measure_lag.py", "_trace_drop.py", "_capture_streaming.py"]
 SAMPLES = ["e2e_speech.wav"]
 
 SUBDIRS = ("bench", "tools", "samples")
