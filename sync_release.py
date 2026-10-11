@@ -189,20 +189,25 @@ def main(src: str, dst: str) -> int:
     print(f"源：{src}\n目标：{dst}\n")
     print("① 清空目标")
     os.makedirs(dst, exist_ok=True)
-    # 这些是运行时产物，不该进仓库（.gitignore 也列了，但别让它们出现在工作树里）
-    # **`.git` 必须保留** —— 我第一版没排除它，一次同步把整个仓库删了。
-    SKIP = {"__pycache__", "run.log", "live.srt", "overlay_qt.json",
-            "overlay_settings.json", ".git", ".gitattributes", ".gitignore",
-            "LICENSE", "requirements.txt"}
+    # 这些不删：
+    #   .git            —— **删了就等于毁掉整个仓库**（我犯过两次）
+    #   .gitattributes / .gitignore / LICENSE / requirements.txt
+    #                     —— 由本脚本自己生成，留着让 git 看到改动
+    KEEP = {".git", ".gitattributes", ".gitignore", "LICENSE",
+            "requirements.txt"}
+    # 这些是运行时产物，删掉（.gitignore 也列了，但别让它们待在发布目录里）
+    DROP = {"__pycache__", "run.log", "live.srt", "overlay_qt.json",
+            "overlay_settings.json"}
     for name in os.listdir(dst):
-        if name in SKIP or name.endswith((".pyc", ".log")):
-            p = os.path.join(dst, name)
+        if name in KEEP:
+            continue                      # ← 必须在删除之前跳过
+        p = os.path.join(dst, name)
+        if name in DROP or name.endswith((".pyc", ".log")):
             try:
                 shutil.rmtree(p, ignore_errors=True) if os.path.isdir(p) else os.remove(p)
             except Exception:
                 pass
             continue
-        p = os.path.join(dst, name)
         try:
             shutil.rmtree(p, ignore_errors=True) if os.path.isdir(p) else os.remove(p)
         except Exception as e:
