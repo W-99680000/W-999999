@@ -49,7 +49,11 @@ TOOLS = ["test_pipeline.py", "test_borrowed.py", "test_drag2.py", "test_loopback
          "_probe_streaming2.py",      # 流式精确延迟（修正版）
          "_measure_e2e_lag.py",       # 端到端延迟主测量工具
          "_measure_lag.py", "_trace_drop.py", "_capture_streaming.py"]
-SAMPLES = ["e2e_speech.wav"]
+# 样本：只放跑得动的小文件。vi_long.wav / vi_sample.wav 是几 MB 的
+# 真实素材，属于本地测试资产，不进仓库。
+# streaming_msgs.json 是流式协议的真实消息序列（96KB），
+# streaming_asr_remote 的离线合并验证要用它 —— README 里也引用了。
+SAMPLES = ["e2e_speech.wav", "streaming_msgs.json", "loopback_test.wav"]
 
 SUBDIRS = ("bench", "tools", "samples")
 
@@ -253,10 +257,16 @@ def main(src: str, dst: str) -> int:
 
     print("④ 样本")
     for f in SAMPLES:
-        s = os.path.join(src, f)
-        if os.path.exists(s):
+        # 两处都找：开发目录里有些样本在根下、有些在 samples/ 下。
+        # 只查根目录会**静默跳过**（以前踩过：11 个真实音频检查被跳过）。
+        s = next((p for p in (os.path.join(src, f),
+                              os.path.join(src, "samples", f))
+                  if os.path.exists(p)), None)
+        if s:
             shutil.copy2(s, os.path.join(dst, "samples", f))
             n += 1
+        else:
+            print(f"      ！样本缺失，已跳过: {f}")
 
     print("⑤ 仓库元文件")
     open(os.path.join(dst, "LICENSE"), "w", encoding="utf-8").write(LICENSE)

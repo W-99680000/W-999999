@@ -130,6 +130,11 @@ def default_settings():
         # 按 M 切换。
         "edit_mode": False,
         "gap_px": 10,                # inline 时译文与原文之间的间距
+        # 没有字幕时显示一行"正在听"提示。**必须有默认值** ——
+        # 只靠 .get(k, True) 兜底会让 default_settings() 里没有这个键，
+        # 于是 reset() 之后行为取决于 `.get` 的兜底值，而不是配置。
+        # （我上一版就是这么漏的：功能正常但键不存在。）
+        "show_idle_hint": True,
         "x": None,
         "y": None,                   # None = 自动贴底部
         # 宽度基准：字幕行业惯例是**每行约 42 个字符**（Netflix 指南）。

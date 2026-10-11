@@ -1,0 +1,4480 @@
+[
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "task-started",
+   "attributes": {}
+  },
+  "payload": {},
+  "_t": 0.046
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 1,
+     "begin_time": 0,
+     "end_time": null,
+     "text": "",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "sentence_begin": true,
+     "words": []
+    },
+    "text": "",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 1,
+      "begin_time": 0,
+      "end_time": null,
+      "text": "",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "sentence_begin": true,
+      "words": []
+     },
+     "text": "",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 0.059
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 1,
+     "begin_time": 0,
+     "end_time": null,
+     "text": "",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": []
+    },
+    "text": "",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 1,
+      "begin_time": 0,
+      "end_time": null,
+      "text": "",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": []
+     },
+     "text": "",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 0.076
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 1,
+     "begin_time": 0,
+     "end_time": null,
+     "text": "I",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": [
+      {
+       "begin_time": 0,
+       "end_time": 240,
+       "text": "I",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      }
+     ]
+    },
+    "text": "I",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 1,
+      "begin_time": 0,
+      "end_time": null,
+      "text": "I",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": [
+       {
+        "begin_time": 0,
+        "end_time": 240,
+        "text": "I",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       }
+      ]
+     },
+     "text": "I",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 0.095
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 1,
+     "begin_time": 200,
+     "end_time": null,
+     "text": "I never",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": [
+      {
+       "begin_time": 200,
+       "end_time": 400,
+       "text": "I",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 400,
+       "end_time": 720,
+       "text": " never",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      }
+     ]
+    },
+    "text": "I never",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 1,
+      "begin_time": 200,
+      "end_time": null,
+      "text": "I never",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": [
+       {
+        "begin_time": 200,
+        "end_time": 400,
+        "text": "I",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 400,
+        "end_time": 720,
+        "text": " never",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       }
+      ]
+     },
+     "text": "I never",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 0.117
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 1,
+     "begin_time": 200,
+     "end_time": null,
+     "text": "I never thought i w",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": [
+      {
+       "begin_time": 200,
+       "end_time": 400,
+       "text": "I",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 400,
+       "end_time": 800,
+       "text": " never",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 800,
+       "end_time": 1160,
+       "text": " thought",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 1160,
+       "end_time": 1280,
+       "text": " ",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 1280,
+       "end_time": 1333,
+       "text": "i",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 1333,
+       "end_time": 1440,
+       "text": " w",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      }
+     ]
+    },
+    "text": "I never thought i w",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 1,
+      "begin_time": 200,
+      "end_time": null,
+      "text": "I never thought i w",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": [
+       {
+        "begin_time": 200,
+        "end_time": 400,
+        "text": "I",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 400,
+        "end_time": 800,
+        "text": " never",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 800,
+        "end_time": 1160,
+        "text": " thought",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 1160,
+        "end_time": 1280,
+        "text": " ",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 1280,
+        "end_time": 1333,
+        "text": "i",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 1333,
+        "end_time": 1440,
+        "text": " w",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       }
+      ]
+     },
+     "text": "I never thought i w",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 0.165
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 1,
+     "begin_time": 200,
+     "end_time": null,
+     "text": "I never thought I would see you",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": [
+      {
+       "begin_time": 200,
+       "end_time": 400,
+       "text": "I",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 400,
+       "end_time": 800,
+       "text": " never",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 800,
+       "end_time": 1200,
+       "text": " thought",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 1200,
+       "end_time": 1400,
+       "text": " ",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 1400,
+       "end_time": 1440,
+       "text": "I",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 1440,
+       "end_time": 1680,
+       "text": " would",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 1680,
+       "end_time": 1920,
+       "text": " see",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 1920,
+       "end_time": 2160,
+       "text": " you",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      }
+     ]
+    },
+    "text": "I never thought I would see you",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 1,
+      "begin_time": 200,
+      "end_time": null,
+      "text": "I never thought I would see you",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": [
+       {
+        "begin_time": 200,
+        "end_time": 400,
+        "text": "I",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 400,
+        "end_time": 800,
+        "text": " never",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 800,
+        "end_time": 1200,
+        "text": " thought",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 1200,
+        "end_time": 1400,
+        "text": " ",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 1400,
+        "end_time": 1440,
+        "text": "I",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 1440,
+        "end_time": 1680,
+        "text": " would",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 1680,
+        "end_time": 1920,
+        "text": " see",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 1920,
+        "end_time": 2160,
+        "text": " you",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       }
+      ]
+     },
+     "text": "I never thought I would see you",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 0.338
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 1,
+     "begin_time": 200,
+     "end_time": null,
+     "text": "I never thought I would see you again",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": [
+      {
+       "begin_time": 200,
+       "end_time": 400,
+       "text": "I",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 400,
+       "end_time": 800,
+       "text": " never",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 800,
+       "end_time": 1200,
+       "text": " thought",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 1200,
+       "end_time": 1400,
+       "text": " ",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 1400,
+       "end_time": 1445,
+       "text": "I",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 1445,
+       "end_time": 1720,
+       "text": " would",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 1720,
+       "end_time": 2000,
+       "text": " see",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 2000,
+       "end_time": 2280,
+       "text": " you",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 2280,
+       "end_time": 2880,
+       "text": " again",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      }
+     ]
+    },
+    "text": "I never thought I would see you again",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 1,
+      "begin_time": 200,
+      "end_time": null,
+      "text": "I never thought I would see you again",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": [
+       {
+        "begin_time": 200,
+        "end_time": 400,
+        "text": "I",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 400,
+        "end_time": 800,
+        "text": " never",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 800,
+        "end_time": 1200,
+        "text": " thought",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 1200,
+        "end_time": 1400,
+        "text": " ",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 1400,
+        "end_time": 1445,
+        "text": "I",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 1445,
+        "end_time": 1720,
+        "text": " would",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 1720,
+        "end_time": 2000,
+        "text": " see",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 2000,
+        "end_time": 2280,
+        "text": " you",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 2280,
+        "end_time": 2880,
+        "text": " again",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       }
+      ]
+     },
+     "text": "I never thought I would see you again",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 0.378
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 1,
+     "begin_time": 200,
+     "end_time": 2800,
+     "text": "I never thought I would see you again. ",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": true,
+     "words": [
+      {
+       "begin_time": 200,
+       "end_time": 400,
+       "text": "I",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 400,
+       "end_time": 800,
+       "text": " never",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 800,
+       "end_time": 1200,
+       "text": " thought",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 1200,
+       "end_time": 1400,
+       "text": " ",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 1400,
+       "end_time": 1445,
+       "text": "I",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 1445,
+       "end_time": 1720,
+       "text": " would",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 1720,
+       "end_time": 2000,
+       "text": " see",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 2000,
+       "end_time": 2280,
+       "text": " you",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 2280,
+       "end_time": 2800,
+       "text": " again",
+       "punctuation": ". ",
+       "fixed": true,
+       "speaker_id": null
+      }
+     ],
+     "stash": {
+      "sentence_id": 2,
+      "text": "",
+      "begin_time": 2800,
+      "current_time": 2800,
+      "words": []
+     }
+    },
+    "text": "I never thought I would see you again. ",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 1,
+      "begin_time": 200,
+      "end_time": 2800,
+      "text": "I never thought I would see you again. ",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": true,
+      "words": [
+       {
+        "begin_time": 200,
+        "end_time": 400,
+        "text": "I",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 400,
+        "end_time": 800,
+        "text": " never",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 800,
+        "end_time": 1200,
+        "text": " thought",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 1200,
+        "end_time": 1400,
+        "text": " ",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 1400,
+        "end_time": 1445,
+        "text": "I",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 1445,
+        "end_time": 1720,
+        "text": " would",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 1720,
+        "end_time": 2000,
+        "text": " see",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 2000,
+        "end_time": 2280,
+        "text": " you",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 2280,
+        "end_time": 2800,
+        "text": " again",
+        "punctuation": ". ",
+        "fixed": true,
+        "speaker_id": null
+       }
+      ],
+      "stash": {
+       "sentence_id": 2,
+       "text": "",
+       "begin_time": 2800,
+       "current_time": 2800,
+       "words": []
+      }
+     },
+     "text": "I never thought I would see you again. ",
+     "request_id": "dsh-cap-1"
+    },
+    "usage": {
+     "duration": 3
+    }
+   },
+   "usage": {
+    "duration": 3
+   }
+  },
+  "_t": 0.541
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 2,
+     "begin_time": 3270,
+     "end_time": null,
+     "text": "",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "sentence_begin": true,
+     "words": []
+    },
+    "text": "",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 2,
+      "begin_time": 3270,
+      "end_time": null,
+      "text": "",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "sentence_begin": true,
+      "words": []
+     },
+     "text": "",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 0.542
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 2,
+     "begin_time": 3270,
+     "end_time": null,
+     "text": "key",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": [
+      {
+       "begin_time": 3270,
+       "end_time": 3750,
+       "text": "key",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      }
+     ]
+    },
+    "text": "key",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 2,
+      "begin_time": 3270,
+      "end_time": null,
+      "text": "key",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": [
+       {
+        "begin_time": 3270,
+        "end_time": 3750,
+        "text": "key",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       }
+      ]
+     },
+     "text": "key",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 0.621
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 2,
+     "begin_time": 3670,
+     "end_time": null,
+     "text": "get",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": [
+      {
+       "begin_time": 3670,
+       "end_time": 3990,
+       "text": "get",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      }
+     ]
+    },
+    "text": "get",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 2,
+      "begin_time": 3670,
+      "end_time": null,
+      "text": "get",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": [
+       {
+        "begin_time": 3670,
+        "end_time": 3990,
+        "text": "get",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       }
+      ]
+     },
+     "text": "get",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 0.642
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 2,
+     "begin_time": 3750,
+     "end_time": null,
+     "text": "get out of here",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": [
+      {
+       "begin_time": 3750,
+       "end_time": 4070,
+       "text": "get",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 4070,
+       "end_time": 4310,
+       "text": " out",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 4310,
+       "end_time": 4510,
+       "text": " of",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 4510,
+       "end_time": 4710,
+       "text": " here",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      }
+     ]
+    },
+    "text": "get out of here",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 2,
+      "begin_time": 3750,
+      "end_time": null,
+      "text": "get out of here",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": [
+       {
+        "begin_time": 3750,
+        "end_time": 4070,
+        "text": "get",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 4070,
+        "end_time": 4310,
+        "text": " out",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 4310,
+        "end_time": 4510,
+        "text": " of",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 4510,
+        "end_time": 4710,
+        "text": " here",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       }
+      ]
+     },
+     "text": "get out of here",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 0.663
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 2,
+     "begin_time": 3750,
+     "end_time": null,
+     "text": "Get out of here before",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": [
+      {
+       "begin_time": 3750,
+       "end_time": 4070,
+       "text": "Get",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 4070,
+       "end_time": 4310,
+       "text": " out",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 4310,
+       "end_time": 4510,
+       "text": " of",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 4510,
+       "end_time": 5030,
+       "text": " here",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 5030,
+       "end_time": 5430,
+       "text": " before",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      }
+     ]
+    },
+    "text": "Get out of here before",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 2,
+      "begin_time": 3750,
+      "end_time": null,
+      "text": "Get out of here before",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": [
+       {
+        "begin_time": 3750,
+        "end_time": 4070,
+        "text": "Get",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 4070,
+        "end_time": 4310,
+        "text": " out",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 4310,
+        "end_time": 4510,
+        "text": " of",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 4510,
+        "end_time": 5030,
+        "text": " here",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 5030,
+        "end_time": 5430,
+        "text": " before",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       }
+      ]
+     },
+     "text": "Get out of here before",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 0.832
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 2,
+     "begin_time": 3750,
+     "end_time": null,
+     "text": "Get out of here before i call t",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": [
+      {
+       "begin_time": 3750,
+       "end_time": 4070,
+       "text": "Get",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 4070,
+       "end_time": 4310,
+       "text": " out",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 4310,
+       "end_time": 4550,
+       "text": " of",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 4550,
+       "end_time": 5030,
+       "text": " here",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 5030,
+       "end_time": 5470,
+       "text": " before",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 5470,
+       "end_time": 5670,
+       "text": " ",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 5670,
+       "end_time": 5723,
+       "text": "i",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 5723,
+       "end_time": 5990,
+       "text": " call",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 5990,
+       "end_time": 6150,
+       "text": " t",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      }
+     ]
+    },
+    "text": "Get out of here before i call t",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 2,
+      "begin_time": 3750,
+      "end_time": null,
+      "text": "Get out of here before i call t",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": [
+       {
+        "begin_time": 3750,
+        "end_time": 4070,
+        "text": "Get",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 4070,
+        "end_time": 4310,
+        "text": " out",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 4310,
+        "end_time": 4550,
+        "text": " of",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 4550,
+        "end_time": 5030,
+        "text": " here",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 5030,
+        "end_time": 5470,
+        "text": " before",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 5470,
+        "end_time": 5670,
+        "text": " ",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 5670,
+        "end_time": 5723,
+        "text": "i",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 5723,
+        "end_time": 5990,
+        "text": " call",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 5990,
+        "end_time": 6150,
+        "text": " t",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       }
+      ]
+     },
+     "text": "Get out of here before i call t",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 0.869
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 2,
+     "begin_time": 3750,
+     "end_time": null,
+     "text": "Get out of here before i call the police",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": [
+      {
+       "begin_time": 3750,
+       "end_time": 4070,
+       "text": "Get",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 4070,
+       "end_time": 4310,
+       "text": " out",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 4310,
+       "end_time": 4550,
+       "text": " of",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 4550,
+       "end_time": 5030,
+       "text": " here",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 5030,
+       "end_time": 5470,
+       "text": " before",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 5470,
+       "end_time": 5670,
+       "text": " ",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 5670,
+       "end_time": 5736,
+       "text": "i",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 5736,
+       "end_time": 6070,
+       "text": " call",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 6070,
+       "end_time": 6210,
+       "text": " ",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 6210,
+       "end_time": 6350,
+       "text": "the",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 6350,
+       "end_time": 6870,
+       "text": " police",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      }
+     ]
+    },
+    "text": "Get out of here before i call the police",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 2,
+      "begin_time": 3750,
+      "end_time": null,
+      "text": "Get out of here before i call the police",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": [
+       {
+        "begin_time": 3750,
+        "end_time": 4070,
+        "text": "Get",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 4070,
+        "end_time": 4310,
+        "text": " out",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 4310,
+        "end_time": 4550,
+        "text": " of",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 4550,
+        "end_time": 5030,
+        "text": " here",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 5030,
+        "end_time": 5470,
+        "text": " before",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 5470,
+        "end_time": 5670,
+        "text": " ",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 5670,
+        "end_time": 5736,
+        "text": "i",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 5736,
+        "end_time": 6070,
+        "text": " call",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 6070,
+        "end_time": 6210,
+        "text": " ",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 6210,
+        "end_time": 6350,
+        "text": "the",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 6350,
+        "end_time": 6870,
+        "text": " police",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       }
+      ]
+     },
+     "text": "Get out of here before i call the police",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 0.911
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 2,
+     "begin_time": 3750,
+     "end_time": 6950,
+     "text": "Get out of here before I call the police. ",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": true,
+     "words": [
+      {
+       "begin_time": 3750,
+       "end_time": 4070,
+       "text": "Get",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 4070,
+       "end_time": 4310,
+       "text": " out",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 4310,
+       "end_time": 4510,
+       "text": " of",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 4510,
+       "end_time": 5030,
+       "text": " here",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 5030,
+       "end_time": 5470,
+       "text": " before",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 5470,
+       "end_time": 5670,
+       "text": " ",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 5670,
+       "end_time": 5736,
+       "text": "I",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 5736,
+       "end_time": 6070,
+       "text": " call",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 6070,
+       "end_time": 6350,
+       "text": " the",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 6350,
+       "end_time": 6950,
+       "text": " police",
+       "punctuation": ". ",
+       "fixed": true,
+       "speaker_id": null
+      }
+     ],
+     "stash": {
+      "sentence_id": 3,
+      "text": "",
+      "begin_time": 6950,
+      "current_time": 6950,
+      "words": []
+     }
+    },
+    "text": "Get out of here before I call the police. ",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 2,
+      "begin_time": 3750,
+      "end_time": 6950,
+      "text": "Get out of here before I call the police. ",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": true,
+      "words": [
+       {
+        "begin_time": 3750,
+        "end_time": 4070,
+        "text": "Get",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 4070,
+        "end_time": 4310,
+        "text": " out",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 4310,
+        "end_time": 4510,
+        "text": " of",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 4510,
+        "end_time": 5030,
+        "text": " here",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 5030,
+        "end_time": 5470,
+        "text": " before",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 5470,
+        "end_time": 5670,
+        "text": " ",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 5670,
+        "end_time": 5736,
+        "text": "I",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 5736,
+        "end_time": 6070,
+        "text": " call",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 6070,
+        "end_time": 6350,
+        "text": " the",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 6350,
+        "end_time": 6950,
+        "text": " police",
+        "punctuation": ". ",
+        "fixed": true,
+        "speaker_id": null
+       }
+      ],
+      "stash": {
+       "sentence_id": 3,
+       "text": "",
+       "begin_time": 6950,
+       "current_time": 6950,
+       "words": []
+      }
+     },
+     "text": "Get out of here before I call the police. ",
+     "request_id": "dsh-cap-1"
+    },
+    "usage": {
+     "duration": 7
+    }
+   },
+   "usage": {
+    "duration": 7
+   }
+  },
+  "_t": 1.208
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 3,
+     "begin_time": 7490,
+     "end_time": null,
+     "text": "",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "sentence_begin": true,
+     "words": []
+    },
+    "text": "",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 3,
+      "begin_time": 7490,
+      "end_time": null,
+      "text": "",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "sentence_begin": true,
+      "words": []
+     },
+     "text": "",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 1.208
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 3,
+     "begin_time": 7490,
+     "end_time": null,
+     "text": "The",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": [
+      {
+       "begin_time": 7490,
+       "end_time": 7970,
+       "text": "The",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      }
+     ]
+    },
+    "text": "The",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 3,
+      "begin_time": 7490,
+      "end_time": null,
+      "text": "The",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": [
+       {
+        "begin_time": 7490,
+        "end_time": 7970,
+        "text": "The",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       }
+      ]
+     },
+     "text": "The",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 1.258
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 3,
+     "begin_time": 7810,
+     "end_time": null,
+     "text": "The tr",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": [
+      {
+       "begin_time": 7810,
+       "end_time": 7970,
+       "text": "The",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 7970,
+       "end_time": 8210,
+       "text": " tr",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      }
+     ]
+    },
+    "text": "The tr",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 3,
+      "begin_time": 7810,
+      "end_time": null,
+      "text": "The tr",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": [
+       {
+        "begin_time": 7810,
+        "end_time": 7970,
+        "text": "The",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 7970,
+        "end_time": 8210,
+        "text": " tr",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       }
+      ]
+     },
+     "text": "The tr",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 1.278
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 3,
+     "begin_time": 7810,
+     "end_time": null,
+     "text": "The truth is",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": [
+      {
+       "begin_time": 7810,
+       "end_time": 8090,
+       "text": "The",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 8090,
+       "end_time": 8309,
+       "text": " tr",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 8309,
+       "end_time": 8530,
+       "text": "uth",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 8530,
+       "end_time": 8930,
+       "text": " is",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      }
+     ]
+    },
+    "text": "The truth is",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 3,
+      "begin_time": 7810,
+      "end_time": null,
+      "text": "The truth is",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": [
+       {
+        "begin_time": 7810,
+        "end_time": 8090,
+        "text": "The",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 8090,
+        "end_time": 8309,
+        "text": " tr",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 8309,
+        "end_time": 8530,
+        "text": "uth",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 8530,
+        "end_time": 8930,
+        "text": " is",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       }
+      ]
+     },
+     "text": "The truth is",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 1.305
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 3,
+     "begin_time": 7810,
+     "end_time": null,
+     "text": "The truth is, I have",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": [
+      {
+       "begin_time": 7810,
+       "end_time": 8090,
+       "text": "The",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 8090,
+       "end_time": 8530,
+       "text": " truth",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 8530,
+       "end_time": 8850,
+       "text": " is",
+       "punctuation": ",",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9290,
+       "end_time": 9490,
+       "text": " ",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9490,
+       "end_time": 9516,
+       "text": "I",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9516,
+       "end_time": 9650,
+       "text": " have",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      }
+     ]
+    },
+    "text": "The truth is, I have",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 3,
+      "begin_time": 7810,
+      "end_time": null,
+      "text": "The truth is, I have",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": [
+       {
+        "begin_time": 7810,
+        "end_time": 8090,
+        "text": "The",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 8090,
+        "end_time": 8530,
+        "text": " truth",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 8530,
+        "end_time": 8850,
+        "text": " is",
+        "punctuation": ",",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9290,
+        "end_time": 9490,
+        "text": " ",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9490,
+        "end_time": 9516,
+        "text": "I",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9516,
+        "end_time": 9650,
+        "text": " have",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       }
+      ]
+     },
+     "text": "The truth is, I have",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 1.458
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 3,
+     "begin_time": 7850,
+     "end_time": null,
+     "text": "The truth is, I have been like",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": [
+      {
+       "begin_time": 7850,
+       "end_time": 8090,
+       "text": "The",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 8090,
+       "end_time": 8530,
+       "text": " truth",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 8530,
+       "end_time": 8850,
+       "text": " is",
+       "punctuation": ",",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9330,
+       "end_time": 9570,
+       "text": " ",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9570,
+       "end_time": 9616,
+       "text": "I",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9616,
+       "end_time": 9850,
+       "text": " have",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9850,
+       "end_time": 10170,
+       "text": " been",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 10170,
+       "end_time": 10370,
+       "text": " like",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      }
+     ]
+    },
+    "text": "The truth is, I have been like",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 3,
+      "begin_time": 7850,
+      "end_time": null,
+      "text": "The truth is, I have been like",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": [
+       {
+        "begin_time": 7850,
+        "end_time": 8090,
+        "text": "The",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 8090,
+        "end_time": 8530,
+        "text": " truth",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 8530,
+        "end_time": 8850,
+        "text": " is",
+        "punctuation": ",",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9330,
+        "end_time": 9570,
+        "text": " ",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9570,
+        "end_time": 9616,
+        "text": "I",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9616,
+        "end_time": 9850,
+        "text": " have",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9850,
+        "end_time": 10170,
+        "text": " been",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 10170,
+        "end_time": 10370,
+        "text": " like",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       }
+      ]
+     },
+     "text": "The truth is, I have been like",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 1.492
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 3,
+     "begin_time": 7850,
+     "end_time": null,
+     "text": "The truth is, I have been likeg to use",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": [
+      {
+       "begin_time": 7850,
+       "end_time": 8090,
+       "text": "The",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 8090,
+       "end_time": 8530,
+       "text": " truth",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 8530,
+       "end_time": 8850,
+       "text": " is",
+       "punctuation": ",",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9330,
+       "end_time": 9570,
+       "text": " ",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9570,
+       "end_time": 9616,
+       "text": "I",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9616,
+       "end_time": 9850,
+       "text": " have",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9850,
+       "end_time": 10210,
+       "text": " been",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 10210,
+       "end_time": 10490,
+       "text": " like",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 10490,
+       "end_time": 10610,
+       "text": "g",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 10610,
+       "end_time": 10770,
+       "text": " to",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 10770,
+       "end_time": 11090,
+       "text": " use",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      }
+     ]
+    },
+    "text": "The truth is, I have been likeg to use",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 3,
+      "begin_time": 7850,
+      "end_time": null,
+      "text": "The truth is, I have been likeg to use",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": [
+       {
+        "begin_time": 7850,
+        "end_time": 8090,
+        "text": "The",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 8090,
+        "end_time": 8530,
+        "text": " truth",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 8530,
+        "end_time": 8850,
+        "text": " is",
+        "punctuation": ",",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9330,
+        "end_time": 9570,
+        "text": " ",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9570,
+        "end_time": 9616,
+        "text": "I",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9616,
+        "end_time": 9850,
+        "text": " have",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9850,
+        "end_time": 10210,
+        "text": " been",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 10210,
+        "end_time": 10490,
+        "text": " like",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 10490,
+        "end_time": 10610,
+        "text": "g",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 10610,
+        "end_time": 10770,
+        "text": " to",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 10770,
+        "end_time": 11090,
+        "text": " use",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       }
+      ]
+     },
+     "text": "The truth is, I have been likeg to use",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 1.531
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 3,
+     "begin_time": 7850,
+     "end_time": null,
+     "text": "The truth is, I have been lying to you since the day",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": [
+      {
+       "begin_time": 7850,
+       "end_time": 8090,
+       "text": "The",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 8090,
+       "end_time": 8530,
+       "text": " truth",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 8530,
+       "end_time": 8850,
+       "text": " is",
+       "punctuation": ",",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9330,
+       "end_time": 9570,
+       "text": " ",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9570,
+       "end_time": 9616,
+       "text": "I",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9616,
+       "end_time": 9850,
+       "text": " have",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9850,
+       "end_time": 10210,
+       "text": " been",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 10210,
+       "end_time": 10650,
+       "text": " lying",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 10650,
+       "end_time": 10810,
+       "text": " to",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 10810,
+       "end_time": 11170,
+       "text": " you",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 11170,
+       "end_time": 11530,
+       "text": " since",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 11530,
+       "end_time": 11610,
+       "text": " the",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 11610,
+       "end_time": 11810,
+       "text": " day",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      }
+     ]
+    },
+    "text": "The truth is, I have been lying to you since the day",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 3,
+      "begin_time": 7850,
+      "end_time": null,
+      "text": "The truth is, I have been lying to you since the day",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": [
+       {
+        "begin_time": 7850,
+        "end_time": 8090,
+        "text": "The",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 8090,
+        "end_time": 8530,
+        "text": " truth",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 8530,
+        "end_time": 8850,
+        "text": " is",
+        "punctuation": ",",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9330,
+        "end_time": 9570,
+        "text": " ",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9570,
+        "end_time": 9616,
+        "text": "I",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9616,
+        "end_time": 9850,
+        "text": " have",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9850,
+        "end_time": 10210,
+        "text": " been",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 10210,
+        "end_time": 10650,
+        "text": " lying",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 10650,
+        "end_time": 10810,
+        "text": " to",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 10810,
+        "end_time": 11170,
+        "text": " you",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 11170,
+        "end_time": 11530,
+        "text": " since",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 11530,
+        "end_time": 11610,
+        "text": " the",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 11610,
+        "end_time": 11810,
+        "text": " day",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       }
+      ]
+     },
+     "text": "The truth is, I have been lying to you since the day",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 1.733
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 3,
+     "begin_time": 7850,
+     "end_time": null,
+     "text": "The truth is, I have been lying to you since the day we met",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": [
+      {
+       "begin_time": 7850,
+       "end_time": 8090,
+       "text": "The",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 8090,
+       "end_time": 8530,
+       "text": " truth",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 8530,
+       "end_time": 8850,
+       "text": " is",
+       "punctuation": ",",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9330,
+       "end_time": 9570,
+       "text": " ",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9570,
+       "end_time": 9616,
+       "text": "I",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9616,
+       "end_time": 9850,
+       "text": " have",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9850,
+       "end_time": 10210,
+       "text": " been",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 10210,
+       "end_time": 10650,
+       "text": " lying",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 10650,
+       "end_time": 10810,
+       "text": " to",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 10810,
+       "end_time": 11170,
+       "text": " you",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 11170,
+       "end_time": 11530,
+       "text": " since",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 11530,
+       "end_time": 11730,
+       "text": " the",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 11730,
+       "end_time": 12010,
+       "text": " day",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 12010,
+       "end_time": 12290,
+       "text": " ",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 12290,
+       "end_time": 12370,
+       "text": "we",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 12370,
+       "end_time": 12530,
+       "text": " met",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      }
+     ]
+    },
+    "text": "The truth is, I have been lying to you since the day we met",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 3,
+      "begin_time": 7850,
+      "end_time": null,
+      "text": "The truth is, I have been lying to you since the day we met",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": [
+       {
+        "begin_time": 7850,
+        "end_time": 8090,
+        "text": "The",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 8090,
+        "end_time": 8530,
+        "text": " truth",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 8530,
+        "end_time": 8850,
+        "text": " is",
+        "punctuation": ",",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9330,
+        "end_time": 9570,
+        "text": " ",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9570,
+        "end_time": 9616,
+        "text": "I",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9616,
+        "end_time": 9850,
+        "text": " have",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9850,
+        "end_time": 10210,
+        "text": " been",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 10210,
+        "end_time": 10650,
+        "text": " lying",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 10650,
+        "end_time": 10810,
+        "text": " to",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 10810,
+        "end_time": 11170,
+        "text": " you",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 11170,
+        "end_time": 11530,
+        "text": " since",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 11530,
+        "end_time": 11730,
+        "text": " the",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 11730,
+        "end_time": 12010,
+        "text": " day",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 12010,
+        "end_time": 12290,
+        "text": " ",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 12290,
+        "end_time": 12370,
+        "text": "we",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 12370,
+        "end_time": 12530,
+        "text": " met",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       }
+      ]
+     },
+     "text": "The truth is, I have been lying to you since the day we met",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 1.787
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 3,
+     "begin_time": 7850,
+     "end_time": null,
+     "text": "The truth is, I have been lying to you since the day we met. Would you like a",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": [
+      {
+       "begin_time": 7850,
+       "end_time": 8090,
+       "text": "The",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 8090,
+       "end_time": 8530,
+       "text": " truth",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 8530,
+       "end_time": 8850,
+       "text": " is",
+       "punctuation": ",",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9330,
+       "end_time": 9570,
+       "text": " ",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9570,
+       "end_time": 9616,
+       "text": "I",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9616,
+       "end_time": 9850,
+       "text": " have",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9850,
+       "end_time": 10210,
+       "text": " been",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 10210,
+       "end_time": 10650,
+       "text": " lying",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 10650,
+       "end_time": 10810,
+       "text": " to",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 10810,
+       "end_time": 11170,
+       "text": " you",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 11170,
+       "end_time": 11530,
+       "text": " since",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 11530,
+       "end_time": 11730,
+       "text": " the",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 11730,
+       "end_time": 12050,
+       "text": " day",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 12050,
+       "end_time": 12290,
+       "text": " ",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 12290,
+       "end_time": 12450,
+       "text": "we",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 12450,
+       "end_time": 12770,
+       "text": " met",
+       "punctuation": ".",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 13570,
+       "end_time": 13810,
+       "text": " Would",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 13810,
+       "end_time": 14050,
+       "text": " you",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 14050,
+       "end_time": 14330,
+       "text": " like",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 14330,
+       "end_time": 14690,
+       "text": " a",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      }
+     ]
+    },
+    "text": "The truth is, I have been lying to you since the day we met. Would you like a",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 3,
+      "begin_time": 7850,
+      "end_time": null,
+      "text": "The truth is, I have been lying to you since the day we met. Would you like a",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": [
+       {
+        "begin_time": 7850,
+        "end_time": 8090,
+        "text": "The",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 8090,
+        "end_time": 8530,
+        "text": " truth",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 8530,
+        "end_time": 8850,
+        "text": " is",
+        "punctuation": ",",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9330,
+        "end_time": 9570,
+        "text": " ",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9570,
+        "end_time": 9616,
+        "text": "I",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9616,
+        "end_time": 9850,
+        "text": " have",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9850,
+        "end_time": 10210,
+        "text": " been",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 10210,
+        "end_time": 10650,
+        "text": " lying",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 10650,
+        "end_time": 10810,
+        "text": " to",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 10810,
+        "end_time": 11170,
+        "text": " you",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 11170,
+        "end_time": 11530,
+        "text": " since",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 11530,
+        "end_time": 11730,
+        "text": " the",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 11730,
+        "end_time": 12050,
+        "text": " day",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 12050,
+        "end_time": 12290,
+        "text": " ",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 12290,
+        "end_time": 12450,
+        "text": "we",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 12450,
+        "end_time": 12770,
+        "text": " met",
+        "punctuation": ".",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 13570,
+        "end_time": 13810,
+        "text": " Would",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 13810,
+        "end_time": 14050,
+        "text": " you",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 14050,
+        "end_time": 14330,
+        "text": " like",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 14330,
+        "end_time": 14690,
+        "text": " a",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       }
+      ]
+     },
+     "text": "The truth is, I have been lying to you since the day we met. Would you like a",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 2.044
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 3,
+     "begin_time": 7850,
+     "end_time": null,
+     "text": "The truth is, I have been lying to you since the day we met. Would you like a cup of coffee",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": false,
+     "words": [
+      {
+       "begin_time": 7850,
+       "end_time": 8090,
+       "text": "The",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 8090,
+       "end_time": 8530,
+       "text": " truth",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 8530,
+       "end_time": 8850,
+       "text": " is",
+       "punctuation": ",",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9330,
+       "end_time": 9570,
+       "text": " ",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9570,
+       "end_time": 9616,
+       "text": "I",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9616,
+       "end_time": 9850,
+       "text": " have",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9850,
+       "end_time": 10210,
+       "text": " been",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 10210,
+       "end_time": 10650,
+       "text": " lying",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 10650,
+       "end_time": 10810,
+       "text": " to",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 10810,
+       "end_time": 11170,
+       "text": " you",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 11170,
+       "end_time": 11530,
+       "text": " since",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 11530,
+       "end_time": 11730,
+       "text": " the",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 11730,
+       "end_time": 12050,
+       "text": " day",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 12050,
+       "end_time": 12290,
+       "text": " ",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 12290,
+       "end_time": 12450,
+       "text": "we",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 12450,
+       "end_time": 12770,
+       "text": " met",
+       "punctuation": ".",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 13570,
+       "end_time": 13810,
+       "text": " Would",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 13810,
+       "end_time": 14050,
+       "text": " you",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 14050,
+       "end_time": 14330,
+       "text": " like",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 14330,
+       "end_time": 14570,
+       "text": " ",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 14570,
+       "end_time": 14626,
+       "text": "a",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 14626,
+       "end_time": 14850,
+       "text": " cup",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 14850,
+       "end_time": 15210,
+       "text": " of",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 15210,
+       "end_time": 15410,
+       "text": " coffee",
+       "punctuation": "",
+       "fixed": false,
+       "speaker_id": null
+      }
+     ]
+    },
+    "text": "The truth is, I have been lying to you since the day we met. Would you like a cup of coffee",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 3,
+      "begin_time": 7850,
+      "end_time": null,
+      "text": "The truth is, I have been lying to you since the day we met. Would you like a cup of coffee",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": false,
+      "words": [
+       {
+        "begin_time": 7850,
+        "end_time": 8090,
+        "text": "The",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 8090,
+        "end_time": 8530,
+        "text": " truth",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 8530,
+        "end_time": 8850,
+        "text": " is",
+        "punctuation": ",",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9330,
+        "end_time": 9570,
+        "text": " ",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9570,
+        "end_time": 9616,
+        "text": "I",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9616,
+        "end_time": 9850,
+        "text": " have",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9850,
+        "end_time": 10210,
+        "text": " been",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 10210,
+        "end_time": 10650,
+        "text": " lying",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 10650,
+        "end_time": 10810,
+        "text": " to",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 10810,
+        "end_time": 11170,
+        "text": " you",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 11170,
+        "end_time": 11530,
+        "text": " since",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 11530,
+        "end_time": 11730,
+        "text": " the",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 11730,
+        "end_time": 12050,
+        "text": " day",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 12050,
+        "end_time": 12290,
+        "text": " ",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 12290,
+        "end_time": 12450,
+        "text": "we",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 12450,
+        "end_time": 12770,
+        "text": " met",
+        "punctuation": ".",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 13570,
+        "end_time": 13810,
+        "text": " Would",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 13810,
+        "end_time": 14050,
+        "text": " you",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 14050,
+        "end_time": 14330,
+        "text": " like",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 14330,
+        "end_time": 14570,
+        "text": " ",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 14570,
+        "end_time": 14626,
+        "text": "a",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 14626,
+        "end_time": 14850,
+        "text": " cup",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 14850,
+        "end_time": 15210,
+        "text": " of",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 15210,
+        "end_time": 15410,
+        "text": " coffee",
+        "punctuation": "",
+        "fixed": false,
+        "speaker_id": null
+       }
+      ]
+     },
+     "text": "The truth is, I have been lying to you since the day we met. Would you like a cup of coffee",
+     "request_id": "dsh-cap-1"
+    }
+   }
+  },
+  "_t": 2.117
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "result-generated",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {
+    "sentence": {
+     "sentence_id": 3,
+     "begin_time": 7850,
+     "end_time": 15850,
+     "text": "The truth is, I have been lying to you since the day we met. Would you like a cup of coffee? ",
+     "channel_id": 0,
+     "speaker_id": null,
+     "sentence_end": true,
+     "words": [
+      {
+       "begin_time": 7850,
+       "end_time": 8090,
+       "text": "The",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 8090,
+       "end_time": 8530,
+       "text": " truth",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 8530,
+       "end_time": 8850,
+       "text": " is",
+       "punctuation": ",",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9330,
+       "end_time": 9570,
+       "text": " ",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9570,
+       "end_time": 9616,
+       "text": "I",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9616,
+       "end_time": 9850,
+       "text": " have",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 9850,
+       "end_time": 10210,
+       "text": " been",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 10210,
+       "end_time": 10650,
+       "text": " lying",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 10650,
+       "end_time": 10810,
+       "text": " to",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 10810,
+       "end_time": 11170,
+       "text": " you",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 11170,
+       "end_time": 11530,
+       "text": " since",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 11530,
+       "end_time": 11730,
+       "text": " the",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 11730,
+       "end_time": 12050,
+       "text": " day",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 12050,
+       "end_time": 12290,
+       "text": " ",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 12290,
+       "end_time": 12450,
+       "text": "we",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 12450,
+       "end_time": 12770,
+       "text": " met",
+       "punctuation": ".",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 13570,
+       "end_time": 13810,
+       "text": " Would",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 13810,
+       "end_time": 14050,
+       "text": " you",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 14050,
+       "end_time": 14330,
+       "text": " like",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 14330,
+       "end_time": 14570,
+       "text": " ",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 14570,
+       "end_time": 14626,
+       "text": "a",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 14626,
+       "end_time": 14850,
+       "text": " cup",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 14850,
+       "end_time": 15250,
+       "text": " of",
+       "punctuation": "",
+       "fixed": true,
+       "speaker_id": null
+      },
+      {
+       "begin_time": 15250,
+       "end_time": 15850,
+       "text": " coffee",
+       "punctuation": "? ",
+       "fixed": true,
+       "speaker_id": null
+      }
+     ],
+     "stash": {
+      "sentence_id": 4,
+      "text": "",
+      "begin_time": 15850,
+      "current_time": 15850,
+      "words": []
+     }
+    },
+    "text": "The truth is, I have been lying to you since the day we met. Would you like a cup of coffee? ",
+    "request_id": "dsh-cap-1",
+    "output": {
+     "sentence": {
+      "sentence_id": 3,
+      "begin_time": 7850,
+      "end_time": 15850,
+      "text": "The truth is, I have been lying to you since the day we met. Would you like a cup of coffee? ",
+      "channel_id": 0,
+      "speaker_id": null,
+      "sentence_end": true,
+      "words": [
+       {
+        "begin_time": 7850,
+        "end_time": 8090,
+        "text": "The",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 8090,
+        "end_time": 8530,
+        "text": " truth",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 8530,
+        "end_time": 8850,
+        "text": " is",
+        "punctuation": ",",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9330,
+        "end_time": 9570,
+        "text": " ",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9570,
+        "end_time": 9616,
+        "text": "I",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9616,
+        "end_time": 9850,
+        "text": " have",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 9850,
+        "end_time": 10210,
+        "text": " been",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 10210,
+        "end_time": 10650,
+        "text": " lying",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 10650,
+        "end_time": 10810,
+        "text": " to",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 10810,
+        "end_time": 11170,
+        "text": " you",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 11170,
+        "end_time": 11530,
+        "text": " since",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 11530,
+        "end_time": 11730,
+        "text": " the",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 11730,
+        "end_time": 12050,
+        "text": " day",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 12050,
+        "end_time": 12290,
+        "text": " ",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 12290,
+        "end_time": 12450,
+        "text": "we",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 12450,
+        "end_time": 12770,
+        "text": " met",
+        "punctuation": ".",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 13570,
+        "end_time": 13810,
+        "text": " Would",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 13810,
+        "end_time": 14050,
+        "text": " you",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 14050,
+        "end_time": 14330,
+        "text": " like",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 14330,
+        "end_time": 14570,
+        "text": " ",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 14570,
+        "end_time": 14626,
+        "text": "a",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 14626,
+        "end_time": 14850,
+        "text": " cup",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 14850,
+        "end_time": 15250,
+        "text": " of",
+        "punctuation": "",
+        "fixed": true,
+        "speaker_id": null
+       },
+       {
+        "begin_time": 15250,
+        "end_time": 15850,
+        "text": " coffee",
+        "punctuation": "? ",
+        "fixed": true,
+        "speaker_id": null
+       }
+      ],
+      "stash": {
+       "sentence_id": 4,
+       "text": "",
+       "begin_time": 15850,
+       "current_time": 15850,
+       "words": []
+      }
+     },
+     "text": "The truth is, I have been lying to you since the day we met. Would you like a cup of coffee? ",
+     "request_id": "dsh-cap-1"
+    },
+    "usage": {
+     "duration": 16
+    }
+   },
+   "usage": {
+    "duration": 16
+   }
+  },
+  "_t": 2.596
+ },
+ {
+  "header": {
+   "task_id": "dsh-cap-1",
+   "event": "task-finished",
+   "attributes": {}
+  },
+  "payload": {
+   "output": {}
+  },
+  "_t": 2.596
+ }
+]
