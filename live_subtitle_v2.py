@@ -351,7 +351,28 @@ def clean_translation(s: str) -> str:
 
 # ── 音频捕获 ─────────────────────────────────────────────────────
 class LoopbackCapture:
-    def __init__(self, chunk_ms=40):
+    """WASAPI 环回采集。
+
+    chunk_ms 是**采集块长**，直接决定采集段的固有延迟：
+        平均延迟 ≈ chunk_ms / 2（等半块）
+        最坏延迟 ≈ chunk_ms   （整整迟一块）
+    原来固定 40ms，即平均 20ms、最坏 42.5ms。
+
+    实测（_bench_capture_latency.py，48000 Hz / 2ch，各测 4 秒）：
+        块长    回调/s    收到帧/s   丢帧
+        40ms      25.0      48000      0
+        20ms      50.2      48000      0
+        10ms     100.5      48000      0
+         5ms     201.0      48000      0
+         3ms     335.0      48000      0
+    **降到 3ms 都不丢帧**，所以块长可以放心调小。
+    默认取 10ms：平均延迟 5ms（原 20ms），回调 100 次/秒（CPU 可忽略）。
+
+    注意：它只占端到端延迟的约 4%，真正的开销在识别（GPU 前向）与
+    翻译（每次调用固定开销）上。调这块是"顺手省一点"，不是主要杠杆。
+    """
+
+    def __init__(self, chunk_ms=10):
         import pyaudiowpatch as pyaudio
         self._pa = pyaudio
         self.p = pyaudio.PyAudio()
@@ -363,8 +384,10 @@ class LoopbackCapture:
             raise RuntimeError(f"取 WASAPI 环回失败：{e}") from e
         self.rate = int(self.dev["defaultSampleRate"])
         self.ch = min(2, self.dev["maxInputChannels"])
-        self.blocksize = int(self.rate * chunk_ms / 1000)
-        self.q = queue.Queue(maxsize=400)
+        self.blocksize = max(1, int(self.rate * chunk_ms / 1000))
+        # 队列容量按"秒"算，块变小后要相应变大，否则缓冲秒数缩水
+        self.q = queue.Queue(maxsize=max(400, int(16 * self.rate /
+                                                  self.blocksize)))
         self.errs = []
         self._stream = None
 
@@ -1523,7 +1546,7 @@ def run(args):
         print(f"转写: 分块 {args.model}　批量≤{args.max_batch}s / 等≤{args.max_wait}s")
         print("      优点：字幕与音频同步、不积压")
         print("      代价：要等整段说完（首字延迟 = 段长 + 1.5s）")
-    cap = LoopbackCapture().start()
+    cap = LoopbackCapture(chunk_ms=getattr(args, "chunk_ms", 10.0)).start()
     print(f"采集: [{cap.dev['index']}] {cap.dev['name'][:44]}")
     print("控制：**拖动字幕本身**移动（整块都能拖，点一下不会动）")
     print("      滑轮字号　Shift+滑轮条数　Alt+滑轮宽度　Ctrl+滑轮透明度")
@@ -2336,6 +2359,11 @@ def build_parser():
     #     本地 medium (GPU)  中位 1.22s　识别 0.603s　显存 1615MB
     #     远端 qwen3-asr     中位 1.54s　识别 0.899s
     # 本地又快又准，还不花钱、不联网。
+    # 采集块长（毫秒）。直接决定采集段固有延迟：平均 ≈ 块长/2。
+    # 实测 3~40ms 都不丢帧，默认 10ms（平均 5ms，原 40ms 是 20ms）。
+    # 只占端到端约 4%，是顺手省一点，不是主要杠杆。
+    ap.add_argument("--chunk-ms", type=float, default=10.0,
+                    help="采集块长毫秒（越小延迟越低，默认 10）")
     ap.add_argument("--device", choices=["auto", "cpu", "cuda"],
                     default="auto",
                     help="识别设备：auto(默认，有 GPU 就用) / cpu / cuda")
