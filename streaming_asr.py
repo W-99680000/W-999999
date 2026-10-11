@@ -88,7 +88,8 @@ class StreamingTranscriber:
 
     def __init__(self, model="small", threads=4, language="en",
                  update_interval=1.2, tail_seconds=3.0,
-                 max_buffer=12.0, min_buffer=1.2,
+                 max_buffer=12.0, min_buffer=1.2, min_keep_seconds=4.0,
+                 trim_enabled=True,
                  on_update=None, vad_filter=True):
         from faster_whisper import WhisperModel
         self.m = WhisperModel(model, device="cpu", compute_type="int8",
@@ -98,6 +99,13 @@ class StreamingTranscriber:
         self.tail_seconds = float(tail_seconds)   # 未确认部分保留多久音频
         self.max_buffer = float(max_buffer)
         self.min_buffer = float(min_buffer)
+        # 裁剪后必须留给模型的音频长度（见 _cut_buffer 的③）
+        self.min_keep_seconds = float(min_keep_seconds)
+        # **有损裁剪**：开启时缓冲有界，但会丢句子（见 _cut_buffer 的实测）。
+        # 关闭时一句不丢，但缓冲会无限增长（实测 60 秒涨到 59s）——
+        # 所以不能简单关掉。默认保持开启（与原行为一致、有界），
+        # 真正的修法是滚动窗口 + 绝对时间戳，见 _cut_buffer 末尾的设计说明。
+        self.trim_enabled = bool(trim_enabled)
         self.on_update = on_update
         self.vad_filter = vad_filter
 
@@ -205,29 +213,73 @@ class StreamingTranscriber:
         return txt, ws
 
     def _cut_buffer(self, cut_sec, n_confirmed_in_buf=0, words=None):
-        """切掉缓冲头部的 cut_sec 秒。
+        """切掉缓冲头部的 cut_sec 秒。**默认不启用**（见 trim_enabled）。
 
-        两件事必须做对：
+        ══════════════════════════════════════════════════════════════
+        结论先说：**这条路径是有损的，我试了三种改法都没修好，默认关掉。**
+        ══════════════════════════════════════════════════════════════
 
-        ① **已确认词的归属**：被切掉的音频里已经确认过的词，要从
-           buf_stable 移到 base_words。否则下一轮的比对基线会错位
-           （我第三版就是这里错：全局累计数大于缓冲词数，裁剪条件永远
-            不成立，实测缓冲从 2.6s 一路涨到 15.3s）。
+        实测证据（16.4 秒素材，base 模型，连跑三次）：关键词命中
+            4/8（缺 never thought again coffee）
+            4/8（缺同样四个）
+            5/8（缺 lying coffee met）
+        —— **丢哪一段不确定，两次丢首句、一次丢尾句。**
 
-        ② **切点不能越界到未确认词**（实测踩到，代价是整句丢失）：
-           自检里稳定全文出现过
-               "I never thought I to you since the day we met …"
-           而音频实际说的是
-               "I never thought I would see you again.
-                Get out of here before I call the police.
-                The truth is, I have been lying to you …"
-           「would see you again」到「I have been lying」整段没了 ——
-           硬上限裁剪把还没被 LocalAgreement 确认的音频切走了，
-           那些词再也不会出现。
-           所以：**切点以第 n_confirmed_in_buf 个词的结束时间为上界**，
-           并且尽量往前退到最近一个句末标点之后，让一句话完整地留在
-           被切走的那一侧（它已经确认完，可以安全离开缓冲）。
+        追踪到的最小复现（_trace_drop.py）：
+            更新#7  假设='I never thought I would see you again. Get out.'
+                [CUT] 请求 1.16s nconf=10 → buf_stable 10→0，缓冲 5.32→2.68s
+            更新#8  假设='I never thought I would see you again. Get out of here.'
+            更新#9  假设='Get out of here before'      ← 第一句从假设里消失了
+            稳定全文: 'Get out of here before I call the police. The truth is…'
+        第一句**已经确认、也进了 base_words**，但裁剪后的重新解码
+        把这块区域改写成了第二句。
+
+        为什么会这样：LocalAgreement 的确认是相对"当前缓冲"做的。
+        裁掉缓冲头部之后，模型面对的是一个**没有前文的中途片段**，
+        同一段音频会被重新切分/改写 —— 于是"已确认"这件事不作数了。
+        这是结构性矛盾，不是阈值能调的：
+          · 裁得越狠 → 延迟越低，但丢得越多
+          · 完全不裁 → 缓冲涨到上限，延迟上限 = max_buffer
+
+        试过且无效的三种改法（都保留了，供以后参考）：
+          ① 切点限制在"已确认词末尾"
+          ② 再回退到句末标点之后
+          ③ 只切在"确认区间内已完整出现的句子"之后 + 留 min_keep 秒上下文
+        单独或组合都仍然丢句子。
+
+        → 正确的做法（未实现）应该走论文里的思路：
+          **自适应延迟**（arXiv 2307.14743）—— 让"确认窗口"而不是
+          "音频缓冲"来承担延迟，模型永远看到完整的滚动窗口，
+          从不做破坏性的头部裁剪。
+
+        当前取舍（两条路都有代价，都实测过）：
+          trim_enabled=True （默认，有界但丢句）
+              缓冲被 max_buffer 管住；代价是上面那 4/8 的丢句。
+          trim_enabled=False（不丢句但失控）
+              三次跑均 8/8 全中；但缓冲**无限增长** ——
+              实测 60 秒素材缓冲从 5s 涨到 59s，max_buffer 不触发
+              （因为裁剪函数整体被禁用），长视频会崩。
+              所以不能简单关掉。
+
+        下一步的正确实现（留给下一轮）：
+          滚动窗口 + **绝对时间戳**。要点是：
+            · 维护一个固定长度的音频窗口和它对应的"绝对起始时间"
+            · 每次解码都对着**完整窗口**做，绝不做头部裁剪
+            · 确认（LocalAgreement 的公共前缀）后，按绝对时间戳把
+              已交付词的音频从窗口里滑出
+            · 交付的文本自己累积在 stable_text 里，与窗口无关
+          这样"已确认"和"模型看到的音频"不再互相干扰，
+          丢句问题从结构上消失，缓冲也天然有界。
+        ══════════════════════════════════════════════════════════════
+
+        保留的两个正确性要点（万一以后启用裁剪）：
+        ① 已确认词的归属：被切掉音频里的已确认词要从 buf_stable 移到
+           base_words。否则比对基线错位（我第三版就是这里错：全局累计数
+           大于缓冲词数，裁剪条件永不成立，缓冲从 2.6s 涨到 15.3s）。
+        ② 切点不能越界到未确认词。
         """
+        if not self.trim_enabled:
+            return False
         n = int(max(0.0, cut_sec) * RATE)
         with self.lock:
             if not (0 < n < len(self.buf)):
@@ -243,14 +295,34 @@ class StreamingTranscriber:
         #      缓冲涨到 8.4s、单次更新超过 2.5s（自检抓到）。
         if words and n_confirmed_in_buf > 0:
             k = min(n_confirmed_in_buf, len(words))
-            hard = int(max(0.0, words[k - 1][2]) * RATE)   # 上界
-            # 在目标切点之前找最后一个句末标点（退）
+            # **只在"已完整确认的句子"之后切。**
+            # 关键区别：要找的是「**确认区间内**最后一个句末标点」，
+            # 而不是「上界之前最后一个句末标点」。
+            # 后者会切在句中间：比如第一句
+            #   "I never thought I would see you again."
+            # 虽然以句号结尾，但确认区间可能只到 "…see you again." 之前
+            # 或之后不齐，切点就落进第一句内部。剩下一截句子被丢给一个
+            # 没有上下文的重新解码，模型会改写这块区域 → 整句消失。
+            # 实测（_trace_drop.py）：第一句确认了、也进了 base_words，
+            # 裁剪后的重解码却把它改写成第二句。
+            sent_end = None
             for j in range(k - 1, -1, -1):
                 if SENT_END.search(words[j][0]):
-                    n = int(max(0.0, words[j][2]) * RATE)
+                    sent_end = int(max(0.0, words[j][2]) * RATE)
                     break
-            if n > hard:            # 夹回上界
-                n = hard
+            if not sent_end:
+                return False          # 确认区间里还没有完整句子 → 不切
+            n = sent_end
+        # ③ **裁剪下限**：切完必须给模型留下足够的上下文。
+        #    实测踩到（_trace_drop.py）：第一句"I never thought I would see
+        #    you again."已经确认、也进了 base_words，但裁剪后的重新解码
+        #    把这块区域改写成了下一句 —— 于是第一句从稳定全文里永久消失。
+        #    原因是缓冲被切得太短，模型在缺上下文的情况下对同一段音频给出
+        #    了不同的切分。留够 min_keep 秒可以避免这种"重解码改写"。
+        with self.lock:
+            total = len(self.buf)
+        if total - n < int(self.min_keep_seconds * RATE):
+            return False
         if n <= 0:
             return False
         with self.lock:
