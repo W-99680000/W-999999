@@ -68,10 +68,80 @@ MODEL_CANDIDATES = [
     os.path.join(HERE, "models", "hh-translate-base.gguf"),
 ]
 
-# 特殊 token（从 GGUF chat_template 与词表读出来的，不要改）
-BOS = "<\uff5chy_begin\u2581of\u2581sentence\uff5c>"
+# ── 两代模型用**不同的 token 体系**，模板必须按模型选 ────────────
+# 这是实测踩出来的：我以为 HY-MT 家族只有一个模板，把 1.8B 的标记发给 7B，
+# 结果 7B 看起来"更差"（空输出、中英混杂、复读）。实际是**发错了 token**。
+#
+# 1.8B（hy_ 系列标记）
+#     <|hy_begin_of_sentence|><|hy_User|>{user}<|hy_Assistant|>
+#     bos=120000  eos=120020  pad=120002
+# 7B（startoftext / extra_N 系列）
+#     user 轮      → <|startoftext|>{content}<|extra_0|>
+#     system 轮    → <|startoftext|>{content}<|extra_4|>
+#     assistant 轮 → {content}<|eos|>
+#     bos=127958  eos=127960  pad=127961
+#
+# 两套都是从各自 GGUF 的 tokenizer.chat_template 与词表读出来的。
+BOS = "<\uff5chy_begin\u2581of\u2581sentence\uff5c>"      # 1.8B
 USER = "<\uff5chy_User\uff5c>"
 ASST = "<\uff5chy_Assistant\uff5c>"
+SOT = "<|startoftext|>"                                    # 7B
+EX0 = "<|extra_0|>"
+
+MODEL_FAMILIES = {
+    "hy18": lambda body: BOS + USER + body + ASST,
+    "hy7": lambda body: SOT + body + EX0,
+}
+
+
+def _skip_gguf_value(f, vt):
+    """跳过一项 GGUF 元数据值（只为找 bos_token_id，别的不需要）。"""
+    sizes = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8,
+             12: 8}
+    if vt == 8:
+        n = struct.unpack("<Q", f.read(8))[0]
+        f.seek(n, 1)
+    elif vt == 9:
+        et = struct.unpack("<I", f.read(4))[0]
+        n = struct.unpack("<Q", f.read(8))[0]
+        if et == 8:
+            for _ in range(n):
+                ln = struct.unpack("<Q", f.read(8))[0]
+                f.seek(ln, 1)
+        else:
+            f.seek(n * sizes.get(et, 0), 1)
+    else:
+        f.seek(sizes.get(vt, 0), 1)
+
+
+def detect_family(path):
+    """判断模型是 1.8B 一代还是 7B 一代。
+
+    看 **bos token id** —— 两代之间最明确的区别（120000 vs 127958）。
+    读不到就按文件大小兜底（7B 的 Q4 约 4.4GB，1.8B 约 1.1GB）。
+    """
+    try:
+        with open(path, "rb") as f:
+            if f.read(4) != b"GGUF":
+                return "hy18"
+            f.read(4)
+            f.read(8)                              # n_tensors
+            n_kv = struct.unpack("<Q", f.read(8))[0]
+            for _ in range(n_kv):
+                n = struct.unpack("<Q", f.read(8))[0]
+                key = f.read(n).decode("utf-8", "replace")
+                vt = struct.unpack("<I", f.read(4))[0]
+                if key == "tokenizer.ggml.bos_token_id" and vt == 4:
+                    v = struct.unpack("<I", f.read(4))[0]
+                    return "hy7" if v > 126000 else "hy18"
+                _skip_gguf_value(f, vt)
+    except Exception:
+        pass
+    try:
+        return "hy7" if os.path.getsize(path) > 3_000_000_000 else "hy18"
+    except Exception:
+        return "hy18"
+
 
 # ── 官方提示词模板（来源：Tencent-Hunyuan/HY-MT README，非推测）──────
 # 官方区分两种，**不能混用**：
@@ -147,6 +217,8 @@ class LocalMT:
             self.params.update(params)
         # 术语表 [(源词, 目标译法)]。注入时按"源词出现在文本里"逐条加。
         self.terms = list(terms or [])
+        # 模型代次决定用哪套 token 标记（见 MODEL_FAMILIES 的说明）
+        self.family = detect_family(self.model) if self.model else hy18
         self.start_timeout = start_timeout
         self.proc = None
         self.ok = bool(self.bin and self.model)
@@ -215,7 +287,7 @@ class LocalMT:
             prompt = body
         else:
             prompt = self.tpl.format(target=self.target, src=text)
-        payload = {"prompt": BOS + USER + prompt + ASST,
+        payload = {"prompt": MODEL_FAMILIES[self.family](prompt),
                    "n_predict": max(64, 6 * len(text)),
                    "stream": False}
         payload.update(self.params)
@@ -240,6 +312,7 @@ class LocalMT:
         if not self.ok:
             return "本地翻译=不可用"
         return (f"本地翻译=HY-MT {os.path.basename(self.model)}"
+                f"（{self.family}）"
                 f"　启动 {self.t_start:.1f}s　调用 {self.calls}"
                 f"　失败 {self.fails}　上次 {self.t_last:.2f}s")
 
