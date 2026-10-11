@@ -203,7 +203,7 @@ def _get_llm():
     return got
 
 
-def _pick_offline_source(lang, prob, min_conf=0.85):
+def _pick_offline_source(lang, prob, min_conf=0.85, allow_offline=False):
     """本批检测结果是否**足够可信**，可以走离线 argos（en→zh）。
 
     去掉语言锁定后的路由判据。门槛比"能锁定"高得多，因为代价不对称：
@@ -211,9 +211,22 @@ def _pick_offline_source(lang, prob, min_conf=0.85):
       · 走 argos（en→zh）：**源语言必须真的是英语**，否则俄语/越南语被
         塞进 en→zh 模型，输出是垃圾（实测过 argos 中继产出
         "我不确定,但我还不知道" 这种完全错的译文）
-    所以只在高置信英语时才用 argos，其余一律 Google+auto。
-    返回 True 表示"可以用 en 作为源语言"，False 表示"交给 Google 判"。
+    返回 True 表示"可以用 en 作为源语言"，False 表示"交给远端判"。
+
+    **allow_offline=False 时一律返回 False** —— 即英文也走 qwen-mt。
+    为什么默认这样：实测同一批句子上 qwen-mt 每项都优于 argos，
+    而代价只有 0.25 秒 ——
+        proper noun  argos: 东京都督…      qwen-mt: 东京都知事…    ← argos 译错
+        keigo-like   argos: 抱歉你忙的时候麻烦你但请你检查一下
+                     qwen-mt: 很抱歉在您忙碌时打扰您，但您能帮忙看一下这个吗？
+        numbers      argos: 销量…去年销量达到1点5倍.
+                     qwen-mt: 销售额达到约300亿日元，是去年的1.5倍。
+    另外：**日文一直走 qwen-mt**（离线没有 ja_zh 包），所以原来英文
+    走 argos、日文走远端 —— 两个语种质量不一致，英文那条反而更低。
+    想省那 0.25 秒可以用 --prefer-offline 退回 argos。
     """
+    if not allow_offline:
+        return False
     if not lang:
         return False
     if not str(lang).lower().startswith("en"):
@@ -1605,7 +1618,8 @@ def run(args):
             # 达不到就退到 Google + sl=auto（那条路判错也无所谓）。
             #
             # 译器实例缓存：argos 加载模型有开销，不能每批重建。
-            want = _pick_offline_source(th.last_lang, th.last_lang_prob)
+            want = _pick_offline_source(th.last_lang, th.last_lang_prob,
+                                         allow_offline=args.prefer_offline)
             cur_src = "en" if want else None
             if cur_src != _tr_key[0]:
                 try:
@@ -1927,15 +1941,23 @@ def selftest():
     _sil = (_np.random.randn(64000) * 0.0003).astype(_np.float32)
     chk("真静音（约 -70 dBFS）仍被挡住", not _g48.is_speech(_sil))
 
-    print("\n二之三、源语言路由（去掉锁定后的判据）")
-    # 判据：只有高置信英语才走离线 argos；其余交给 Google sl=auto
+    print("\n二之三、源语言路由（默认不用离线 argos）")
+    # **默认 allow_offline=False**：英文也走 qwen-mt。
+    # 实测同一批句子上 qwen-mt 每项都优于 argos（"东京都知事" vs
+    # "东京都督"），代价只有 0.25s。所以默认不再走 argos。
+    for lg, pb in (("en", .97), ("en", .86), ("en", .60), ("en", .20),
+                   ("ru", .99), ("vi", .98), ("ko", .80), (None, .99),
+                   ("", .99), ("EN", .90)):
+        chk(f"默认路由 {lg!r}/{pb} -> False（不走 argos）",
+            _pick_offline_source(lg, pb) is False)
+    # --prefer-offline 时才按原来的高置信英语判据
     for lg, pb, want in (("en", .97, True), ("en", .86, True),
                          ("en", .60, False), ("en", .20, False),
                          ("ru", .99, False), ("vi", .98, False),
                          ("ko", .80, False), (None, .99, False),
                          ("", .99, False), ("EN", .90, True)):
-        chk(f"路由 {lg!r}/{pb} -> {want}",
-            _pick_offline_source(lg, pb) is want)
+        chk(f"prefer-offline {lg!r}/{pb} -> {want}",
+            _pick_offline_source(lg, pb, allow_offline=True) is want)
 
     print("\n二之三、语言锁定（针对两个实测问题）")
     # 问题一："缺少中文翻译" —— 翻译器原来用 args.src（"en"）初始化，
