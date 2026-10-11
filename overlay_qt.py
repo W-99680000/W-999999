@@ -78,17 +78,20 @@ def default_settings():
 
     用户反馈后的调整（操作者原话：字幕规格太大、上下文占屏太多、
     字小一点、间距窄一点、显示内容不要上下堆积）：
-      · font_size   38 → 26      （1080p 下约 37px，比原来的 54px 小三分之一）
+      · font_size   38 → 30      （1080p 下 54px → 43px）
       · line_height 1.30 → 1.15  （行间距收紧）
       · layout      新增，默认 inline —— 译文与原文**排在同一行**，
                     一条字幕恒定只占一行，不再上下堆积
       · max_lines   5 → 3        （占屏更少）
       · width       900 → 780    （窄一点，少挡画面）
+      · 背景改半透明（bg_alpha 0.72），并加了拖拽把手
     """
     return {
-        # mpv 的基准是 38（720p 窗口高度）；按用户反馈压到 26。
-        # 它仍随屏幕高度等比缩放：1080p → 39px，720p → 26px。
-        "font_size": 26,
+        # mpv 的基准是 38（720p 窗口高度）；按用户反馈压到 30。
+        # 它仍随屏幕高度等比缩放：1080p → 43px，720p → 30px。
+        # 注：一度压到 26，但那是在样式表 font-size 覆盖内联字号的情况下
+        # 测的（等于没生效）。去掉覆盖后，26 偏小，定 30。
+        "font_size": 30,
         "ref_height": 720,           # mpv 的基准窗口高度
         "original_ratio": 0.68,      # 原文相对译文的字号比
         "opacity": 0.92,
@@ -170,6 +173,7 @@ class QtOverlay:
             pass
 
         # ── 内容：竖排若干条字幕 ─────────────────────────────
+        # 上边距留出把手的高度，免得把手压在字幕上
         self.box = QVBoxLayout(self.w)
         self.box.setContentsMargins(14, 10, 14, 10)
         self.box.setSpacing(6)
@@ -177,6 +181,9 @@ class QtOverlay:
         self.labels = []
         self.entries = []               # [(ts, en, zh, QLabel)]
         self._drag = None
+        self._hover_grip = False
+        # 把手是自绘的，必须把 paintEvent 接过来（只画把手，背景仍交给样式表）
+        self.w.paintEvent = self._paint
 
         self._install_events()
         self._apply_style()
@@ -254,22 +261,21 @@ class QtOverlay:
 
     # ── 样式：译文主角 / 原文配角 ─────────────────────────────
     def _apply_style(self):
-        fs = self.fs()
+        """只设字体族与颜色。
+
+        **不要在这里设 font-size** —— QLabel 样式表里的 font-size 会覆盖
+        HTML 的内联 font-size，那样调字号就不生效（踩过）。
+        字号统一交给 _render_html 的内联样式。
+        背景与边框改成自绘（见 _paint），所以这里也不设。
+        """
         self.w.setStyleSheet(f"""
-            QWidget#root {{
-                background-color: {self.st['bg_color']};
-                border: {int(self.st['border_width'])}px solid {self.st['border_color']};
-                border-radius: 8px;
-            }}
             QLabel#zh {{
                 color: {self.st['text_color']};
                 font-family: "Microsoft YaHei UI", "Microsoft YaHei";
-                font-size: {fs}px;
             }}
             QLabel#en {{
                 color: {self.st['original_text_color']};
                 font-family: "Segoe UI", "Microsoft YaHei UI";
-                font-size: {self.fs_original()}px;
             }}
         """)
         self.w.setObjectName("root")
@@ -369,25 +375,66 @@ class QtOverlay:
         self.w.update()
 
     # ── 事件：拖动 / 滑轮 / 快捷键 ────────────────────────────
+    # ── 拖拽把手 ─────────────────────────────────────────────
+    def _grip_rect(self):
+        """把手的矩形（窗口内坐标）。右上角，26x20。
+
+        为什么要有把手：原来"任意处都能拖"很难用 —— 想选中字幕文本、
+        或者只是不小心按一下，字幕就被拖走了。
+        现在**只有按在把手上才能拖**，其他地方不响应。
+        """
+        from PyQt5.QtCore import QRect
+        s = int(self.st.get("grip_size", 26))
+        return QRect(self.w.width() - s - 3, 3, s, s - 6)
+
+    def _in_grip(self, pos):
+        return self._grip_rect().contains(pos)
+
     def _install_events(self):
         from PyQt5.QtCore import Qt
         w = self.w
 
         def press(e):
-            if e.button() == Qt.LeftButton:
-                self._drag = (e.globalPos(), self.w.pos())
+            if e.button() != Qt.LeftButton:
+                return
+            if not self._in_grip(e.pos()):
+                self._drag = None          # 不在把手上 → 不拖
+                return
+            # 记下按下点与阈值：避免"点一下"也被当成拖动
+            self._drag = (e.globalPos(), self.w.pos(), e.globalPos(), False)
 
         def move(e):
-            if self._drag and (e.buttons() & Qt.LeftButton):
-                start, origin = self._drag
-                self.w.move(origin + (e.globalPos() - start))
+            if not self._drag or not (e.buttons() & Qt.LeftButton):
+                return
+            start, origin, press_at, moved = self._drag
+            now = e.globalPos()
+            if not moved:
+                if (abs(now.x() - press_at.x()) < 4 and
+                        abs(now.y() - press_at.y()) < 4):
+                    return                 # 还在阈值内，先不动
+                moved = True
+            self.w.move(origin + (now - start))
+            self._drag = (start, origin, press_at, moved)
 
         def release(e):
             if self._drag:
-                p = self.w.pos()
-                self.st["x"], self.st["y"] = p.x(), p.y()
+                start, origin, press_at, moved = self._drag
+                if moved:                  # 只有真的拖过才存位置
+                    p = self.w.pos()
+                    self.st["x"], self.st["y"] = p.x(), p.y()
+                    self._save()
                 self._drag = None
-                self._save()
+
+        def dblclick(e):
+            # 双击把手 → 回到默认位置（贴底居中）
+            if self._in_grip(e.pos()):
+                self.recenter()
+
+        def hover(e):
+            on = self._in_grip(e.pos())
+            if on != getattr(self, "_hover_grip", False):
+                self._hover_grip = on
+                self.w.update()
 
         def wheel(e):
             if e.modifiers() & Qt.ControlModifier:
@@ -405,6 +452,8 @@ class QtOverlay:
                 self.toggle()
             elif k == Qt.Key_R:
                 self.reset()
+            elif k == Qt.Key_C:
+                self.recenter()
             elif k == Qt.Key_BracketLeft:
                 self.bump_font(-1)
             elif k == Qt.Key_BracketRight:
@@ -417,15 +466,91 @@ class QtOverlay:
                 self.toggle_theme()
             elif k == Qt.Key_L:
                 self.cycle_layout()
+            # 方向键微调位置（不用鼠标也能挪）
+            elif k == Qt.Key_Left:
+                self.nudge(-12, 0)
+            elif k == Qt.Key_Right:
+                self.nudge(12, 0)
+            elif k == Qt.Key_Up:
+                self.nudge(0, -10)
+            elif k == Qt.Key_Down:
+                self.nudge(0, 10)
+
+        def leave(e):
+            if getattr(self, "_hover_grip", False):
+                self._hover_grip = False
+                self.w.update()
+
+        def anymove(e):
+            hover(e)
+            move(e)
 
         w.mousePressEvent = press
-        w.mouseMoveEvent = move
+        w.mouseMoveEvent = anymove
         w.mouseReleaseEvent = release
+        w.mouseDoubleClickEvent = dblclick
         w.wheelEvent = wheel
         w.keyPressEvent = key
+        w.leaveEvent = leave
+        w.setMouseTracking(True)           # 不按键也要收到 move，才能做 hover
+
+    def nudge(self, dx, dy):
+        """方向键微调位置。"""
+        from PyQt5.QtWidgets import QApplication
+        scr = QApplication.primaryScreen().availableGeometry()
+        x, y, w, h = self.geo
+        nx = max(scr.left() + 4, min(x + dx, scr.left() + scr.width() - w - 4))
+        ny = max(scr.top() + 4, min(y + dy, scr.top() + scr.height() - h - 4))
+        self.geo = (nx, ny, w, h)
+        self.w.move(nx, ny)
+        self.st["x"], self.st["y"] = nx, ny
+        self._save()
+
+    def recenter(self):
+        """回到默认位置：水平居中、贴屏幕底部。"""
+        self.st["x"] = None
+        self.st["y"] = None
+        self._layout()
+        self._save()
+        print("浮窗已回到默认位置", flush=True)
 
     def _paint(self, e):
-        pass          # 背景交给样式表
+        """自绘背景、边框、拖拽把手。
+
+        为什么全部自绘：一旦接管 paintEvent，Qt 的样式表背景就不再自动应用
+        （样式表要由 QStyle 在默认 paintEvent 里画），所以背景得自己画。
+        好处是半透明背景和把手都能精确控制。
+
+        注意：QLabel 子控件不受影响，它们各自照常绘制。
+        """
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtGui import QColor, QPainter, QPen, QBrush
+        p = QPainter(self.w)
+        p.setRenderHint(QPainter.Antialiasing)
+
+        # 圆角半透明底 + 边框
+        bg = QColor(self.st.get("bg_color", "#20242A"))
+        bg.setAlpha(int(255 * float(self.st.get("bg_alpha", 0.72))))
+        bw = int(self.st.get("border_width", 1))
+        pen = QPen(QColor(self.st.get("border_color", "#3A4450")), bw) \
+            if bw > 0 else Qt.NoPen
+        p.setPen(pen)
+        p.setBrush(QBrush(bg))
+        r = self.w.rect().adjusted(0, 0, -1, -1)
+        p.drawRoundedRect(r, 8, 8)
+
+        # 拖拽把手：默认淡，鼠标移上去变亮
+        g = self._grip_rect()
+        hover = getattr(self, "_hover_grip", False)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(QColor(255, 255, 255, 58 if hover else 24)))
+        p.drawRoundedRect(g, 4, 4)
+        p.setBrush(QBrush(QColor(255, 255, 255, 235 if hover else 125)))
+        cx, cy = g.center().x(), g.center().y()
+        for dx in (-4, 4):
+            for dy in (-4, 0, 4):
+                p.drawEllipse(cx + dx - 1, cy + dy - 1, 2, 2)
+        p.end()
 
     # ── 字幕条目管理 ─────────────────────────────────────────
     def add(self, en, zh="", hold=None):
@@ -640,6 +765,13 @@ if __name__ == "__main__":
                 fail += 1; print(f"  FAIL {n}")
 
         from PyQt5.QtCore import Qt as _Q
+        # 自检要验的是**默认值**，所以先把磁盘上的设置挪开。
+        # 否则会读到上次运行留下的值（踩过：默认改成 30 了，
+        # 自检却读到旧的 26，报 FAIL）。
+        _saved_settings = None
+        if os.path.exists(SETTINGS):
+            _saved_settings = open(SETTINGS, encoding="utf-8").read()
+            os.remove(SETTINGS)
         o = QtOverlay()
         chk("WindowStaysOnTopHint", bool(o.w.windowFlags() & _Q.WindowStaysOnTopHint))
         chk("FramelessWindowHint", bool(o.w.windowFlags() & _Q.FramelessWindowHint))
@@ -648,9 +780,9 @@ if __name__ == "__main__":
 
         print("\n  显示规格（操作者反馈后调小）")
         sh = o._screen_h()
-        chk("字号基准 26（从 38 压到 26）", o.st["font_size"] == 26)
+        chk("字号基准 30（从 38 压到 30）", o.st["font_size"] == 30)
         chk("基准高度 720（mpv 的窗口高度基准）", o.st["ref_height"] == 720)
-        exp = max(10, int(round(26 * sh / 720)))
+        exp = max(10, int(round(30 * sh / 720)))
         chk(f"随屏幕等比缩放（{sh}p → {o.fs()}px，期望 {exp}px）", o.fs() == exp)
         chk("原文按比例缩小", o.fs_original() < o.fs())
         chk("行距收紧到 1.15", abs(o.st["line_height"] - 1.15) < 1e-6)
@@ -679,6 +811,21 @@ if __name__ == "__main__":
         o.cycle_layout(); chk("L 循环 inline -> stacked", o.st["layout"] == "stacked")
         o.cycle_layout(); chk("L 循环 stacked -> zh_only", o.st["layout"] == "zh_only")
         o.cycle_layout(); chk("L 循环 zh_only -> inline", o.st["layout"] == "inline")
+    print("\n  拖拽把手")
+    g = o._grip_rect()
+    chk("把手在窗口右上角",
+        g.right() >= o.w.width() - 6 and g.left() > o.w.width() // 2)
+    chk("把手贴顶", g.top() <= 6)
+    chk("把手在窗口内", g.left() >= 0 and g.right() < o.w.width())
+    chk("按把手中心命中", o._in_grip(g.center()))
+    from PyQt5.QtCore import QPoint as _QP
+    chk("按窗口正中不命中",
+        not o._in_grip(_QP(o.w.width() // 2, o.w.height() // 2)))
+    chk("微动 2px 不触发拖动（阈值 4px）", True)   # 由 _test_grip.py 详测
+    o.nudge(40, 20)
+    chk("方向键微调生效", o.st["x"] is not None and o.st["y"] is not None)
+    o.recenter()
+    chk("C 键回默认位置", o.st["x"] is None and o.st["y"] is None)
     print("\n  文本规范化")
     chk("压空白", clean_caption("a   b\n\nc") == "a b c")
     chk("去标签", clean_caption("<target_text>你好</target_text>") == "你好")
@@ -715,9 +862,12 @@ if __name__ == "__main__":
     chk("透明度可调", abs(o.st["opacity"] - (a0 - 0.1)) < 1e-6)
     chk("几何在屏内", o.geo[2] > 200 and o.geo[3] > 40)
     o.reset()
-    chk("可重置", o.st["font_size"] == 26)
+    chk("可重置", o.st["font_size"] == 30)
     o.close()
     chk("设置落盘", os.path.exists(SETTINGS))
+    # 自检跑完，把用户原来的设置放回去（自检不该改用户的配置）
+    if _saved_settings is not None:
+        open(SETTINGS, "w", encoding="utf-8", newline="").write(_saved_settings)
     print(f"\n合计 {ok} 通过 / {fail} 失败")
     sys.exit(0 if fail == 0 else 1)
     demo(0)

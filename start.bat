@@ -63,13 +63,17 @@ echo.
 echo   Play your video. Subtitles appear at the bottom.
 echo.
 echo   OVERLAY CONTROLS
-echo     drag mouse ........ move
+echo     drag the grip ..... move  (small dots at top-right)
+echo     double-click grip . back to the default spot
 echo     wheel ............. font size
 echo     Shift + wheel ..... number of lines
 echo     Ctrl + wheel ...... opacity
+echo     arrow keys ........ nudge
+echo     L ................. layout (same line / two lines / zh only)
 echo     T ................. theme (dark / light video)
 echo     H ................. hide / show
-echo     R ................. reset
+echo     C ................. recenter
+echo     R ................. reset all
 echo     Esc ............... quit
 echo.
 echo   Also writes live.srt - load it in your player if the

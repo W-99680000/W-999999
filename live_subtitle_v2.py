@@ -842,8 +842,10 @@ def run(args):
         print("      代价：要等整段说完（首字延迟 = 段长 + 1.5s）")
     cap = LoopbackCapture().start()
     print(f"采集: [{cap.dev['index']}] {cap.dev['name'][:44]}")
-    print("\n控制：拖动移动　滑轮字号　Ctrl+滑轮透明度")
-    print("      [ ] 字号　- = 透明度　方向键微调　H 隐藏　R 重置　Esc 退出\n")
+    print("控制：**拖右上角把手**移动（双击把手回默认位置）")
+    print("      滑轮字号　Shift+滑轮条数　Ctrl+滑轮透明度")
+    print("      [ ] 字号　- = 透明度　方向键微调　L 排布　T 深/浅底")
+    print("      H 隐藏　R 重置　C 回默认位置　Esc 退出\n")
 
     seg = Segmenter(min_len=args.min_seg, max_len=args.max_seg,
                     silence=args.vad_silence)
@@ -1129,8 +1131,11 @@ def selftest():
     a2 = np.zeros(int(16000 * 2.0), dtype=np.float32)
     # 用真实语音造两段，验证不崩且返回等长
     import wave
-    wp = os.path.join(HERE, "e2e_speech.wav")
-    if os.path.exists(wp):
+    # 开发目录里样本在根下；发布仓库里在 samples/ 下。两处都找。
+    wp = next((p for p in (os.path.join(HERE, "e2e_speech.wav"),
+                           os.path.join(HERE, "samples", "e2e_speech.wav"))
+               if os.path.exists(p)), None)
+    if wp:
         w = wave.open(wp, "rb")
         raw = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
         aud = to_mono16k(raw, w.getframerate(), w.getnchannels())
@@ -1165,7 +1170,7 @@ def selftest():
         chk("几何在屏内", o.geo[2] > 200 and o.geo[3] > 50)
         o.toggle(); chk("可隐藏", not o.w.isVisible())
         o.toggle(); chk("可恢复", o.w.isVisible())
-        o.reset(); chk("可重置", o.st["font_size"] == 26)
+        o.reset(); chk("可重置", o.st["font_size"] == 30)
         o.close()
     except Exception as e:
         import traceback
