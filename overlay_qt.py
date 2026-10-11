@@ -704,8 +704,29 @@ class QtOverlay:
         self._relayout()
 
     # ── 对外接口 ─────────────────────────────────────────────
+    #: 哨兵：表示"原文有了、译文还没到"。
+    #  借鉴 Whisper-Ollama-Translator 的 PENDING_KEEP_OLD：
+    #  这种时候**不要清空字幕、也不要退回原文**，而是保留上一帧的译文、
+    #  只把原文换掉。否则翻译那 1~2 秒里浮窗会闪一下空白或变成外文。
+    PENDING_KEEP_OLD = "\x00PENDING_KEEP_OLD\x00"
+
     def set(self, en, zh="", **kw):
-        """收一条新字幕。与原 tkinter 版的 set() 兼容，额外参数转给 add()。"""
+        """收一条新字幕。与原 tkinter 版的 set() 兼容，额外参数转给 add()。
+
+        zh == PENDING_KEEP_OLD 时：只更新原文，**沿用上一条的译文**。
+        """
+        if zh == self.PENDING_KEEP_OLD:
+            last_zh = ""
+            for e in reversed(self.entries):
+                if e[2]:
+                    last_zh = e[2]
+                    break
+            if last_zh:
+                self.add(en, last_zh, **kw)
+            else:
+                # 还没有任何译文可沿用 → 只显示原文（空译文）
+                self.add(en, "", **kw)
+            return
         self.add(en, zh, **kw)
 
     def set_text(self, text):
@@ -934,6 +955,18 @@ if __name__ == "__main__":
         o.cycle_layout(); chk("L 循环 inline -> stacked", o.st["layout"] == "stacked")
         o.cycle_layout(); chk("L 循环 stacked -> zh_only", o.st["layout"] == "zh_only")
         o.cycle_layout(); chk("L 循环 zh_only -> inline", o.st["layout"] == "inline")
+        print("\n  PENDING_KEEP_OLD（翻译未回不清屏）")
+        o.clear()
+        o.set("first line", "第一行")
+        chk("哨兵：沿用上一帧译文",
+            (o.set("second line", o.PENDING_KEEP_OLD) or
+             o.entries[-1][2] == "第一行"))
+        chk("哨兵：原文已更新", o.entries[-1][1] == "second line")
+        o.clear()
+        o.set("only", o.PENDING_KEEP_OLD)
+        chk("哨兵且无历史译文：原文在、译文空",
+            o.entries[-1][1] == "only" and o.entries[-1][2] == "")
+
         print("\n  坐标占位符校验（防坏设置自我延续）")
         from PyQt5.QtWidgets import QApplication as _QA
         _scr = _QA.primaryScreen().availableGeometry()

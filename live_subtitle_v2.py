@@ -1252,7 +1252,15 @@ def run(args):
                 if zh:
                     print(f"      译: {zh[:52]}")
                 if ov:
-                    ui_q.put((txt, zh))
+                    if zh:
+                        ui_q.put((txt, zh))
+                    else:
+                        # 译文为空（可能是被质量闸挡了、或还没回来）：
+                        # 传哨兵，让浮窗**保留上一帧译文**而不是闪成空白
+                        # （借鉴 Whisper-Ollama-Translator 的 PENDING_KEEP_OLD）
+                        _SENT = getattr(ov, "PENDING_KEEP_OLD",
+                                        "\x00PENDING_KEEP_OLD\x00")
+                        ui_q.put((txt, _SENT))
                 if srt:
                     srt.add(txt, zh)
         return shown
