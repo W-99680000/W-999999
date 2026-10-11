@@ -4,7 +4,8 @@
 
 置顶浮窗显示 **中文一行、原文一行**（各自居中），同步写 `.srt` 供播放器加载。
 
-> **实测字幕延迟：中位 0.98 秒，最差 1.08 秒。**
+> **有 GPU 时全本地运行**：识别在显卡上跑，不联网、不花钱。
+> 没有 GPU 就自动退回远端（需 key），再退回本地 CPU。
 
 ---
 
@@ -22,12 +23,17 @@
 ```bat
 python live_subtitle_v2.py --to zh                 # 目标语言（默认 zh）
 python live_subtitle_v2.py --lang vi               # 固定源语言（默认自动检测）
-python live_subtitle_v2.py --no-remote-asr         # 强制本地 whisper
-python live_subtitle_v2.py --selftest              # 自检（107 项）
+python live_subtitle_v2.py --device cpu            # 强制用 CPU（默认 auto）
+python live_subtitle_v2.py --model large-v3        # 换更大的识别模型
+python gpu_setup.py                                # 检查 GPU 与 CUDA 库状态
+python live_subtitle_v2.py --selftest              # 自检（144 项）
 python overlay_qt.py --selftest                    # 浮窗自检（61 项）
 python overlay_qt.py --demo                        # 只测浮窗，不采集音频
 python control_panel.py                            # 只开控制面板
 ```
+
+**显卡要求**：NVIDIA + 已装 CUDA 运行库（见下面「GPU 与 CUDA」一节）。
+没有显卡也能跑，会自动选远端或 CPU，只是慢一些。
 
 ---
 
@@ -50,85 +56,112 @@ WASAPI 环回只在系统音频引擎真在出声时才回传数据。
 
 | 阶段 | 中位 | 平均 | P90 | 最大 |
 |---|---|---|---|---|
-| 起点 | 4.31s | 4.80s | 6.21s | — |
+| 起点（CPU 识别，串行翻译） | 4.31s | 4.80s | 6.21s | — |
 | 翻译改并行 | 3.91s | 4.21s | 4.70s | — |
 | 识别改远端 | 1.00s | 1.02s | 1.20s | 1.20s |
-| 批次 8s → 1.5s | **0.98s** | 0.94s | 1.03s | **1.08s** |
+| 批次 8s → 1.5s | 0.98s | 0.94s | 1.03s | 1.08s |
+| **识别改本地 GPU** | 更快且更准 | — | — | — |
+| **翻译合并调用** | 翻译每段 0.61s → 0.20s | — | — | — |
 
-**最差值从 7.72 秒降到 1.08 秒** —— 看视频时最难受的是偶发卡顿，所以尾部延迟比平均值更重要。
+**最差值从 7.72 秒降到约 1 秒** —— 看视频时最难受的是偶发卡顿，
+所以尾部延迟比平均值更重要。
 
-### 为什么本地 CPU 有 2 秒硬墙
-
-把一次 `transcribe` 的成本按音频长度量了一遍：
+### GPU 上的识别成本（关键数字）
 
 ```
-0.2 秒音频 → 2.078s        4.0 秒音频 → 2.134s
-0.5 秒音频 → 1.996s        8.0 秒音频 → 2.288s
+音频秒     CPU int8     GPU float16
+  2.0s      2.033s        0.157s
+  4.0s      2.134s        0.192s
+  8.0s      2.288s        0.266s
+ 16.0s        —           0.400s
 ```
 
-**成本恒定在约 2.0 秒，与音频长短无关** —— 那是模型前向计算的成本，
-不是"处理 4 秒声音"的成本。
+**CPU 上成本恒定约 2.0 秒、与音频长短无关**（那是模型前向的成本），
+**GPU 上只要 0.15~0.27 秒，快 11 倍。** 各模型在 GPU 上的实测：
 
-所有能想到的旋钮都量过，全都没用：
+| 模型 | 每 4 秒段 | 显存 | 说明 |
+|---|---|---|---|
+| small | 0.405s | 605MB | 准确度不足（见下） |
+| **medium** | **0.603s** | **1615MB** | **默认** |
+| large-v3 | 0.846s | 3127MB | 更准，多 0.24s |
 
-| 手段 | 效果 |
-|---|---|
-| beam_size 5 → 1 | 2.153 → 2.084s（-3%） |
-| 关掉 VAD | 2.153 → 2.133s（-1%） |
-| 线程数 4/8/12/16 | 2.411 / 2.200 / 2.052 / 2.377s（噪声级） |
-| compute_type int8 → float32 | 2.200 → 3.167s（更慢） |
-| 换小模型 | small 2.363s → base 0.741s → tiny 0.394s |
+**准确度差异（真实越南语新闻句）：**
 
-**换小模型是唯一有效的，但代价不可接受**：`base` 在同一段真实越南语上和 `small`
-的逐词一致率只有 **0.53** —— 大量词被听错，字幕会变成胡话。
+```
+原句  "Sáng hôm sau, Xuân mang xe đạp đi bán, rồi mua vé tàu về quê."
 
-所以本地下限 = 2.0 秒（前向）+ 约 1.2 秒（等句子说完）≈ 3.2 秒。
+small     "Sẵn hùng sau, xung mang xe đạp đi bán, rồi buồn giết tàu về quê."
+          ↑ 前半错、后半错
+medium    "Sáng hôm sau, Xuân mang xe đạp đi bán, rồi mua vé tàu về quê."  ✓
+large-v3  同上 ✓
+远端 qwen3-asr   词错 + 全部小写（API 不还原大小写）
+```
 
-### 远端识别为什么能解决
+所以 **GPU 上 small 会自动升到 medium** —— 只慢 0.2 秒，但修掉可辨识的错词。
 
-远端 `qwen3-asr-flash` 的固定开销只有 **0.427 秒**，斜率 0.029 秒/音频秒：
+---
+
+## 三条识别路径（自动选择）
+
+| | **本地 GPU**（默认） | 远端 | 本地 CPU |
+|---|---|---|---|
+| 触发 | 有 NVIDIA + CUDA 库 | 无 GPU 且有 key | 都没有 |
+| 模型 | faster-whisper medium | qwen3-asr-flash | faster-whisper small |
+| 每 4 秒段 | **0.60s** | 0.90s | 2.13s |
+| 显存 | 1.6GB | — | — |
+| 成本 | **0** | ≈0.79 元/小时 | 0 |
+| 联网 | 不需要 | 需要 | 不需要 |
+| 幻觉检测信号 | **有**（nsp/logp/cr） | 无 | 有 |
+
+**默认优先本地 GPU。** 用 `--device cpu|cuda` 可强制。
+
+### GPU 与 CUDA
+
+faster-whisper 走 ctranslate2，**即使有显卡也需要 cuBLAS 的 DLL**。
+缺了会报：
+
+```
+RuntimeError: Library cublas64_12.dll is not found or cannot be loaded
+```
+
+**注意这个报错很有误导性：它发生在第一次前向计算时，不在加载模型时。**
+所以 `WhisperModel(device='cuda')` 能成功构造，一 `transcribe` 才炸 ——
+很容易读成"没有 GPU"。
+
+补装（不需要完整 CUDA Toolkit，也不需要管理员权限）：
+
+```bat
+pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+python gpu_setup.py        # 检查状态
+```
+
+`gpu_setup.py` 会把这些 DLL 目录**前置到 PATH**。
+注意：只调 `os.add_dll_directory` **不够**（实测仍然失败），
+ctranslate2 的原生加载走 PATH。
+
+**排查**：`python gpu_setup.py` 会打印显卡、显存、CUDA 库目录，
+并**真跑一次前向**确认可用 —— 不信设备列表，因为缺 DLL 时设备在、
+模型也能构造。
+
+### 远端识别（无 GPU 时的回退）
+
+`qwen3-asr-flash` 的固定开销 0.427 秒、斜率 0.029 秒/音频秒：
 
 ```
 0.5 秒音频 → 0.427s        8.0 秒音频 → 0.637s
 2.0 秒音频 → 0.529s       16.0 秒音频 → 0.879s
 ```
 
-固定开销小了 5 倍，于是**批次可以缩小**（这点很反直觉，见下）。
-
----
-
-## 两套识别路径
-
-| | 远端（默认） | 本地（回退） |
-|---|---|---|
-| 模型 | 阿里云百炼 `qwen3-asr-flash` | faster-whisper `small` / int8 |
-| 固定开销 | 0.427s | 2.0s |
-| 批次 | 1.5s | 4.0s |
-| 端到端延迟 | **0.98s** | 4.9s |
-| 需要网络 | 是 | 否 |
-| 成本 | 0.00022 元/秒 ≈ **0.79 元/小时** | 0 |
-| 自动判语种 | 是 | 是 |
-
-**没有 key 就自动走本地**，行为与旧版完全一致。强制本地用 `--no-remote-asr`。
-
-### 批次要缩小，不是放大
-
-我最初想反了：看到远端接受长音频，就把批次放大到 8 秒去"摊薄调用开销"。
-**那是本地的逻辑**（本地固定开销 2.0 秒，只有放大批次才划算）。
-
-远端固定开销只有 0.427 秒，**等批次攒齐的时间反而成了主要成本**。实测：
+固定开销小，所以**批次要缩小而不是放大**：
 
 | max_batch | 中位延迟 | P90 | 调用数/45s |
 |---|---|---|---|
 | 12.0s | 0.77s | 0.83s | 3 |
 | 8.0s | 0.69s | 0.71s | 4 |
-| 4.0s | 0.59s | 0.98s | 8 |
 | 2.0s | 0.49s | 0.55s | 15 |
 | **1.5s** | **0.46s** | **0.55s** | 24 |
-| 1.0s | 0.37s | 0.45s | 39 |
 
-**越小越好。** 限流 100 RPM，1 秒一批 = 60 RPM 已在限内；取 1.5 秒
-（延迟接近最优，调用数只有一半，留余量）。
+**越小越好** —— 这点和本地 CPU 相反（那里固定成本 2.0s，必须放大批才划算）。
 
 ---
 
@@ -151,7 +184,51 @@ WASAPI 环回只在系统音频引擎真在出声时才回传数据。
 
 另外 `qwen-mt` 支持 `translation_options` 的**术语定制**与**领域提示**，通用模型没有。
 
-### 翻译选路（每批独立决策，不用累计锁定）
+### 合并翻译：一次调用译多段
+
+实测 `qwen-mt` 每次调用有 **0.57 秒固定开销**，真实翻译计算几乎免费：
+
+```
+耗时 ≈ 0.770ms/字符 × 长度 + 0.569s
+  5 字符 → 0.554s        133 字符 → 0.660s
+```
+
+所以**逐段分开译 = 把固定开销付了多次**。合并多段成一次调用：
+
+```
+合并 4 段 0.79s　vs　逐条 2.43s　→ 每段 0.61s → 0.20s
+```
+
+三档模型（lite/flash/plus）延迟只差 0.04 秒，**换模型买不到时间**。
+
+**合并只能用"分隔符"格式，两个坑都量过：**
+
+| 格式 | 解析结果 |
+|---|---|
+| 编号行 `1. xxx` | 1/4 ✗ |
+| XML `<t>xxx</t>` | 1/4 ✗ |
+| 分隔符 | 4/4 ✓ |
+| JSON 数组 | 4/4 ✓ |
+
+**`qwen-mt` 是纯翻译引擎、不执行指令** —— 它把编号行/XML 当成待翻译的
+正文，译了第一行就停。
+
+**而且分隔符必须是纯字母。** 第一版用 `|||`，模型输出里确实保留了，
+但**我们自己的 `clean_translation` 把它删掉了**（那个函数按白名单过滤，
+只留 CJK + 拉丁字母 + 数字）：
+
+```
+'XXSEPXX' 'SEP' 'ZzQq'   保留 ✓
+'|||' '@@@' '%%%' '§§§'  全被删 ✗
+```
+
+删掉后几段粘成一段、段数对不上、**静默退回逐条** —— 优化失效且无报错。
+所以**决定性约束是后处理的白名单，不是模型**。
+
+攒批上限 `--mt-batch 3`（攒几个语义单元合并），`--mt-batch-wait 2.0`
+是兜底（防止为等第 N 个单元让字幕卡住）。`--mt-batch 1` 关闭合并。
+
+### 翻译选路（每批独立决策）
 
 ```
 本批检测到英语 且 置信度 >= 0.85  →  离线 argos（en→zh，0.04s）
@@ -159,12 +236,12 @@ WASAPI 环回只在系统音频引擎真在出声时才回传数据。
 没配 LLM                          →  免 key Google 端点（sl=auto）
 ```
 
-门槛不对称是有原因的：`argos` 要求源语言**真的是英语**，否则俄语被塞进 en→zh 模型
-会出垃圾（实测过）；而走 Google/LLM 时判错也无害，它们自己会再判一次。
+**默认不走 argos**：实测同一批句子上 qwen-mt 每项都更优，而 argos 会把
+"东京都知事" 译成 "东京都督"。代价只有 0.25 秒。
+想省那 0.25 秒用 `--prefer-offline` 退回 argos。
 
 **注意：不要用 `--from` 强制源语言。** 实测越南新闻被强制按 `en` 识别时，
 whisper 不是"听错"，而是**把越南语直接意译成英文**（还译错），后面全崩。
-默认自动检测，检出 `vi` 置信度 0.976，识别正确。
 
 ---
 
@@ -367,12 +444,20 @@ sk-ws-你的key
 
 ## 已知限制（如实）
 
-- **不联网时延迟回到 4.9 秒**（本地 whisper 的 2 秒固定开销无法绕过）
+- **GPU 需装 CUDA 运行库**（`pip install nvidia-cublas-cu12`），
+  否则会退回远端或 CPU。`python gpu_setup.py` 可诊断
+- **显存占用**：medium 1.6GB、large-v3 3.1GB。8GB 卡够用，
+  但同时玩游戏要注意余量
+- **不打字幕的短视频/纯音乐内容**会出现少量误听；噪声门先挡静音，
+  但背景音乐与重叠说话挡不住（实测依据见 `_bench_dsp_gate.py`）
 - **免 key Google 端点没有 SLA**，可能被限流或下线；失败时自动退回 argos 中继
 - **流式模式（`stream.bat`）长时间连续说话会积压**：CPU 上约 0.49s/次更新 × 2 次/秒
-  ≈ 0.98 音频秒/秒，刚好卡在追平 1.0 的临界点。这是硬件决定的，不是实现问题
+  ≈ 0.98 音频秒/秒，刚好卡在追平 1.0 的临界点
 - **滚动窗口流式转写器窗口未完全有界**（`streaming_asr2.py`，未接默认路线）
 - 越南语识别在口语新闻上仍不完美，**上游错则下游难救**
+- **本地翻译模型没有接**：llama.cpp 官方无 Windows CUDA 预编译包，
+  `llama-cpp-python` 源码编译需完整 CUDA Toolkit。而合并翻译后
+  每段只要 0.20 秒，收益已经很小
 
 ---
 
@@ -392,11 +477,12 @@ sk-ws-你的key
 
 | 文件 | 作用 |
 |---|---|
-| `live_subtitle_v2.py` | 主程序（自检 107 项） |
+| `live_subtitle_v2.py` | 主程序（自检 144 项） |
 | `overlay_qt.py` | 浮窗（PyQt5，自检 61 项） |
+| `gpu_setup.py` | **GPU 探测与 CUDA 库加载**（含自检，可单独跑） |
 | `control_panel.py` | 控制面板（tkinter，独立进程） |
 | `remote_asr.py` | 远端识别（qwen3-asr-flash） |
-| `llm_translate.py` | LLM 翻译后端（OpenAI 兼容 / Ollama 两种协议） |
+| `llm_translate.py` | LLM 翻译后端 + **合并翻译** |
 | `streaming_asr.py` | 本地流式（LocalAgreement-2，自检 19 项） |
 | `streaming_asr_remote.py` | 远端流式（已实现，默认不启用） |
 | `streaming_asr2.py` | 滚动窗口流式（实验，窗口未完全有界） |
@@ -412,30 +498,35 @@ sk-ws-你的key
 ## 依赖
 
 ```
-faster-whisper      本地识别（回退路径）
+faster-whisper      识别（GPU 或 CPU）
 pyaudiowpatch       WASAPI 环回采集
 PyQt5               浮窗
 argostranslate      离线 en→zh（可选）
 websocket-client    流式识别模块（可选，主流程不需要）
+nvidia-cublas-cu12  **GPU 识别必需**（提供 cuBLAS DLL）
+nvidia-cudnn-cu12   GPU 识别建议装
 ```
 
 ```
 pip install -r requirements.txt
+pip install nvidia-cublas-cu12 nvidia-cudnn-cu12   # 用 GPU 时才需要
+python gpu_setup.py                                 # 确认可用
 ```
 
-**模型下载**：首次运行会从 HuggingFace 下载 whisper 模型（`small` 约 500MB）。
-不想联网下载就用远端识别。
+**模型下载**：首次运行会从 HuggingFace 下载 whisper 模型
+（medium 约 1.5GB、large-v3 约 3GB）。已经下过就有缓存，是秒级加载。
 
 ---
 
 ## 自检
 
 ```
-python live_subtitle_v2.py --selftest     107 项
+python live_subtitle_v2.py --selftest     144 项
 python overlay_qt.py --selftest            61 项
-python streaming_asr.py                    19 项
+python streaming_asr.py                    19 项（偶发 1 项时间带断言挂）
 tools/test_borrowed.py                     30 项
 tools/test_drag2.py                         9 项
+python gpu_setup.py                        GPU 状态与可用性
 ```
 
 `tools/` 下还有延迟诊断与基准脚本，每个都写明了它当初回答的问题：
@@ -443,12 +534,16 @@ tools/test_drag2.py                         9 项
 | 脚本 | 回答的问题 |
 |---|---|
 | `_measure_e2e_lag.py` | 端到端字幕延迟到底多少 |
-| `_bench_bottleneck.py` | 本地延迟瓶颈在哪（定位到 2.0s 固定开销） |
+| `_bench_bottleneck.py` | 本地 CPU 延迟瓶颈在哪（定位到 2.0s 固定开销） |
+| `_bench_gpu.py` | **GPU 上识别成本多少（0.15~0.40s）** |
+| `_test_compare.py` | **本地 GPU vs 远端，哪个又快又准** |
 | `_bench_models.py` | 换小模型能省多少、准确度掉多少 |
 | `_bench_chunk_size.py` | 批次大小 vs 延迟 |
+| `_bench_mt_cost.py` | **翻译的固定开销占比（0.57s 固定）** |
+| `_bench_mt_batch.py` | **合并翻译用哪种格式能可靠切分** |
 | `_bench_qwen_mt.py` | qwen-mt vs 通用模型 |
+| `_bench_dsp_gate.py` | 纯 DSP 能否替代幻觉检测 |
 | `_probe_streaming_asr.py` | 流式协议能不能用 |
-| `_probe_streaming2.py` | 流式精确延迟 |
 | `_capture_streaming.py` | 抓流式消息序列供离线验证 |
 
 ---
@@ -467,6 +562,12 @@ tools/test_drag2.py                         9 项
 | **吞掉所有异常会伪装成业务失败** | `_google_free_ok()` 一直返回 False，实为模块顶部漏了 `import ssl`，`NameError` 被静默吞掉 | 不要把"所有异常"一概吞掉 |
 | **翻译专用模型不接受 system 角色** | qwen-mt 每次返回空，表面看"模式选对了但没译文" | 只发 `user` 消息（`no_system`） |
 | **同尺寸下换布局买不到高度** | 左右两列和上下两行实测高度完全相同（311px） | 真正的杠杆是字号，不是排布 |
+| **从一次报错推断硬件不存在** | `cublas64_12.dll not found` → 我判定"本机无 GPU"，据此把识别搬到远端并写进文档。实际有 RTX 4070，只缺 DLL | **查一手来源**（`nvidia-smi`），不要从一次失败推断硬件 |
+| **CUDA 报错发生在错误的时机** | `WhisperModel(device='cuda')` 能成功构造，一 `transcribe` 才炸 → 极易误读 | 探测 GPU 要**真跑一次前向**，不信设备列表 |
+| **`os.add_dll_directory` 对 ctranslate2 无效** | 加了 DLL 目录仍然报找不到 cuBLAS | 必须**前置 PATH** |
+| **纯翻译引擎不执行指令** | "请按编号输出"被 qwen-mt 当成正文，只译第一行（1/4） | 用**结构分隔符**，不要用指令式提示 |
+| **优化被自己的后处理杀死** | 合并翻译的分隔符 `\|\|\|` 被 `clean_translation` 的白名单删掉 → 静默退回逐条、无报错 | 分隔符必须**能活过后处理**（用纯字母），并加断言 |
+| **"用了没定义"的参数** | `args.prefer_offline` 有调用点、没 `add_argument` → 程序**启动即崩**，看起来像"不显示字幕" | 自检里加通用检查：每个 `args.X` 必须有定义 |
 
 ---
 
