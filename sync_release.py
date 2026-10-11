@@ -34,7 +34,7 @@ ROOT_FILES = ["live_subtitle_v2.py", "overlay_qt.py", "streaming_asr.py",
 BENCH = ["bench_latency.py", "bench_localagree.py", "bench_fastest.py",
          "bench_realtime.py", "bench_depth.py", "bench_trend.py",
          "bench_final.py"]
-TOOLS = ["test_pipeline.py", "test_loopback3.py", "test_vietnamese.py",
+TOOLS = ["test_pipeline.py", "test_borrowed.py", "test_drag2.py", "test_loopback3.py", "test_vietnamese.py",
          "test_mymemory.py", "test_google_free.py", "test_google_sustained.py",
          "compare_vi_paths.py", "compare_vi_models.py", "compare_vi3.py",
          "compare_vi4.py", "probe_free_apis.py", "probe_free2.py",
