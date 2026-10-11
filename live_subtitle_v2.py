@@ -489,7 +489,25 @@ class NoiseGate:
     """
 
     def __init__(self, margin_db=8.0, floor_pct=5.0,
-                 lo_dbfs=-50.0, hi_dbfs=-30.0, warmup_sec=6.0):
+                 lo_dbfs=-62.0, hi_dbfs=-48.0, warmup_sec=6.0):
+        """噪声门：只挡**真静音**，不做语音检测。
+
+        **hi_dbfs 从 -30 放宽到 -48 —— 这是"识别不到声音"的修复。**
+        故障现象：连续 85 批、每批都有音频，但一条字幕都没有，
+        日志全是"转写 0.00s、已显示 0 段"；而远端其实是好的
+        （诊断显示"远端 47字 失0"）—— 是**门把段全挡了**。
+
+        根因：**门限是相对校准的，而系统音量是绝对的。**
+            th = (开机 6 秒电平的 5 百分位) + 8dB，再夹到 [lo, hi]
+        开机时音量正常 → floor 高 → th 顶到上限 -30 dBFS。
+        之后把音量调小（或那段内容本身轻），段电平落在 -32~-44，
+        **全部低于 -30，全被拒**，字幕整场消失。
+
+        -30 这个上限太激进了。这个门的职责只是"别把纯静音送去识别"
+        （静音上识别会编内容），语音检测由远端 VAD 与 whisper 的
+        vad_filter 负责。取 -48：真静音（<-55）照样挡，
+        音量很小的正常语音（-45 上下）能过。
+        """
         self.margin_db = margin_db
         self.floor_pct = floor_pct
         self.lo_dbfs = lo_dbfs
@@ -1606,8 +1624,18 @@ def run(args):
             per_call = t_asr
             # 顺手把已经译好的批显示掉（不阻塞）
             _n_shown = _drain_translations(block=False)
+            # **每批一行诊断。** 原来只打"转写 0.00s"，那个数字同时对应
+            # 三种完全不同的故障：噪声门挡了、远端没返回、音频是静音。
+            # 把门的门限/拒数、远端返回长度都带上，一眼能分清。
+            _g = getattr(th, "gate", None)
+            _gt = (getattr(_g, "threshold_dbfs", None) if _g else None)
+            _rs = getattr(th, "last_remote_stats", {}) or {}
             print(f"      (批次 {n_batch}：{len(segs_in)} 段 / {batch_dur:.1f}s "
-                  f"音频，转写 {t_asr:.2f}s；翻译并行，已显示 {_n_shown} 段)")
+                  f"音频，转写 {t_asr:.2f}s；翻译并行，已显示 {_n_shown} 段)"
+                  f"　[门 {('%.0f' % _gt) if _gt is not None else '未校准'}"
+                  f" 拒{getattr(_g, 'rejected', 0) if _g else 0}"
+                  f" 远端 {_rs.get('txt_len', '-')}字"
+                  f" 失{_rs.get('fails', '-')}]")
     except KeyboardInterrupt:
         print("\n中断。")
     finally:
@@ -1760,6 +1788,27 @@ def selftest():
     chk("google-free 请求里带 sl=auto", "sl=auto" in _u)
     chk("不再出现 sl=vi（源语言由 Google 判）", "sl=vi" not in _u)
     chk("目标语言仍是 zh-CN", "tl=zh-CN" in _u)
+    print("\n二之四、噪声门不能吃掉正常语音（回归「识别不到声音」）")
+    # 故障复现：开机时音量正常 → floor 高 → 门限顶到上限，
+    # 之后音量一小就全被拒，字幕整场消失。
+    import numpy as _np
+    def _gate_after_warmup(hi):
+        _g = NoiseGate(hi_dbfs=hi)
+        _loud = (_np.random.randn(int(0.1 * TARGET_RATE)) * 0.016
+                 ).astype(_np.float32)
+        for _i in range(70):
+            _g.is_speech(_loud)
+        return _g
+    _g30 = _gate_after_warmup(-30.0)
+    _g48 = NoiseGate()                      # 当前默认
+    chk("默认上限已放宽到 -48（不再是 -30）", _g48.hi_dbfs <= -48.0)
+    chk("开机音量偏大时门限不再顶到 -30",
+        _gate_after_warmup(-48.0).threshold_dbfs <= -47.0)
+    _speech = (_np.random.randn(64000) * 0.025).astype(_np.float32)
+    chk("正常语音（约 -32 dBFS）放行", _g48.is_speech(_speech))
+    _sil = (_np.random.randn(64000) * 0.0003).astype(_np.float32)
+    chk("真静音（约 -70 dBFS）仍被挡住", not _g48.is_speech(_sil))
+
     print("\n二之三、源语言路由（去掉锁定后的判据）")
     # 判据：只有高置信英语才走离线 argos；其余交给 Google sl=auto
     for lg, pb, want in (("en", .97, True), ("en", .86, True),
