@@ -45,6 +45,48 @@ import urllib.request
 # 真正的短句加速靠 PHRASEBOOK 与 LRU 缓存（都是零网络）。
 MIN_CHARS = 3
 
+# ── 阿里云百炼 qwen-mt（实测最优，作为默认后端）────────────────
+# 为什么用它：这是**翻译专用**模型（基于 Qwen3），不是通用对话模型。
+# 实测对比（同一批真实字幕句，本项目实际在看的语种）：
+#
+#   模型            中位延迟   越南语人名「doãn chung dũng」
+#   qwen-mt-flash   0.36s     段忠勇        ✓  ← 用这个
+#   qwen-mt-lite    0.33s     段忠勇        ✓  但语言略生硬
+#   qwen-mt-plus    0.34s     杜安忠勇      ✗  不稳定
+#   deepseek-chat   0.68s     Doãn Chung Dũng / 尹中勇  ✗
+#
+# qwen-mt 的两个关键优势：
+#   ① **快 2 倍**（0.36s vs 0.68s）—— 翻译在关键路径上，直接减延迟
+#   ② **越南语人名/地名按中文习惯译**（段忠勇），而 DeepSeek 要么留
+#      原文要么猜错（尹中勇）。新闻字幕这是硬需求。
+# 另外 qwen-mt 支持 translation_options 的术语定制与领域提示，
+# 通用模型没有（见 _bench_qwen_mt.py）。
+#
+# 地域：key 是**按地域**签发的。北京节点最便宜（0.7/1.95 元每百万
+# tokens），拿北京 key 打新加坡 endpoint 会 401（实测过）。
+DASHSCOPE_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+DASHSCOPE_MODEL = "qwen-mt-flash"
+DASHSCOPE_KEYS_FILE = os.path.join(os.path.expanduser("~"), ".dsh",
+                                   ".dashscope")
+
+
+def _read_dashscope_key():
+    """从 ~/.dsh/.dashscope 读 key（单独一个文件，不要落进仓库）。
+
+    不写进 .credentials.yaml 是因为那是 DSH 自己管理的文件，我不该动。
+    一行一条，`#` 开头为注释。
+    """
+    try:
+        with open(DASHSCOPE_KEYS_FILE, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    return line
+    except Exception:
+        pass
+    return ""
+
+
 SYSTEM = ("You are a professional subtitle translator. "
           "Output ONLY the translation. "
           "No explanation, no quotes, no prefixes, no original text.")
@@ -87,7 +129,8 @@ class LLMTranslator:
     """
 
     def __init__(self, base_url, model, api_key=None, kind="openai",
-                 timeout=20.0, temperature=0.1, num_ctx=1024):
+                 timeout=20.0, temperature=0.1, num_ctx=1024,
+                 no_system=False):
         self.base = (base_url or "").rstrip("/")
         self.model = model
         self.key = api_key or ""
@@ -97,12 +140,20 @@ class LLMTranslator:
         self.num_ctx = int(num_ctx)
         # 用 127.0.0.1 而不是 localhost：Windows 上后者有解析延迟（借鉴）
         self.base = self.base.replace("//localhost:", "//127.0.0.1:")
+        # qwen-mt 不接受 system 角色（实测 400），构造时置 True
+        self.no_system = bool(no_system)
         self.ok = bool(self.base and self.model)
         self.calls = self.fails = 0
         self.t_last = 0.0
 
     # ── 请求体 ───────────────────────────────────────────────
     def _payload(self, text, target):
+        # **qwen-mt 只接受 user / assistant 角色，发 system 会 400。**
+        # 实测报错：Role must be in [user, assistant].
+        # 这是翻译专用模型的特性 —— 翻译指令本身就该写在 user 里，
+        # 它不需要（也不支持）system prompt。
+        # 我第一版统一发 system+user，于是 qwen-mt 全部返回空
+        # （异常被吞掉 → 空串），表面上"模式选对了但没译文"。
         prompt = (f"Translate the following text into {target}. "
                   f"Output ONLY the translation.\n\n{text}")
         if self.kind == "ollama":
@@ -110,10 +161,12 @@ class LLMTranslator:
                     "options": {"temperature": self.temperature,
                                 "num_ctx": self.num_ctx,
                                 "stop": ["\n"]}}
+        msgs = [{"role": "user", "content": prompt}]
+        if not self.no_system:
+            msgs.insert(0, {"role": "system", "content": SYSTEM})
         return {"model": self.model, "stream": False,
                 "temperature": self.temperature, "max_tokens": 220,
-                "messages": [{"role": "system", "content": SYSTEM},
-                             {"role": "user", "content": prompt}]}
+                "messages": msgs}
 
     def _url(self):
         return (f"{self.base}/api/generate" if self.kind == "ollama"
@@ -164,9 +217,11 @@ def from_env_or_args(base_url=None, model=None, kind=None):
 
     优先级：
       ① 显式给的 --llm-base / --llm-model
-      ② 环境变量 LLM_BASE / LLM_MODEL / LLM_KEY（兼容 OPENAI_*）
-      ③ 本机 Ollama（127.0.0.1:11434）
-      ④ DeepSeek（若 .dsh 凭据里或环境变量里有 key）
+      ② 环境变量 LLM_BASE / LLM_MODEL / LLM_KEY（兼容 OPENAI_*、DASHSCOPE_API_KEY）
+      ③ **阿里云百炼 qwen-mt-flash**（有 DASHSCOPE_API_KEY 时）
+         —— 实测最优，见下面 DASHSCOPE_* 常量的注释
+      ④ 本机 Ollama（127.0.0.1:11434）
+      ⑤ DeepSeek（若 .dsh 凭据里或环境变量里有 key）
     找不到就返回 None —— 调用方退回 Google，不要因为没配 LLM 就报错。
     """
     base = base_url or os.environ.get("LLM_BASE") or os.environ.get("OPENAI_BASE_URL")
@@ -177,7 +232,14 @@ def from_env_or_args(base_url=None, model=None, kind=None):
     if base and mdl:
         return LLMTranslator(base, mdl, key, k or "openai")
 
-    # ③ 本机 Ollama
+    # ③ 阿里云百炼 qwen-mt-flash（实测最快最准，优先）
+    ds_key = os.environ.get("DASHSCOPE_API_KEY") or _read_dashscope_key()
+    if ds_key:
+        return LLMTranslator(DASHSCOPE_BASE,
+                             mdl or DASHSCOPE_MODEL, ds_key, "openai",
+                             no_system=True)
+
+    # ④ 本机 Ollama
     try:
         with urllib.request.urlopen("http://127.0.0.1:11434/api/tags",
                                     timeout=2) as r:
@@ -189,7 +251,7 @@ def from_env_or_args(base_url=None, model=None, kind=None):
     except Exception:
         pass
 
-    # ④ DeepSeek（读 dsh 凭据）
+    # ⑤ DeepSeek（读 dsh 凭据）
     if not key:
         try:
             import re as _re
