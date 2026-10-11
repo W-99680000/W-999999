@@ -90,9 +90,21 @@ class StreamingTranscriber:
                  update_interval=1.2, tail_seconds=3.0,
                  max_buffer=12.0, min_buffer=1.2, min_keep_seconds=4.0,
                  trim_enabled=True, adaptive=True,
-                 on_update=None, vad_filter=True):
+                 on_update=None, vad_filter=True,
+                 device="cpu", compute_type="int8"):
         from faster_whisper import WhisperModel
-        self.m = WhisperModel(model, device="cpu", compute_type="int8",
+        # device/compute_type 可切 GPU。**必须支持** —— 这个类原来写死
+        # device="cpu"，是在误判"本机没有 GPU"那段时期写的。
+        # 流式**每一轮都要跑一次前向**（每 1.2 秒一次），所以设备差别
+        # 会被放大：medium 在 GPU 上 0.60s/4 秒段，CPU 上 2.13s。
+        if device == "cuda":
+            try:
+                from gpu_setup import enable_cuda_dlls
+                enable_cuda_dlls()
+            except Exception:
+                pass
+        self.m = WhisperModel(model, device=device,
+                              compute_type=compute_type,
                               cpu_threads=threads)
         self.language = language
         self.update_interval = float(update_interval)
