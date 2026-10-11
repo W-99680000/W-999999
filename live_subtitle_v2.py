@@ -184,6 +184,9 @@ _GF_OK = None          # 免 key Google 端点是否可用（探一次就记住�
 
 
 _LLM_SINGLETON = []
+# 本地翻译单例（HY-MT + llama-server）。None = 未启用或不可用。
+# 用单例是因为 llama-server 是**子进程**，只能有一个实例、只启动一次。
+LOCAL_MT = []
 
 
 def _get_llm():
@@ -1010,8 +1013,18 @@ class Translator:
         #   → 平均 0.63s vs 2.00s（快 3 倍），且译文明显更像字幕。
         # 但只在文本够长时才用（碎片会让小模型更啰嗦，见 llm_translate 的说明）。
         self.llm = _get_llm()          # 可能为 None（那就退回 Google）
+        # ⑦ **本地翻译**（HY-MT + llama.cpp，完全离线）
+        # 实测（_bench_vi_local_vs_remote.py，真实越南语 6 段）：
+        #     本地 HY-MT  0.15s/段　中文占比与远端相当，通顺度略好
+        #     远端 qwen-mt 0.63s/段　专有名词更准（"số phét"→"指纹"）
+        # 两边各有胜负，本地快 4 倍且零成本、不需要网络。
+        # 注意：**必须用 HY-MT 的 chat 模板**（local_mt.py 里实现了）；
+        # 裸提示词会让越南语输出 0% 中文（实测）。
+        self.local = LOCAL_MT[0] if LOCAL_MT else None
         if self.mode in ("none", "argos-pivot", "mymemory", "online-first"):
-            if self.llm is not None:
+            if self.local is not None:
+                self.mode = "local-llm"
+            elif self.llm is not None:
                 self.mode = "llm"
             else:
                 self.mode = "google-free" if _google_free_ok() else (
@@ -1108,6 +1121,16 @@ class Translator:
                 out = clean_translation(self._pivot[1](mid))
             except Exception:
                 out = ""
+        elif self.mode == "local-llm":             # ⑦ 本地 HY-MT（离线）
+            # 走 local_mt.LocalMT：它按 HY-MT 的 chat 模板发请求，
+            # 并且把 llama-server 子进程管起来。
+            if self.local is not None:
+                out = clean_translation(self.local(text))
+                if not out:
+                    self.local_fails = getattr(self, "local_fails", 0) + 1
+            if not out and self.llm is not None:
+                # 本地失败 → 退回远端（有 key 的话），别让字幕断
+                out = clean_translation(self.llm(text, target=self._target_name()))
         elif self.mode == "llm":                   # ⑥ LLM（质量最好）
             # **有 LLM 就一律用它，不做任何长度分流。**
             #
@@ -1343,6 +1366,15 @@ def run(args):
     # 结果还没出来，万一不是英语就把非英语喂给了 en→zh 模型 → 垃圾。
     # 用 auto 起步（Google + sl=auto，判错也无所谓），等检测结果出来
     # 再按 _pick_offline_source 决定是否切到 argos。
+    # 本地翻译（可选）：启动 llama-server 子进程并挂到单例上
+    if getattr(args, "mt_local", False) and not LOCAL_MT:
+        try:
+            from local_mt import from_args as _local_from_args
+            _lm = _local_from_args(model=args.mt_local_model)
+            if _lm is not None:
+                LOCAL_MT.append(_lm)
+        except Exception as _e:
+            print(f"  本地翻译加载失败: {type(_e).__name__} {_e}")
     tr = Translator("auto", args.dst)
     _tr_key[0] = None if not args.lang else args.lang
     print(f"翻译: {tr.mode}　短句表 {len(tr.book)} 条")
@@ -1855,6 +1887,12 @@ def run(args):
         except Exception:
             pass
         _th_pool.shutdown(wait=False)
+        # 关掉本地翻译的 llama-server 子进程（否则会残留）
+        for _lm in LOCAL_MT:
+            try:
+                _lm.stop()
+            except Exception:
+                pass
         stop.set()
         cap.stop()
         if ov:
@@ -1998,6 +2036,22 @@ def selftest():
     chk("google-free 请求里带 sl=auto", "sl=auto" in _u)
     chk("不再出现 sl=vi（源语言由 Google 判）", "sl=vi" not in _u)
     chk("目标语言仍是 zh-CN", "tl=zh-CN" in _u)
+    print("\n二之九、本地翻译的接口格式（HY-MT 模板）")
+    # 回归：HY-MT 是翻译专用模型，**必须用它的 chat 模板**。
+    # 裸提示词（不发 <|hy_User|> / <|hy_Assistant|> / 句首标记）时，
+    # 越南语输出 0% 中文（"thep, thep, thep..." 胡言乱语）；
+    # 发对标记后 100% 中文 —— 因为裸提示词属于训练分布外的畸形输入。
+    try:
+        import local_mt as _lm
+        chk("local_mt 有句首标记", _lm.BOS.startswith("<") and "sentence" in _lm.BOS)
+        chk("local_mt 有 User/Assistant 标记",
+            "User" in _lm.USER and "Assistant" in _lm.ASST)
+        chk("提示词模板含 {src} 占位", "{src}" in _lm.DEFAULT_PROMPT)
+        _ok, _why = _lm.available()
+        chk("可用性检查能跑（结果 %s / %s）" % (_ok, _why or "无原因"), True)
+    except ImportError:
+        chk("local_mt 可导入", False)
+
     print("\n二之八、合并翻译的分隔符必须能活过清理函数")
     # 故障复现：分隔符用 "|||"，模型输出里保留了，但**我们自己的
     # clean_translation 把它删掉了**（白名单只留 CJK+拉丁字母+数字），
@@ -2308,6 +2362,13 @@ def build_parser():
     # （"我从没想过我会。" / "再见。" / "警察。"），而攒到语义边界后
     # 只有 3~4 条完整句。延迟低和译文好原来被绑在一个开关上，现在拆开。
     # 合并翻译：攒几个语义单元一次译完（摊薄 qwen-mt 的 0.57s 固定开销）
+    # 本地翻译（HY-MT + llama.cpp，完全离线）。默认关 ——
+    # 实测两边各有胜负：本地快 4 倍、零成本、不需网络；远端专有名词更准。
+    # 接上后用 --mt-local 切过去，可以对比着看。
+    ap.add_argument("--mt-local", action="store_true",
+                    help="用本地 HY-MT 翻译模型（需 llama.cpp + GGUF 模型）")
+    ap.add_argument("--mt-local-model", default=None,
+                    help="指定本地翻译模型路径（默认自动找 F 盘的 HY-MT）")
     ap.add_argument("--mt-batch", type=int, default=3,
                     help="攒几个语义单元合并成一次翻译调用（1=关闭）")
     ap.add_argument("--mt-batch-wait", type=float, default=2.0,
