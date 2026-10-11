@@ -571,6 +571,11 @@ class BatchTranscriber:
         # （main 里按 --remote-asr 赋值，见那里的注释）
         self.remote = None
         self.last_text = ""
+        # 远端连续无结果的次数 + 最近一次统计。原来远端失败是**静默**的：
+        # 日志只刷"转写 0.00s、已显示 0 段"，没有错误也没有原因，
+        # 操作者只能看到"没在听了"。现在这些用来周期性打出诊断。
+        self.rejected_remote = 0
+        self.last_remote_stats = {}
         self.last_lang = None          # 上一次检测到的语言（给 LanguageLock 用）
         self.last_lang_prob = 0.0
         self.rejected_hallu = 0        # 复读幻觉拦掉的段数
@@ -606,11 +611,34 @@ class BatchTranscriber:
         if _rem is not None:
             cat = np.concatenate(segs)
             txt, rlang = _rem(cat)
+            # **远端失败必须留下痕迹。** 我第一版这里静默返回空串：
+            # 远端一挂，日志只有"转写 0.00s、已显示 0 段"刷屏几百行，
+            # 既没错误也没原因 —— 操作者只能看到"没在听了"。
+            # 现在记下电平/返回长度/错误/失败计数，并周期性打出来。
+            self.last_remote_stats = {
+                "secs": len(cat) / TARGET_RATE,
+                "rms": float(np.sqrt(np.mean(cat.astype(np.float64) ** 2)))
+                if len(cat) else 0.0,
+                "txt_len": len(txt or ""),
+                "lang": rlang,
+                "err": getattr(_rem, "last_err", ""),
+                "calls": getattr(_rem, "calls", -1),
+                "fails": getattr(_rem, "fails", -1),
+            }
             if rlang:
                 self.last_lang = rlang
                 self.last_lang_prob = 0.99      # 远端自己判的，视为高置信
             if not txt:
+                self.rejected_remote += 1
+                if self.rejected_remote in (1, 5, 20) or \
+                        self.rejected_remote % 50 == 0:
+                    _s = self.last_remote_stats
+                    print(f"  ！远端识别无结果（连续第 {self.rejected_remote} 次）"
+                          f"　音频 {_s['secs']:.1f}s RMS {_s['rms']:.4f}"
+                          f"　调用 {_s['calls']} 失败 {_s['fails']}"
+                          f"　错误: {_s['err'] or '无（返回空串）'}", flush=True)
                 return [""] * n_in
+            self.rejected_remote = 0
             # 远端不做字级时间戳，无法按段切分 → 整段结果给最长的那一段，
             # 其余填空（调用方 zip 取用时只有一条会显示，符合预期：
             # 批次被放大后本来就是"一次出整段字幕"）
