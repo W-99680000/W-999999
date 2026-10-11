@@ -1879,9 +1879,14 @@ def main():
     # 本地实测（_bench_bottleneck.py）：一次 transcribe 固定 ~2.0 秒，
     # 与音频长短无关，参数/线程/compute_type 都动不了它。
     # 远端 qwen3-asr-flash：12 秒音频 0.76s、16 秒 0.88s，且吃得下长音频。
-    ap.add_argument("--remote-asr", action="store_true",
-                    help="用阿里云百炼 qwen3-asr-flash 做识别（快一倍；"
-                         "需要 ~/.dsh/.dashscope 里有 key）")
+    # **默认开启**：有 key 就用（实测延迟 4.9s → 1.0s），没 key 自动退回
+    # 本地 whisper，不影响任何现有行为。
+    ap.add_argument("--no-remote-asr", dest="remote_asr",
+                    action="store_false",
+                    help="禁用远端识别，强制用本地 whisper（默认优先远端）")
+    ap.add_argument("--remote-asr", dest="remote_asr", action="store_true",
+                    help="用阿里云百炼 qwen3-asr-flash 做识别（默认已开启）")
+    ap.set_defaults(remote_asr=True)
     ap.add_argument("--no-widen", action="store_true",
                     help="远端识别时不自动放宽批量上限（默认会放宽到 8s）")
     ap.add_argument("--min-seg", type=float, default=0.5)

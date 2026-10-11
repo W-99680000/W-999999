@@ -78,6 +78,9 @@ echo     C ................. recenter
 echo     R ................. reset all
 echo     Esc ............... quit
 echo.
+echo   Recognition: cloud qwen3-asr-flash when a key exists (~/.dsh/.dashscope),
+echo                otherwise local whisper. Disable with --no-remote-asr.
+echo.
 echo   No frame by default - just text over the video, like mpv or
 echo   YouTube captions. Press M if you want to see the box outline.
 echo.
