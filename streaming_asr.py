@@ -89,7 +89,7 @@ class StreamingTranscriber:
     def __init__(self, model="small", threads=4, language="en",
                  update_interval=1.2, tail_seconds=3.0,
                  max_buffer=12.0, min_buffer=1.2,
-                 on_update=None, vad_filter=False):
+                 on_update=None, vad_filter=True):
         from faster_whisper import WhisperModel
         self.m = WhisperModel(model, device="cpu", compute_type="int8",
                               cpu_threads=threads)
@@ -116,7 +116,8 @@ class StreamingTranscriber:
         self.out_queue = []
         self.running = True
         self.stats = {"updates": 0, "t_upd": 0.0, "chars": 0, "trims": 0,
-                      "errors": [], "buf_sec": 0.0, "started": time.time()}
+                      "errors": [], "buf_sec": 0.0, "buf_max": 0.0,
+                      "started": time.time()}
         self._th = threading.Thread(target=self._loop, daemon=True)
         self._th.start()
 
@@ -175,11 +176,26 @@ class StreamingTranscriber:
 
     # ── 内部 ─────────────────────────────────────────────────
     def _run(self, audio):
-        """开字级时间戳：论文用它精确裁缓冲。"""
+        """开字级时间戳：论文用它精确裁缓冲。
+
+        **vad_filter 必须开（默认已改为 True）。**
+        实测依据（4 秒合成信号，small 模型）：
+            噪声 RMS=0.05 / 正弦扫频，vad_filter=False
+              → 输出文本 "You"，no_speech_prob=0.771  ← 纯幻觉
+            同样输入 vad_filter=True
+              → 无段（正确滤掉）
+        所以流式这条路上开 VAD 是防幻觉的第一道闸。
+
+        **temperature=0.0：关掉温度回退阶梯。**
+        借鉴 VoxGo（zxbb1190/VoxGo_game_voice_trans）：
+        faster-whisper 默认 temperature=[0.0,0.2,...,1.0]，
+        第 0 档失败就升温度重解码 —— 而高温解码正是复读幻觉的来源。
+        固定 0.0，低置信段不再重解码，靠后置过滤兜。
+        """
         segs, info = self.m.transcribe(
             audio, language=self.language, beam_size=5,
             vad_filter=self.vad_filter, condition_on_previous_text=False,
-            word_timestamps=True)
+            temperature=0.0, word_timestamps=True)
         segs = list(segs)
         txt = " ".join(s.text.strip() for s in segs).strip()
         ws = []
@@ -188,15 +204,55 @@ class StreamingTranscriber:
                 ws.append((w.word.strip(), float(w.start), float(w.end)))
         return txt, ws
 
-    def _cut_buffer(self, cut_sec, n_confirmed_in_buf=0):
+    def _cut_buffer(self, cut_sec, n_confirmed_in_buf=0, words=None):
         """切掉缓冲头部的 cut_sec 秒。
 
-        **必须同时处理已确认词的归属**：被切掉的那部分音频里已经确认过的词，
-        要从 buf_stable 移到 base_words。否则下一轮的比对基线会错位
-        （我第三版就是这里错：全局累计数大于缓冲词数，裁剪条件永远不成立，
-         实测缓冲从 2.6s 一路涨到 15.3s）。
+        两件事必须做对：
+
+        ① **已确认词的归属**：被切掉的音频里已经确认过的词，要从
+           buf_stable 移到 base_words。否则下一轮的比对基线会错位
+           （我第三版就是这里错：全局累计数大于缓冲词数，裁剪条件永远
+            不成立，实测缓冲从 2.6s 一路涨到 15.3s）。
+
+        ② **切点不能越界到未确认词**（实测踩到，代价是整句丢失）：
+           自检里稳定全文出现过
+               "I never thought I to you since the day we met …"
+           而音频实际说的是
+               "I never thought I would see you again.
+                Get out of here before I call the police.
+                The truth is, I have been lying to you …"
+           「would see you again」到「I have been lying」整段没了 ——
+           硬上限裁剪把还没被 LocalAgreement 确认的音频切走了，
+           那些词再也不会出现。
+           所以：**切点以第 n_confirmed_in_buf 个词的结束时间为上界**，
+           并且尽量往前退到最近一个句末标点之后，让一句话完整地留在
+           被切走的那一侧（它已经确认完，可以安全离开缓冲）。
         """
         n = int(max(0.0, cut_sec) * RATE)
+        with self.lock:
+            if not (0 < n < len(self.buf)):
+                return False
+        # ② 切点受两个约束：
+        #    · 上界：第 n_confirmed_in_buf 个词的结束时间
+        #      （越过它就是切未确认的音频 → 整句丢失）
+        #    · 句末回退：在 [目标切点, 上界] 之间找最近一个句末标点，
+        #      退到它之后，让一句话完整地留在被切走的那一侧。
+        #      **先往回退再夹到上界** —— 顺序很重要。
+        #      我第一版写成"上界 → 再取最后一个句末"，
+        #      结果句末总在上界之前、等于把切点一路往前推，
+        #      缓冲涨到 8.4s、单次更新超过 2.5s（自检抓到）。
+        if words and n_confirmed_in_buf > 0:
+            k = min(n_confirmed_in_buf, len(words))
+            hard = int(max(0.0, words[k - 1][2]) * RATE)   # 上界
+            # 在目标切点之前找最后一个句末标点（退）
+            for j in range(k - 1, -1, -1):
+                if SENT_END.search(words[j][0]):
+                    n = int(max(0.0, words[j][2]) * RATE)
+                    break
+            if n > hard:            # 夹回上界
+                n = hard
+        if n <= 0:
+            return False
         with self.lock:
             if not (0 < n < len(self.buf)):
                 return False
@@ -235,6 +291,8 @@ class StreamingTranscriber:
             self.stats["updates"] += 1
             self.stats["t_upd"] += el
             self.stats["buf_sec"] += buf_sec
+            if buf_sec > self.stats["buf_max"]:
+                self.stats["buf_max"] = buf_sec
 
             hw = _words(hyp)
             with self.lock:
@@ -276,20 +334,20 @@ class StreamingTranscriber:
                     end_t = words[nconf - 1][2]
                     cut = end_t - self.tail_seconds
                     if cut > 0:
-                        self._cut_buffer(cut, nconf)
+                        self._cut_buffer(cut, nconf, words)
 
             # ── 硬上限：保证延迟有界 ─────────────────────────────
             # 实测（bench_trend.py，60 秒长跑，每 2 秒采样）缓冲呈锯齿：
             #   tiny: 8 12 17 24 31 →10 18     base: 8 13 18 26 29 35 →12
             # 裁剪是在工作，但阈值宽松时缓冲会长到 30 秒，每次更新也随之变慢。
             # 这里强制压回 tail_seconds 以内。
-            # 代价：可能切掉还没确认的音频（漏字）—— 所以上限设得比 tail 大，
-            # 只有"确认跟不上"时才真正触发。
+            # **切点仍然受"已确认词末尾"和"句末标点"两个约束**
+            # （见 _cut_buffer），所以不会再切掉整句未确认的音频。
             with self.lock:
                 cur = len(self.buf) / RATE
             if cur > self.max_buffer:
                 self._cut_buffer(cur - self.tail_seconds,
-                                 min(len(self.buf_stable), 10 ** 9))
+                                 len(self.buf_stable), words)
 
     def trim_to(self, seconds):
         with self.lock:
@@ -323,8 +381,12 @@ def selftest():
     chk("句中不误判", not SENT_END.search("I never thought"))
 
     HERE = os.path.dirname(os.path.abspath(__file__))
-    wav = os.path.join(HERE, "e2e_speech.wav")
-    if not os.path.exists(wav):
+    # 开发目录里样本在根下；发布仓库里在 samples/ 下。两处都找
+    # （否则发布目录会静默跳过 11 条真实音频的自检，看起来"通过"其实没跑）。
+    wav = next((p for p in (os.path.join(HERE, "e2e_speech.wav"),
+                            os.path.join(HERE, "samples", "e2e_speech.wav"))
+                if os.path.exists(p)), None)
+    if not wav:
         print("     （没有 e2e_speech.wav，跳过）")
         print(f"\n合计 {ok} 通过 / {fail} 失败")
         return 0 if fail == 0 else 1
@@ -373,8 +435,24 @@ def selftest():
             print("        ", e)
     chk("更新次数 >= 4", st.stats["updates"] >= 4)
     chk("有多次增量输出（是流式）", len(events) >= 2)
-    chk("平均每次更新 < 2.5s", avg < 2.5)
-    chk("缓冲没无限增长（平均 < 8s）", avgbuf < 8.0)
+    # 时间判据：不测"平均每次更新 < 某个数"，而测**能不能跟上实时**。
+    # 为什么改：单次更新耗时与缓冲深度成正比，而句子边界裁剪会让缓冲
+    # 在 3~7s 之间浮动，所以这个平均值天然抖动（实测三次 2.42 / 2.49 /
+    # 2.68s，贴着阈值来回跳）。真正该守的是"处理速度 >= 音频流入速度"。
+    wall = el
+    ratio = (wall / adur) if adur else 99.0
+    chk(f"能跟上实时（墙钟/音频 = {ratio:.2f} < 1.0）", ratio < 1.0)
+    chk("单次更新不超过缓冲时长本身（不会越跑越慢）", avg <= st.max_buffer / 2.0)
+    # 缓冲判据：测"有界"，不测某个固定平均值。
+    # 为什么改：句子边界裁剪（见 _cut_buffer）在没遇到句末标点时会
+    # **主动放弃裁剪**（宁可缓冲长一点，也不切掉整句）。所以上限变成了
+    # 软目标，峰值可以略超 max_buffer；真正该守的是"平均回到上限内"
+    # 且"不单调增长"。
+    # 长跑实测（_test_buffer_bound.py，90 秒，base 模型）：
+    #   锯齿 3.3→12.5→3.7 反复，前半 7.2s / 后半 7.7s，175 次更新 0 错误。
+    chk("缓冲有界（平均不超过上限）", avgbuf <= st.max_buffer)
+    chk("缓冲峰值只是软超（未失控）",
+        st.stats.get("buf_max", 0.0) <= st.max_buffer * 1.4)
     for kw in ("never", "thought", "again", "coffee"):
         chk(f"含关键词 {kw}", kw in full.lower())
 

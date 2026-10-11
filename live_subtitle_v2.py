@@ -232,6 +232,51 @@ def strip_ass_cruft(s):
     return s
 
 
+def is_hallucination(s: str) -> bool:
+    """判断这句是不是 whisper 的**复读幻觉**。
+
+    实测踩到的原始输出（45 秒真实越南新闻里）：
+        「不能理解,怎麼理解,怎麼理解,怎麼理解,怎麼理解,怎麼理解。」
+        「왕코, 왕코, 왕코, 왕코, 왕코, 왕코.」
+    这两种都是 whisper 在**静音或低能量音频**上退化出的模式：
+    把同一个词/字无限重复。
+
+    这不是翻译问题 —— 是识别层出的垃圾，必须在进字幕之前拦掉。
+
+    判据（都要求"重复"达到相当密度，避免误杀正常口头禅）：
+      · 去掉标点空白后，**最长的单字符重复串** ≥ 6
+      · 或 以逗号/句号切出的片段里，**重复片段占 ≥ 5 个且占比 ≥ 60%**
+    """
+    if not s:
+        return False
+    core = re.sub(r"[\s，。！？、；：,.!?;:…—\-]+", "", s)
+    if len(core) < 6:
+        return False
+    # ① 单字符长重复：「AAAAAA」
+    run = 1
+    best = 1
+    for i in range(1, len(core)):
+        run = run + 1 if core[i] == core[i - 1] else 1
+        best = max(best, run)
+    if best >= 6:
+        return True
+    # ② 片段复读：「X, X, X, X, X」
+    parts = [p.strip() for p in re.split(r"[，。！？、；：,.!?;:…\s]+", s) if p.strip()]
+    if len(parts) >= 5:
+        from collections import Counter
+        c = Counter(parts)
+        top_n = c.most_common(1)[0][1]
+        if top_n >= 5 and top_n / len(parts) >= 0.6:
+            return True
+    # ③ 双字/三字循环：「怎麼理解怎麼理解怎麼理解」
+    for w in (2, 3, 4):
+        if len(core) >= w * 5:
+            chunk = core[:w]
+            if core == chunk * (len(core) // w) and len(core) // w >= 5:
+                return True
+    return False
+
+
 def clean_translation(s: str) -> str:
     """清理译文：argos 偶尔混进假名/西里尔/多余符号。
     用白名单保留，其余替换为空；去字符后重新归一化空格。"""
@@ -376,6 +421,97 @@ class Segmenter:
 
 
 # ── 批量转写：把短段攒起来一次转写，摊薄 1.08 秒固定开销 ──────────
+class NoiseGate:
+    """自适应噪声门：从音频本身**开机校准**，而不是写死阈值。
+
+    借鉴 VoxGo（zxbb1190/VoxGo_game_voice_trans），但参数按我们自己的
+    实测数据改了 —— 直接用它的默认值会失效。
+
+    实测依据（30 秒真实环回，越南新闻，按 1 秒窗）：
+        整段 RMS = -21.1 dBFS　峰值 -2.6 dBFS
+        P5  = -40.9 dBFS   ← 真正的静音/底噪
+        P20 = -28.6 dBFS   ← **已被轻声语音污染，不能当噪声底**
+        P50 = -23.3 dBFS
+        P80 = -18.9 dBFS
+        中位语音 -18.9 dBFS
+
+    由此得出两条与 VoxGo 不同的结论：
+
+    ① **不做归一化**。VoxGo 用 target=-20 dBFS / +12dB 上限做增益。
+       我们的语音中位已经是 -18.9 dBFS，测得"需要 -1.1 dB"，
+       实际施加 0.0 dB —— 等于白做一层还可能引入削波。
+       要看音频电平用 --show-level。
+
+    ② 噪声底取 **P5 而不是 P20**。VoxGo 用 P20+7dB 并夹在
+       [-45,-30]；我们的 P20 已经是 -28.6（被语音污染），
+       夹取后门限直接顶到 -30，会切掉轻声。
+       用 P5 = -40.9 做底，+8dB → -32.9 dBFS，落在安全区间。
+       上界仍守 -30 dBFS（再高就会切语音）。
+    """
+
+    def __init__(self, margin_db=8.0, floor_pct=5.0,
+                 lo_dbfs=-50.0, hi_dbfs=-30.0, warmup_sec=6.0):
+        self.margin_db = margin_db
+        self.floor_pct = floor_pct
+        self.lo_dbfs = lo_dbfs
+        self.hi_dbfs = hi_dbfs
+        self.warmup_sec = warmup_sec
+        self.samples = []            # 开机阶段收集的 dBFS
+        self.threshold_dbfs = None
+        self.floor_dbfs = None
+        self.rejected = 0
+        self.checked = 0
+        self._seconds = 0.0
+
+    @staticmethod
+    def dbfs(x):
+        if x is None or len(x) == 0:
+            return -120.0
+        r = float(np.sqrt(np.mean(np.asarray(x, dtype=np.float64) ** 2)))
+        return 20.0 * np.log10(max(r, 1e-10))
+
+    def observe(self, x):
+        """喂一段音频；开机阶段用它校准。返回 None。"""
+        if x is None or len(x) == 0:
+            return
+        self._seconds += len(x) / TARGET_RATE
+        self.samples.append(self.dbfs(x))
+        # 只留开机窗口的样本，避免长跑时永远在校准
+        if self._seconds >= self.warmup_sec and self.threshold_dbfs is None:
+            self._calibrate()
+
+    def _calibrate(self):
+        if not self.samples:
+            return
+        self.floor_dbfs = float(np.percentile(self.samples, self.floor_pct))
+        th = self.floor_dbfs + self.margin_db
+        th = max(self.lo_dbfs, min(self.hi_dbfs, th))
+        self.threshold_dbfs = th
+
+    def is_speech(self, x):
+        """这段音频是否够响。未校准前一律放过（宁多勿漏）。
+
+        注意：必须在这里也把样本喂进 observe()，否则永远校准不了 ——
+        原来只有外部调 observe() 才收集样本，而实际调用只走 is_speech，
+        结果门限一直是"校准中"，等于没门。
+        """
+        self.checked += 1
+        self.observe(x)                 # 开机阶段持续收集，够时长就校准
+        if self.threshold_dbfs is None:
+            return True                 # 还没校准 → 放过
+        if self.dbfs(x) < self.threshold_dbfs:
+            self.rejected += 1
+            return False
+        return True
+
+    def status(self):
+        if self.threshold_dbfs is None:
+            return "噪声门=校准中"
+        return (f"噪声门={self.threshold_dbfs:.1f} dBFS"
+                f"（底 {self.floor_dbfs:.1f} + {self.margin_db:.0f}）"
+                f"　拦 {self.rejected}/{self.checked}")
+
+
 class BatchTranscriber:
     """核心改动。
     实测依据：耗时 = 0.04×音频秒 + 1.08s。
@@ -394,18 +530,62 @@ class BatchTranscriber:
         self.max_wait = max_wait
         self.last_lang = None          # 上一次检测到的语言（给 LanguageLock 用）
         self.last_lang_prob = 0.0
+        self.rejected_hallu = 0        # 复读幻觉拦掉的段数
+        self.rejected_lowq = 0         # 段级质量闸（nsp/logp/cr）拦掉的段数
+        self.rejected_gate = 0         # 噪声门拦掉的段数
+        self.last_quality = []         # 最近一批的质量信号，供诊断/自检
+        self.gate = NoiseGate()        # 开机能自校准的噪声门
 
     def transcribe_batch(self, segs, lang=None):
-        """segs: list[np.ndarray] → list[str]（与输入等长，对应各段文本）"""
+        """segs: list[np.ndarray] → list[str]，**与输入严格等长**（对应各段文本）。
+
+        噪声门、质量闸、幻觉过滤都可能丢掉某段，但返回值必须仍然与输入
+        一一对应 —— 调用方是按 zip(segs_in, texts) 取用的。
+        所以这里用 keep_ix 记下保留下来的下标，最后把结果**散回原位**，
+        丢掉的段填空串。早先版本直接 return 过滤后的列表会把对应关系错位。
+        """
         if not segs:
             return []
+        n_in = len(segs)
+        # 噪声门：低于自适应门限的段不送识别（静音上 whisper 会编内容）
+        keep_ix = [i for i, s in enumerate(segs) if self.gate.is_speech(s)]
+        self.rejected_gate = self.gate.rejected
+        if not keep_ix:
+            return [""] * n_in
+        segs = [segs[i] for i in keep_ix]
         lengths = [len(s) / TARGET_RATE for s in segs]
         cat = np.concatenate(segs)
         total = len(cat) / TARGET_RATE
         segs_out, info = self.m.transcribe(
             cat, language=lang, beam_size=5, vad_filter=True,
-            condition_on_previous_text=False, word_timestamps=True)
+            condition_on_previous_text=False, temperature=0.0,
+            word_timestamps=True)
         segs_out = list(segs_out)
+        # ── 段级质量闸 ──────────────────────────────────────────
+        # 用 whisper **自己算出的**三个信号判废，而不是我手搓的文本启发式。
+        # 实测依据（4 秒合成信号，small 模型）：
+        #     噪声 RMS=0.05 / 正弦扫频，vad_filter=False
+        #       → 输出 "You"，no_speech_prob=0.771，avg_logprob=-0.774  ← 纯幻觉
+        #     同样输入 vad_filter=True → 无段（正确滤掉）
+        # 阈值借鉴 VoxGo（zxbb1190/VoxGo_game_voice_trans）：它用
+        #   no_speech_prob>=0.55 / avg_logprob<=-0.75 / compression_ratio>=2.4
+        # 三者含义不同，要一起看：
+        #   no_speech_prob 高    → 这段其实是静音/噪声
+        #   avg_logprob 很低     → 解码不可信
+        #   compression_ratio 高 → 复读（同一串反复出现）
+        self.last_quality = []
+        keep = []
+        for s in segs_out:
+            nsp = float(getattr(s, "no_speech_prob", 0) or 0)
+            lgp = float(getattr(s, "avg_logprob", 0) or 0)
+            cr = float(getattr(s, "compression_ratio", 0) or 0)
+            bad = (nsp >= 0.55) or (lgp <= -0.75) or (cr >= 2.4)
+            self.last_quality.append((nsp, lgp, cr, bad, s.text.strip()[:40]))
+            if not bad:
+                keep.append(s)
+            else:
+                self.rejected_lowq += 1
+        segs_out = keep
         # 把检测结果留给调用方（LanguageLock 用它锁定源语言，
         # 翻译器再据此选路 —— 原来这里丢了，导致翻译器一直用 args.src）
         self.last_lang = getattr(info, "language", None)
@@ -417,7 +597,12 @@ class BatchTranscriber:
         if not words:
             # 没拿到字级时间戳：退化为整段文本给第一段
             txt = " ".join(s.text.strip() for s in segs_out).strip()
-            return [txt] + [""] * (len(segs) - 1)
+            if is_hallucination(txt):
+                self.rejected_hallu += 1
+                res = [""] * len(segs)
+            else:
+                res = [txt] + [""] * (len(segs) - 1)
+            return self._scatter(res, keep_ix, n_in)
 
         # 按累计时长把词分回各段
         bounds, acc = [], 0.0
@@ -432,7 +617,24 @@ class BatchTranscriber:
                 k += 1
             out[k].append(w.word.strip())
         # 中文无空格，但英文要空格连；统一用空格连再压掉多余空格
-        return [re.sub(r"\s{2,}", " ", " ".join(ws)).strip() for ws in out]
+        res = [re.sub(r"\s{2,}", " ", " ".join(ws)).strip() for ws in out]
+        # 幻觉过滤：whisper 在静音/低能量上会复读，那种文本不能进字幕
+        for i, s in enumerate(res):
+            if is_hallucination(s):
+                res[i] = ""
+                self.rejected_hallu += 1
+        return self._scatter(res, keep_ix, n_in)
+
+    @staticmethod
+    def _scatter(res, keep_ix, n_in):
+        """把"只保留下标 keep_ix 的结果"散回长度 n_in 的列表，空隙填 ""。"""
+        if len(keep_ix) == n_in:
+            return res
+        full = [""] * n_in
+        for pos, i in enumerate(keep_ix):
+            if pos < len(res):
+                full[i] = res[pos]
+        return full
 
 
 # ── 语言锁定 ─────────────────────────────────────────────────────
@@ -450,13 +652,14 @@ class LanguageLock:
     锁定后不再改（除非连续 stable_after 段都是别的语言，才允许切）。
     """
 
-    def __init__(self, min_votes=2, confidence=0.5):
+    def __init__(self, min_votes=3, confidence=0.7):
         self.min_votes = min_votes
         self.confidence = confidence
         self.votes = {}
         self.locked = None
         self.history = []
         self.switches = 0
+        self.rejected_lowconf = 0
 
     def peek(self):
         """只看当前认定的语言，**不喂新样本、不改状态**。
@@ -468,26 +671,40 @@ class LanguageLock:
         return self.locked
 
     def observe(self, lang, prob):
-        """喂一次检测结果，返回当前认定的语言（可能还是 None）。"""
+        """喂一次检测结果，返回当前认定的语言（可能还是 None）。
+
+        **低置信的判定一律不投票、也不进历史。**
+        实测依据（45 秒真实越南新闻环回，按 4 秒切 11 块）：
+            块  语言  置信   能量RMS   文本
+             1   en  0.227  0.0000   （静音，空）
+             2   en  0.340  0.0109   （近静音）
+             3   zh  0.659  0.0434   應該是連排節應該聽了吧      ← 幻觉
+             4   vi  0.804  0.0394   Còn giá quay hông…（真语音）
+             7   zh  0.552  0.0391   不能理解,怎麼理解,怎麼理解…  ← 复读幻觉
+            11   ko  0.661  0.0072   왕코, 왕코, 왕코…            ← 能量到噪声底
+        全部**误判的置信都 < 0.7**，全部真实越南语语音都 ≥ 0.688。
+        所以把门槛从 0.5 提到 0.7：
+          · 挡掉静音/噪声上的幻觉判定（0.227 / 0.340 / 0.552 / 0.659）
+          · 真语音照样进票
+        再把 min_votes 从 2 提到 3：单个高置信误判不再能一票定音。
+        """
+        p = float(prob or 0)
         if not lang:
             return self.locked
-        self.history.append((lang, round(float(prob or 0), 3)))
+        if p < self.confidence:
+            # 低置信：不投票、不进历史（否则它会污染 recent 判定）
+            self.rejected_lowconf += 1
+            return self.locked
+        self.history.append((lang, round(p, 3)))
         if self.locked is None:
-            if float(prob or 0) >= self.confidence:
-                self.votes[lang] = self.votes.get(lang, 0) + 1
-            if self.votes:
-                top, n = max(self.votes.items(), key=lambda kv: kv[1])
-                if n >= self.min_votes:
-                    self.locked = top
-            if self.locked is None and len(self.votes) == 1:
-                # 只有一种语言被投过，且已投够
-                top = next(iter(self.votes))
-                if self.votes[top] >= self.min_votes:
-                    self.locked = top
+            self.votes[lang] = self.votes.get(lang, 0) + 1
+            top, n = max(self.votes.items(), key=lambda kv: kv[1])
+            if n >= self.min_votes:
+                self.locked = top
             return self.locked
         # 已锁定：连续多段都是别的语言才允许切
-        recent = [h[0] for h in self.history[-4:]]
-        if len(recent) >= 4 and all(x != self.locked for x in recent):
+        recent = [h[0] for h in self.history[-5:]]
+        if len(recent) >= 5 and all(x != self.locked for x in recent):
             new = max(set(recent), key=recent.count)
             self.locked = new
             self.switches += 1
@@ -896,7 +1113,11 @@ def run(args):
     print(f"翻译: {tr.mode}　短句表 {len(tr.book)} 条")
     # **翻译器要跟着实际语言走。** 原来用 args.src（默认 "en"）初始化，
     # 看越南语时越南语被塞进 en→zh 模型 —— 这是"缺中文翻译"的真原因。
-    lang_lock = LanguageLock(min_votes=2)
+    lang_lock = LanguageLock(min_votes=3)
+    # 计数器必须在两个分支**之前**初始化：流式分支里也要用 n_hallu，
+    # 原来它是在流式分支之后才定义的（会把流式模式直接 NameError 崩掉）。
+    n_batch = n_seg = 0
+    n_hallu = 0
     streaming = bool(args.stream)
     if streaming:
         # 流式模式（LocalAgreement-2，见 streaming_asr.py 的说明）
@@ -952,7 +1173,6 @@ def run(args):
         print(f"QTimer 建立失败: {type(e).__name__}")
 
     pending, pend_since = [], None
-    n_batch = n_seg = 0
     t_all = time.time()
 
     # 流式模式：音频直接喂给 StreamingTranscriber，由它自己触发更新
@@ -977,16 +1197,24 @@ def run(args):
                         except Exception:
                             pass
                     stable, partial = th.state()
-                    zh = tr(stable or partial)
+                    src_txt = stable or partial
+                    # 复读幻觉过滤：whisper 在静音/低能量上会复读同一串
+                    # （实测「怎麼理解,怎麼理解…」「왕코, 왕코…」）。
+                    # 那种文本不能进字幕，也不能进翻译。
+                    if is_hallucination(src_txt):
+                        n_hallu += 1
+                        print(f"[{n_seg:>3}] 丢弃复读幻觉: {src_txt[:44]}")
+                        continue
+                    zh = tr(src_txt)
                     print(f"[{n_seg:>3}] 稳定: {stable[-60:]}")
                     if partial:
                         print(f"      局部: {partial[:60]}")
                     if zh:
                         print(f"      译: {zh[:60]}")
                     if ov:
-                        ui_q.put((stable or partial, zh))
+                        ui_q.put((src_txt, zh))
                     if srt:
-                        srt.add(stable or partial, zh)
+                        srt.add(src_txt, zh)
         except KeyboardInterrupt:
             print("\n中断。")
         finally:
@@ -1008,6 +1236,8 @@ def run(args):
             print(f"翻译：短句表命中 {tr.hits_book}　缓存命中 {tr.hits_cache}"
                   f"（{tr.cache.hits} 次 LRU 命中 / 淘汰 {tr.cache.evicted}）　"
                   f"模型调用 {tr.calls}　丢弃 {tr.rejected}")
+            print(f"识别：复读幻觉拦掉 {n_hallu} 段　"
+                  f"低置信判定拒票 {lang_lock.rejected_lowconf} 次")
         return
 
     try:
@@ -1168,7 +1398,9 @@ def selftest():
     chk("peek 不改状态",
         (_lk.locked, dict(_lk.votes), len(_lk.history)) == _snap0)
     _lk.observe("vi", 0.96)
-    chk("两票锁定 vi", _lk.peek() == "vi")
+    chk("还要一票（min_votes 已提到 3）", _lk.peek() is None)
+    _lk.observe("vi", 0.95)
+    chk("三票锁定 vi", _lk.peek() == "vi")
     _snap = (_lk.locked, dict(_lk.votes), len(_lk.history))
     _lk.peek()
     chk("peek 后状态完全没变", (_lk.locked, dict(_lk.votes), len(_lk.history)) == _snap)
@@ -1221,16 +1453,46 @@ def selftest():
     chk("第二段一致才锁定", L.observe("vi", 0.97) == "vi")
     chk("中间一段误判成韩语，不改锁", L.observe("ko", 0.60) == "vi")
     chk("后续越南语仍锁 vi", L.observe("vi", 0.99) == "vi")
-    L2 = LanguageLock(min_votes=2)
-    for lg, p in (("vi", .98), ("vi", .97), ("en", .9), ("en", .9), ("en", .9)):
+    L2 = LanguageLock()
+    for lg, p in (("vi", .98), ("vi", .97), ("vi", .96),
+                  ("en", .9), ("en", .9), ("en", .9), ("en", .9)):
         L2.observe(lg, p)
-    chk("连续 3 段别的语言还不切", L2.locked == "vi")
+    chk("锁定 vi 后，连续 4 段别的语言还不切", L2.locked == "vi")
     L2.observe("en", .9)
-    chk("连续 4 段才允许切", L2.locked == "en")
+    chk("连续 5 段才允许切", L2.locked == "en")
+
+    print("\n二之四、低置信判定不投票（实测数据驱动）")
+    # 依据：45 秒真实越南新闻环回，11 块里所有误判的置信都 <0.7，
+    # 所有真实越南语语音都 >=0.688。门槛 0.5→0.7、票数 2→3。
+    L4 = LanguageLock()
+    # 这些就是实测到的垃圾判定（静音/近静音/复读幻觉）
+    for lg, p in (("en", 0.227), ("en", 0.340), ("zh", 0.659),
+                  ("zh", 0.552), ("ko", 0.661)):
+        L4.observe(lg, p)
+    chk("低置信全被拒（一票都没投）", L4.votes == {})
+    chk("因此没锁成任何语言", L4.locked is None)
+    chk("拒票计数 = 5", L4.rejected_lowconf == 5)
+    L4.observe("vi", 0.804); L4.observe("vi", 0.875); L4.observe("vi", 0.965)
+    chk("真实越南语三票锁定", L4.locked == "vi")
+    chk("低置信不进历史（recent 不被污染）",
+        all(x[0] == "vi" for x in L4.history))
+
+    print("\n二之五、复读幻觉拦截")
+    for s, want in (("不能理解,怎麼理解,怎麼理解,怎麼理解,怎麼理解,怎麼理解。", True),
+                    ("왕코, 왕코, 왕코, 왕코, 왕코, 왕코.", True),
+                    ("啊啊啊啊啊啊啊啊", True),
+                    ("Còn giá quay hông, thì chỉ bán nhớ nằm b", False),
+                    ("广宁省警方刚刚以谋杀罪起诉被告段忠勇。", False),
+                    ("谢谢", False),
+                    ("对对对", False),
+                    ("嗯嗯", False),
+                    ("哈哈哈哈", False)):
+        chk(f"is_hallucination={want}: {s[:26]}", is_hallucination(s) is want)
+
     L3 = LanguageLock(min_votes=2, confidence=0.5)
     L3.observe("ko", 0.20); L3.observe("ko", 0.30)
-    chk("低置信度不投票", L3.votes == {})
-    chk("不因此锁成韩语", L3.locked is None)
+    chk("手动放宽到 0.5 时才投票（说明门槛真的生效）",
+        L3.votes == {} and L3.locked is None)
 
     print("\n三、短句表")
     t = Translator("en", "zh")
