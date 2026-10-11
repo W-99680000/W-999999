@@ -567,6 +567,10 @@ class BatchTranscriber:
                               cpu_threads=threads)
         self.max_batch = max_batch
         self.max_wait = max_wait
+        # 远端识别器。非 None 时 transcribe_batch 会改走它
+        # （main 里按 --remote-asr 赋值，见那里的注释）
+        self.remote = None
+        self.last_text = ""
         self.last_lang = None          # 上一次检测到的语言（给 LanguageLock 用）
         self.last_lang_prob = 0.0
         self.rejected_hallu = 0        # 复读幻觉拦掉的段数
@@ -593,6 +597,27 @@ class BatchTranscriber:
             return [""] * n_in
         segs = [segs[i] for i in keep_ix]
         lengths = [len(s) / TARGET_RATE for s in segs]
+        # ── 远端识别优先（存在就用它）──────────────────────────
+        # 远端一次调用就能转写整段（实测 12 秒 → 0.76s），所以不需要
+        # 本地那套"拼接后按字级时间戳切回各段"的映射，直接一次出结果。
+        # 语种也用远端自己判的（annotations[0].language），写回 last_lang
+        # 让主程序的语言路由继续工作。
+        _rem = getattr(self, "remote", None)
+        if _rem is not None:
+            cat = np.concatenate(segs)
+            txt, rlang = _rem(cat)
+            if rlang:
+                self.last_lang = rlang
+                self.last_lang_prob = 0.99      # 远端自己判的，视为高置信
+            if not txt:
+                return [""] * n_in
+            # 远端不做字级时间戳，无法按段切分 → 整段结果给最长的那一段，
+            # 其余填空（调用方 zip 取用时只有一条会显示，符合预期：
+            # 批次被放大后本来就是"一次出整段字幕"）
+            out = [""] * n_in
+            out[keep_ix[int(np.argmax(lengths))]] = txt
+            self.last_text = txt
+            return out
         cat = np.concatenate(segs)
         total = len(cat) / TARGET_RATE
         segs_out, info = self.m.transcribe(
@@ -1237,6 +1262,37 @@ def run(args):
     else:
         th = BatchTranscriber(args.model, args.threads,
                               max_batch=args.max_batch, max_wait=args.max_wait)
+        # ── 远端识别（阿里云百炼 qwen3-asr-flash）────────────────
+        # 本地 CPU 的延迟已到天花板（_bench_bottleneck.py 实测）：
+        #   一次 transcribe 固定成本 ≈ 2.0 秒，**与音频长短无关**
+        #   （0.2 秒音频 2.078s、8 秒音频 2.288s）
+        #   参数/线程/compute_type 全动不了它；降模型掉准确度
+        #   （base 快 3 倍但越南语一致率只 0.53）
+        # 远端实测：12 秒音频 0.76s、16 秒音频 0.88s —— 快一倍，
+        # **而且一次吃得下长音频**，所以批次可以放大、少等句子。
+        _rasr = None
+        if getattr(args, "remote_asr", False):
+            try:
+                from remote_asr import from_env_or_key
+                _rasr = from_env_or_key()
+            except Exception as e:
+                print(f"  远端识别不可用: {type(e).__name__} {e}")
+            if _rasr is None:
+                print("  远端识别：没找到 key（~/.dsh/.dashscope），用本地")
+            else:
+                th.remote = _rasr
+                print(f"  远端识别已启用：{_rasr.status()}")
+                print(f"      批量上限放宽到 {args.max_batch}s"
+                      f"（远端一次吃得下长音频）")
+                # 远端能吃长音频：批次放大以减少调用次数与等待次数。
+                # 这是端到端延迟的主要来源之一（"等句子说完"）。
+                if args.max_batch < 8.0 and not args.no_widen:
+                    old = args.max_batch
+                    args.max_batch = 8.0
+                    args.max_wait = max(args.max_wait, 2.0)
+                    th.max_batch, th.max_wait = args.max_batch, args.max_wait
+                    print(f"      批次 {old}s → {args.max_batch}s"
+                          f"，等待 ≤{th.max_wait}s")
         print(f"转写: 分块 {args.model}　批量≤{args.max_batch}s / 等≤{args.max_wait}s")
         print("      优点：字幕与音频同步、不积压")
         print("      代价：要等整段说完（首字延迟 = 段长 + 1.5s）")
@@ -1819,6 +1875,15 @@ def main():
                     help="攒够多少秒音频就转写（摊薄固定开销）")
     ap.add_argument("--max-wait", type=float, default=1.2,
                     help="最多等多少秒就转写（防积压）")
+    # ── 远端识别（解决本地 CPU 的 2 秒固定成本）─────────────────
+    # 本地实测（_bench_bottleneck.py）：一次 transcribe 固定 ~2.0 秒，
+    # 与音频长短无关，参数/线程/compute_type 都动不了它。
+    # 远端 qwen3-asr-flash：12 秒音频 0.76s、16 秒 0.88s，且吃得下长音频。
+    ap.add_argument("--remote-asr", action="store_true",
+                    help="用阿里云百炼 qwen3-asr-flash 做识别（快一倍；"
+                         "需要 ~/.dsh/.dashscope 里有 key）")
+    ap.add_argument("--no-widen", action="store_true",
+                    help="远端识别时不自动放宽批量上限（默认会放宽到 8s）")
     ap.add_argument("--min-seg", type=float, default=0.5)
     # 单段最长 4 秒：实测 argos 在长句上会退化
     # （真实案例：She'll hate me forever... → "亦复如是. 师曰. 那她会永远恨我"
