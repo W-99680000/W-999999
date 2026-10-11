@@ -101,9 +101,27 @@ run.log
 live.srt
 overlay_qt.json
 overlay_settings.json
+control_cmd.json
 *.log
 __pycache__/
 *.py[cod]
+
+# ── 凭据：绝不进仓库 ──────────────────────────────────────
+# key 实际存在 ~/.dsh/.dashscope（在仓库之外），这里再加一道，
+# 防止有人图省事把 key 放进项目目录然后被 add 进来。
+.dashscope
+.dashscope*
+*.dashscope
+.env
+.env.*
+credentials*
+*_credentials*
+secrets*
+*.key
+*.pem
+api_key*
+apikey*
+*dashscope_key*
 
 # 编辑器 / 系统
 .vscode/
@@ -276,6 +294,50 @@ def main(src: str, dst: str) -> int:
     n += 3
 
     print(f"\n完成，共 {n} 个文件")
+
+    # ── 凭据扫描：发现 key 形状的字符串就**拒绝同步** ──────────────
+    # 为什么要有这一步：key 存在 ~/.dsh/.dashscope（仓库之外），
+    # 但只要有人图省事把它复制进项目目录、或者调试时临时写死一个
+    # key 忘了删，下一次同步就会把它带进公开仓库。
+    # 这里主动扫一遍，**发现就报错退出**，不要静默同步。
+    print()
+    print("=" * 70)
+    print("凭据扫描（防止 key 进公开仓库）")
+    print("=" * 70)
+    import re as _re
+    # key 形状：sk- 开头、足够长；以及几种常见的凭据字段名
+    PATS = [
+        (r"sk-[A-Za-z0-9_\-\.]{20,}", "sk- 开头的长密钥"),
+        (r"sk-ws-[A-Za-z0-9_\-\.]{20,}", "阿里云百炼 key"),
+        (r"(?i)(api[_-]?key|apikey|secret|token)\s*[:=]\s*[\"']"
+         r"[A-Za-z0-9_\-\.]{20,}[\"']", "硬编码的 key 赋值"),
+    ]
+    leaked = []
+    for root, dirs, files in os.walk(dst):
+        dirs[:] = [d for d in dirs if d != ".git"]
+        for f in files:
+            p = os.path.join(root, f)
+            if os.path.getsize(p) > 2_000_000:
+                continue
+            try:
+                txt = open(p, encoding="utf-8", errors="ignore").read()
+            except Exception:
+                continue
+            for pat, why in PATS:
+                for m in _re.finditer(pat, txt):
+                    leaked.append((os.path.relpath(p, dst), why,
+                                   m.group(0)[:14] + "…"))
+    if leaked:
+        print("  !! 发现疑似凭据，**已拒绝发布**：")
+        for rel, why, frag in leaked[:10]:
+            print(f"     {rel}　{why}　{frag}")
+        print()
+        print("  处置：把该值移到 ~/.dsh/.dashscope（或环境变量），"
+              "再从源码里删掉后重跑。")
+        print("  仓库里**不要**提交任何真实 key —— 一旦进过 git 历史，"
+              "删文件也没用，必须换 key。")
+        return 2
+    print("  干净：没有 key 形状的字符串")
 
     # 自检：pyflakes + 残留路径
     print()

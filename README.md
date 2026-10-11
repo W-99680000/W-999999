@@ -318,20 +318,50 @@ panel.bat
 
 ---
 
-## 环境变量与 key
+## 环境变量与 API key
 
-远端功能需要百炼 key。**不要把 key 写进任何会提交的文件。**
+远端功能需要一把百炼 key。**仓库里没有任何 key，历史里也没有。**
+
+### 怎么配
 
 ```
-~/.dsh/.dashscope          一行一条 key，# 开头为注释
+~/.dsh/.dashscope          一行一条 key，# 开头为注释（推荐）
 DASHSCOPE_API_KEY          环境变量（优先于文件）
 LLM_BASE / LLM_MODEL / LLM_KEY   自定义 OpenAI 兼容端点
+```
+
+`~/.dsh/.dashscope` 的内容就是一行 key：
+
+```
+# 阿里云百炼 DashScope API key（北京节点）
+sk-ws-你的key
 ```
 
 **key 是按地域签发的**：北京节点 (`dashscope.aliyuncs.com`) 最便宜，
 拿北京 key 打新加坡 endpoint 会 401（实测）。
 
-没有 key 也能跑 —— 自动退回本地 whisper + 免 key Google 翻译。
+**没有 key 也能跑** —— 自动退回本地 whisper + 免 key Google 翻译，
+行为与旧版完全一致，只是延迟从 0.9s 回到 4.9s。
+
+### 怎么防它进仓库
+
+`sync_release.py` 在复制完成后会**扫描整个产物目录**，发现 key 形状的
+字符串就**拒绝发布并退出**（返回码 2）：
+
+```
+凭据扫描（防止 key 进公开仓库）
+  !! 发现疑似凭据，**已拒绝发布**：
+     llm_translate.py　sk- 开头的长密钥　sk-ws-XXXX…
+```
+
+扫描三種形状：`sk-` 开头的长串、阿里云百炼 key、以及硬编码的
+`api_key = "..."` 之类赋值。`.gitignore` 里也挡了常见凭据文件名。
+
+> **为什么这一步不能省**：key 一旦进过 git 历史，**删文件是没用的** ——
+> 它会一直留在历史里，必须换 key。所以要在**提交之前**拦住。
+
+**如果你不小心把 key 贴进了聊天、issue 或 commit message，请把它换掉。**
+换 key 不需要改任何代码 —— 覆盖 `~/.dsh/.dashscope` 那个文件即可。
 
 ---
 

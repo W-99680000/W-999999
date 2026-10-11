@@ -9,9 +9,27 @@ run.log
 live.srt
 overlay_qt.json
 overlay_settings.json
+control_cmd.json
 *.log
 __pycache__/
 *.py[cod]
+
+# ── 凭据：绝不进仓库 ──────────────────────────────────────
+# key 实际存在 ~/.dsh/.dashscope（在仓库之外），这里再加一道，
+# 防止有人图省事把 key 放进项目目录然后被 add 进来。
+.dashscope
+.dashscope*
+*.dashscope
+.env
+.env.*
+credentials*
+*_credentials*
+secrets*
+*.key
+*.pem
+api_key*
+apikey*
+*dashscope_key*
 
 # 编辑器 / 系统
 .vscode/
