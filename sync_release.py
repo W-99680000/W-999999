@@ -38,7 +38,17 @@ TOOLS = ["test_pipeline.py", "test_borrowed.py", "test_drag2.py", "test_loopback
          "test_mymemory.py", "test_google_free.py", "test_google_sustained.py",
          "compare_vi_paths.py", "compare_vi_models.py", "compare_vi3.py",
          "compare_vi4.py", "probe_free_apis.py", "probe_free2.py",
-         "probe_bing.py", "probe_google.py"]
+         "probe_bing.py", "probe_google.py",
+         # 延迟诊断与基准。注意：TOOLS 里必须写**精确文件名** ——
+         # 带下划线前缀的脚本默认会被丢掉，只写去前缀的名字匹配不上。
+         "_bench_bottleneck.py",      # 定位到本地固定开销 2.0s
+         "_bench_models.py",          # small/base/tiny 速度与准确度
+         "_bench_qwen_mt.py",         # qwen-mt vs deepseek
+         "_bench_chunk_size.py",      # 批次大小 vs 端到端延迟
+         "_probe_streaming_asr.py",   # 流式 WebSocket 探测
+         "_probe_streaming2.py",      # 流式精确延迟（修正版）
+         "_measure_e2e_lag.py",       # 端到端延迟主测量工具
+         "_measure_lag.py", "_trace_drop.py"]
 SAMPLES = ["e2e_speech.wav"]
 
 SUBDIRS = ("bench", "tools", "samples")
