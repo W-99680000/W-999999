@@ -89,13 +89,26 @@ class StreamingTranscriber:
     def __init__(self, model="small", threads=4, language="en",
                  update_interval=1.2, tail_seconds=3.0,
                  max_buffer=12.0, min_buffer=1.2, min_keep_seconds=4.0,
-                 trim_enabled=True,
+                 trim_enabled=True, adaptive=True,
                  on_update=None, vad_filter=True):
         from faster_whisper import WhisperModel
         self.m = WhisperModel(model, device="cpu", compute_type="int8",
                               cpu_threads=threads)
         self.language = language
         self.update_interval = float(update_interval)
+        # ── 自适应延迟（Whisper-Streaming 论文的第二个贡献） ────────
+        # 论文（arXiv 2307.14743）用的是 "local agreement policy with
+        # self-adaptive latency"：更新节奏不该固定，而要跟着
+        # **部分结果有多稳定**走 —— 稳定就多问几次（首字更快），
+        # 不稳定就少问（省 CPU、也避免抖动的中间结果被提前交付）。
+        # 原来固定 update_interval，两种情况一个节奏。
+        #
+        # 实现：间隔在 [interval*0.6, interval*1.6] 之间浮动
+        #   上一轮有新增确认  → 用快节奏（说明在推进）
+        #   连续多轮没新增    → 逐步放慢（说明还没稳定 / 在静音）
+        self.adaptive = bool(adaptive)
+        self._cur_interval = float(update_interval)
+        self._stable_rounds = 0        # 连续多少轮没有新增确认
         self.tail_seconds = float(tail_seconds)   # 未确认部分保留多久音频
         self.max_buffer = float(max_buffer)
         self.min_buffer = float(min_buffer)
@@ -340,7 +353,7 @@ class StreamingTranscriber:
 
     def _loop(self):
         while self.running:
-            wait = self.update_interval - (time.time() - self.last_run)
+            wait = self._cur_interval - (time.time() - self.last_run)
             if wait > 0:
                 time.sleep(min(0.05, wait))
                 continue
@@ -378,6 +391,22 @@ class StreamingTranscriber:
             n = common_prefix_words(cur_tail, self.prev_words)
             self.prev_words = cur_tail
             newly = cur_tail[:n] if n else []
+
+            # 有新增 → 说明在推进，用快节奏问下一轮（首字更快）
+            # 连续没新增 → 逐步放慢（还没稳定或在静音，少烧 CPU）
+            if self.adaptive:
+                base_iv = self.update_interval
+                if newly:
+                    self._stable_rounds = 0
+                    self._cur_interval = max(base_iv * 0.6, self._cur_interval * 0.7)
+                else:
+                    self._stable_rounds += 1
+                    self._cur_interval = min(base_iv * 1.6, self._cur_interval * 1.25)
+                self.stats["interval_last"] = self._cur_interval
+                self.stats["interval_min"] = min(
+                    self.stats.get("interval_min", 99.0), self._cur_interval)
+                self.stats["interval_max"] = max(
+                    self.stats.get("interval_max", 0.0), self._cur_interval)
 
             if newly:
                 with self.lock:
@@ -460,6 +489,7 @@ def selftest():
                 if os.path.exists(p)), None)
     if not wav:
         print("     （没有 e2e_speech.wav，跳过）")
+
         print(f"\n合计 {ok} 通过 / {fail} 失败")
         return 0 if fail == 0 else 1
 
@@ -523,6 +553,15 @@ def selftest():
         st.stats.get("buf_max", 0.0) <= st.max_buffer * 1.4)
     for kw in ("never", "thought", "again", "coffee"):
         chk(f"含关键词 {kw}", kw in full.lower())
+
+    print("\n自适应节奏（论文 self-adaptive latency）")
+    _ivmin = st.stats.get("interval_min")
+    _ivmax = st.stats.get("interval_max")
+    chk("自适应间隔有浮动（min/max 都有值且不同）",
+        _ivmin is not None and _ivmax is not None and _ivmax > _ivmin)
+    chk("间隔落在设计区间 [base*0.6, base*1.6]",
+        _ivmin >= st.update_interval * 0.6 - 1e-6
+        and _ivmax <= st.update_interval * 1.6 + 1e-6)
 
     print(f"\n合计 {ok} 通过 / {fail} 失败")
     return 0 if fail == 0 else 1
