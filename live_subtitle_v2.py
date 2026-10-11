@@ -976,15 +976,25 @@ class Translator:
             except Exception:
                 out = ""
         elif self.mode == "llm":                   # ⑥ LLM（质量最好）
-            # 长句走 LLM；短句/碎片退回 Google —— 碎片会让小模型更啰嗦，
-            # 而且为十来个字付一次 LLM 往返不划算（见 llm_translate）。
-            from llm_translate import looks_complex
-            if self.llm is not None and looks_complex(text):
+            # **有 LLM 就一律用它，不做任何长度分流。**
+            #
+            # 这段我改过两次，把教训记下来：
+            #   第一版：长句走 LLM、短句退回 Google。
+            #     实测两处都错：短文本走 LLM 只需 ~0.5s（往返是提示词
+            #     常数开销，与长度无关）；而短文本退回 Google **反而慢**
+            #     （7.19s / 8.73s），更糟的是它在超时/限流时**返回空串**，
+            #     于是整条字幕消失 —— 操作者报的"字幕不可见"就是这个：
+            #     短句（如 "Ок"）走了 Google 那条路，失败后什么都没有，
+            #     浮窗一直收不到内容。
+            #   第二版：只把"没配 LLM"时才算短句分流。仍会走到 Google。
+            #   现在：**LLM 可用 → 全部走 LLM**；只有 LLM 缺失或返回空
+            #     才用免 key 端点兜底。少一条分支就少一类 bug。
+            if self.llm is not None:
                 out = clean_translation(
                     self.llm(text, target=self._target_name()))
                 if not out:
                     self.llm_fails += 1
-            if not out or not looks_complex(text):
+            if not out:
                 try:
                     out = clean_translation(self._google_free(text))
                 except Exception:
