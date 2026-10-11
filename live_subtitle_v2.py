@@ -183,6 +183,24 @@ _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 _GF_OK = None          # 免 key Google 端点是否可用（探一次就记住）
 
 
+def _pick_offline_source(lang, prob, min_conf=0.85):
+    """本批检测结果是否**足够可信**，可以走离线 argos（en→zh）。
+
+    去掉语言锁定后的路由判据。门槛比"能锁定"高得多，因为代价不对称：
+      · 走 Google（sl=auto）：判错也无所谓，Google 自己再判一次，且更快
+      · 走 argos（en→zh）：**源语言必须真的是英语**，否则俄语/越南语被
+        塞进 en→zh 模型，输出是垃圾（实测过 argos 中继产出
+        "我不确定,但我还不知道" 这种完全错的译文）
+    所以只在高置信英语时才用 argos，其余一律 Google+auto。
+    返回 True 表示"可以用 en 作为源语言"，False 表示"交给 Google 判"。
+    """
+    if not lang:
+        return False
+    if not str(lang).lower().startswith("en"):
+        return False
+    return float(prob or 0) >= min_conf
+
+
 def _google_free_ok():
     """探测免 key 的 Google 端点是否可用（只探一次）。
 
@@ -1110,11 +1128,23 @@ def run(args):
     print("=" * 64)
     print("live-subtitle v2")
     print("=" * 64)
-    tr = Translator(args.src, args.dst)
+    # 译器实例缓存 + 当前键（None = 让 Google 自己判源语言）。
+    # **必须在初始化 tr 之前定义**（我第一版放在它后面，启动即
+    # UnboundLocalError: _tr_key）。
+    _tr_cache = {}
+    _tr_key = [None]
+    # **初始译器用 auto，不要用 args.src。**
+    # args.src 默认 "en"，会立刻选中 argos（en→zh）。但第一批的语言检测
+    # 结果还没出来，万一不是英语就把非英语喂给了 en→zh 模型 → 垃圾。
+    # 用 auto 起步（Google + sl=auto，判错也无所谓），等检测结果出来
+    # 再按 _pick_offline_source 决定是否切到 argos。
+    tr = Translator("auto", args.dst)
+    _tr_key[0] = None if not args.lang else args.lang
     print(f"翻译: {tr.mode}　短句表 {len(tr.book)} 条")
     # **翻译器要跟着实际语言走。** 原来用 args.src（默认 "en"）初始化，
     # 看越南语时越南语被塞进 en→zh 模型 —— 这是"缺中文翻译"的真原因。
     lang_lock = LanguageLock(min_votes=3)
+    # （_tr_cache / _tr_key 已在上面、初始化 tr 之前定义）
     # 计数器必须在两个分支**之前**初始化：流式分支里也要用 n_hallu，
     # 原来它是在流式分支之后才定义的（会把流式模式直接 NameError 崩掉）。
     n_batch = n_seg = 0
@@ -1320,19 +1350,34 @@ def run(args):
             segs_in, pending, pend_since = pending, [], None
             n_batch += 1
             t0 = time.time()
-            # 语言锁定必须在**转写之前**做决定。
-            # 老毛病：原来是在本批转写完之后才 observe()，然后拿 locked 去建
-            # 新译器，可这时 texts 已经用**旧的** lang 参数转写完了 ——
-            # 一旦本批中途语言判定变了，剩下的段就会"用新译器译旧语言"。
-            # 现在：批前取一次判定（它反映的是上一批的结果），本批内固定不再换。
-            locked = lang_lock.peek()
-            if locked and locked != tr.src:
+            # ── 源语言：完全不做"锁定"，每批独立决策 ──────────────
+            # 操作者要求去掉语言锁定。为什么可以去掉：
+            #   ① Google 那条路本来就是 sl=auto（它自己判源语言，实测比
+            #      whisper 准，而且**快 2.8 倍**：0.86s vs 2.36s）
+            #   ② 锁定唯一的用途是**选译器**（en→argos 离线，其余→Google）
+            # 所以"去掉锁定"= 把这一个决策从"累计投票的结果"改成
+            # "本批自己的检测结果"。
+            #
+            # **但要防一个坑**：Translator("en") 会走 argos。如果 whisper
+            # 把俄语误判成 en，就会把俄语喂给 en→zh 模型 → 输出垃圾。
+            # 所以路由到 argos 的门槛比"能锁定"更高：要 conf >= 0.85。
+            # 达不到就退到 Google + sl=auto（那条路判错也无所谓）。
+            #
+            # 译器实例缓存：argos 加载模型有开销，不能每批重建。
+            want = _pick_offline_source(th.last_lang, th.last_lang_prob)
+            cur_src = "en" if want else None
+            if cur_src != _tr_key[0]:
                 try:
-                    tr = Translator(locked, args.dst)
-                    print(f"  ★ 源语言切到 {locked}（{lang_lock.status()}）→ "
-                          f"翻译模式 {tr.mode}")
+                    tr = Translator(cur_src or "auto", args.dst)
+                    _tr_key[0] = cur_src
+                    _tr_cache[cur_src] = tr
+                    print(f"  → 译器切到 {cur_src or 'auto'}"
+                          f"（{tr.mode}；本批检测 "
+                          f"{th.last_lang}/{th.last_lang_prob:.2f}）")
                 except Exception as e:
                     print(f"  翻译器切换失败: {type(e).__name__} {e}")
+            else:
+                tr = _tr_cache.get(_tr_key[0], tr)
             # **强制指定语言是错的默认。** 实测：越南新闻被强制按 en 识别时，
             # whisper 不是"听错"，而是**把越南语直接意译成英文**（还译错），
             # 于是后面按 en→zh 翻译全崩。用户实际遇到的就是这个。
@@ -1340,7 +1385,7 @@ def run(args):
             # 想固定语言用 --lang，不要用 --from 去强制。
             _lang = None if args.detect else (args.lang or None)
             texts = th.transcribe_batch(segs_in, lang=_lang)
-            # 本批转写完再喂一次投票（只影响下一批的译器选择）
+            # 仍然喂投票，但只用于**诊断显示**，不再决定路由
             lang_lock.observe(th.last_lang, th.last_lang_prob)
             t_asr = time.time() - t0
 
@@ -1532,6 +1577,16 @@ def selftest():
     chk("google-free 请求里带 sl=auto", "sl=auto" in _u)
     chk("不再出现 sl=vi（源语言由 Google 判）", "sl=vi" not in _u)
     chk("目标语言仍是 zh-CN", "tl=zh-CN" in _u)
+    print("\n二之三、源语言路由（去掉锁定后的判据）")
+    # 判据：只有高置信英语才走离线 argos；其余交给 Google sl=auto
+    for lg, pb, want in (("en", .97, True), ("en", .86, True),
+                         ("en", .60, False), ("en", .20, False),
+                         ("ru", .99, False), ("vi", .98, False),
+                         ("ko", .80, False), (None, .99, False),
+                         ("", .99, False), ("EN", .90, True)):
+        chk(f"路由 {lg!r}/{pb} -> {want}",
+            _pick_offline_source(lg, pb) is want)
+
     print("\n二之三、语言锁定（针对两个实测问题）")
     # 问题一："缺少中文翻译" —— 翻译器原来用 args.src（"en"）初始化，
     #   越南语被塞进 en→zh 模型。语言锁定后翻译器跟着实际语言走。
