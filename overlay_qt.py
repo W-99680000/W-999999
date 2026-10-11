@@ -94,7 +94,10 @@ def default_settings():
         # 它仍随屏幕高度等比缩放：1080p → 43px，720p → 30px。
         # 注：一度压到 26，但那是在样式表 font-size 覆盖内联字号的情况下
         # 测的（等于没生效）。去掉覆盖后，26 偏小，定 30。
-        "font_size": 30,
+        # 1080p 下 30 → 45px，比主流字幕偏大（参考项目主力 18~26px）。
+        # 操作者已两次要求调小，且长句在该字号下要 4~6 行、每条 300px。
+        # 24 → 1080p 下 36px，长句降到 2~3 行。
+        "font_size": 24,
         "ref_height": 720,           # mpv 的基准窗口高度
         "original_ratio": 0.68,      # 原文相对译文的字号比
         "opacity": 0.92,
@@ -112,7 +115,13 @@ def default_settings():
         "max_lines": 3,              # 原来 5，占屏太多
         "hold_seconds": 4.0,         # 原来 5
         "show_original": True,
-        "layout": "inline",          # inline / stacked / zh_only
+        # **默认上下两行：中文在上、原语在下**（操作者明确要的排法）。
+        # 我之前默认 inline（左右两列）是为了省高度，但那是我的偏好 ——
+        # 实测对长句并不省，而且不是他要的。改为 stacked。
+        #   stacked   中文一行、原语一行（默认）
+        #   inline    左右两列（短句时更省高度）
+        #   zh_only   只显示中文
+        "layout": "stacked",
         # 文字对齐。默认 center：字幕的行业惯例，而且译文/原文长度不同时
         # 各自居中才对齐（原来没有这个设置，是左对齐）。
         "text_align": "center",
@@ -1127,15 +1136,19 @@ if __name__ == "__main__":
 
         print("\n  显示规格（操作者反馈后调小）")
         sh = o._screen_h()
-        chk("字号基准 30（从 38 压到 30）", o.st["font_size"] == 30)
+        chk("字号基准 24（1080p → 36px）", o.st["font_size"] == 24)
         chk("基准高度 720（mpv 的窗口高度基准）", o.st["ref_height"] == 720)
-        exp = max(10, int(round(30 * sh / 720)))
+        exp = max(10, int(round(24 * sh / 720)))
         chk(f"随屏幕等比缩放（{sh}p → {o.fs()}px，期望 {exp}px）", o.fs() == exp)
         chk("原文按比例缩小", o.fs_original() < o.fs())
         chk("行距收紧到 1.15", abs(o.st["line_height"] - 1.15) < 1e-6)
         chk("最多 3 条（从 5 减到 3）", o.st["max_lines"] == 3)
         chk("每条 4 秒", abs(o.st["hold_seconds"] - 4.0) < 1e-6)
-        chk("默认同行排布（不上下堆积）", o.st["layout"] == "inline")
+        # 默认排布：**中文在上、原语在下**（操作者明确要的）。
+        # 我之前默认 inline（左右两列）是为了省高度 —— 那是我的偏好，
+        # 不是他要的，已改回 stacked。
+        chk("默认排布 = 上下两行（中文在上、原语在下）",
+            o.st["layout"] == "stacked")
         chk("译文色 = 白（mpv --sub-color）", o.st["text_color"] == "#FFFFFF")
         chk("描边色 = 黑（mpv --sub-outline-color）", o.st["outline_color"] == "#000000")
         chk("描边宽 1.65（mpv --sub-outline-size）",
@@ -1262,7 +1275,7 @@ if __name__ == "__main__":
     chk("透明度可调", abs(o.st["opacity"] - (a0 - 0.1)) < 1e-6)
     chk("几何在屏内", o.geo[2] > 200 and o.geo[3] > 40)
     o.reset()
-    chk("可重置", o.st["font_size"] == 30)
+    chk("可重置", o.st["font_size"] == 24)
     o.close()
     chk("设置落盘", os.path.exists(SETTINGS))
     # 自检跑完，把用户原来的设置放回去（自检不该改用户的配置）
