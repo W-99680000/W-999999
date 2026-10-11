@@ -100,12 +100,20 @@ def default_settings():
         "outline_color": "#000000",  # mpv: outline 黑
         "outline_width": 1.65,       # mpv: --sub-outline-size 默认 1.65
         "bg_color": "#20242A",
+        # 底色的不透明度。**默认 0 = 没有框** —— 成熟方案（mpv / YouTube
+        # 字幕 / youtube-live-translate）的字幕都是"文字直接浮在画面上"，
+        # 靠描边和阴影保证可读，不画窗口框。想加回底色就把它调大。
+        "bg_alpha": 0.0,
         "border_color": "#3A4450",
         "border_width": 1,
         "max_lines": 3,              # 原来 5，占屏太多
         "hold_seconds": 4.0,         # 原来 5
         "show_original": True,
         "layout": "inline",          # inline / stacked / zh_only
+        # 调整模式：只有打开时才画边框和拖拽把手。
+        # 默认关 —— 成熟方案的字幕就是"文字浮在画面上"，没有窗口框。
+        # 按 M 切换。
+        "edit_mode": False,
         "gap_px": 10,                # inline 时译文与原文之间的间距
         "x": None,
         "y": None,                   # None = 自动贴底部
@@ -206,10 +214,15 @@ class QtOverlay:
                "width": (240, scr.width()), "border_width": (0, 8),
                "max_entry_chars": (30, 400), "ref_height": (200, 4320),
                "original_ratio": (0.3, 1.5),
-               "line_height": (0.9, 2.5), "gap_px": (0, 80)}
+               "line_height": (0.9, 2.5), "gap_px": (0, 80),
+               # bg_alpha 允许 0 —— 0 就是"没有框"（现在的默认值）
+               "bg_alpha": (0.0, 1.0)}
         for k, (lo, hi) in rng.items():
             v = d.get(k)
             if v is None:
+                continue
+            # bool 是 int 的子类，要排掉（否则 True 会被当 1）
+            if isinstance(v, bool):
                 continue
             if isinstance(v, (int, float)) and lo <= v <= hi:
                 out[k] = float(v) if isinstance(lo, float) else int(v)
@@ -223,7 +236,7 @@ class QtOverlay:
             v = d.get(k)
             if isinstance(v, str) and v.startswith("#") and len(v) in (4, 7):
                 out[k] = v
-        for k in ("show_original", "theme_dark_video"):
+        for k in ("show_original", "theme_dark_video", "edit_mode"):
             if isinstance(d.get(k), bool):
                 out[k] = d[k]
         lv = d.get("layout")
@@ -315,13 +328,13 @@ class QtOverlay:
         def zh_div(extra=""):
             return (f'<span style="color:{self.st["text_color"]}; '
                     f'font-size:{fs}px; '
-                    f'-webkit-text-stroke:{ow:.2f}px {oc};">'
+                    f'-webkit-text-stroke:{ow:.2f}px {oc}; text-shadow:0 2px 4px rgba(0,0,0,0.85);">'
                     f'{escape(zh)}{extra}</span>')
 
         def en_div(extra=""):
             return (f'<span style="color:{self.st["original_text_color"]}; '
                     f'font-size:{fs_o}px; '
-                    f'-webkit-text-stroke:{ow * 0.8:.2f}px {oc};">'
+                    f'-webkit-text-stroke:{ow * 0.8:.2f}px {oc}; text-shadow:0 1px 3px rgba(0,0,0,0.8);">'
                     f'{escape(en)}{extra}</span>')
 
         if layout == "inline":
@@ -372,6 +385,13 @@ class QtOverlay:
 
     def _relayout(self):
         self._layout()
+        # 让 Qt 立刻算好子控件的几何。不激活的话，新加的 QLabel 还是
+        # 默认的 640x480、位置 (0,0)，于是 childAt() 判断"按在字上"
+        # 就会失准（实测 childAt 返回 None）。
+        try:
+            self.box.activate()
+        except Exception:
+            pass
         self.w.update()
 
     # ── 事件：拖动 / 滑轮 / 快捷键 ────────────────────────────
@@ -390,15 +410,69 @@ class QtOverlay:
     def _in_grip(self, pos):
         return self._grip_rect().contains(pos)
 
+    def _is_label(self, w):
+        """这个控件是不是字幕文字标签？
+
+        用来区分"按在字上"和"按在字幕块空白处"：
+        成熟方案里字幕块整块可拖，但按在字上应该能选文字、不该把框拖走。
+        """
+        from PyQt5.QtWidgets import QLabel
+        return isinstance(w, QLabel)
+
+    def toggle_edit(self):
+        """M 键：调整模式开关。
+
+        关闭（默认）：无框、无把手，整块可拖 —— 字幕该有的样子
+        打开：显示边框 + 右上角把手，方便精确摆位
+
+        为什么要有这个开关：成熟方案（youtube-live-translate / mpv /
+        YouTube 字幕）的字幕都是**纯文字浮在画面上**，没有窗口框；
+        样式调整放在独立面板里。我们没面板，就用一个模式开关代替。
+        """
+        self.st["edit_mode"] = not self.st.get("edit_mode", False)
+        self._save()
+        self.w.update()
+        print("调整模式 → " + ("开（显示边框与把手）" if self.st["edit_mode"]
+                              else "关（无框，直接拖字幕）"), flush=True)
+
+    def _hit_text(self, pos):
+        """按下的点是否落在**字幕文字**上。
+
+        不能用 childAt()：字幕标签设了 WA_TransparentForMouseEvents
+        （让鼠标事件穿透到窗口），Qt 的命中测试会直接跳过它，
+        childAt() 永远返回 None（实测踩过）。所以按几何判断。
+        """
+        from PyQt5.QtCore import QPoint, QRect
+        for e in self.entries:
+            lb = e[3]
+            try:
+                if not lb.isVisible():
+                    continue
+                # 把标签的矩形映射到窗口坐标
+                r = QRect(lb.mapTo(self.w, QPoint(0, 0)), lb.size())
+                if r.contains(pos):
+                    return True
+            except Exception:
+                continue
+        return False
     def _install_events(self):
         from PyQt5.QtCore import Qt
         w = self.w
 
         def press(e):
+            """按下时决定是否开始拖动。
+
+            成熟方案（youtube-live-translate）是字幕块 cursor:grab、
+            **整块可拖**，所以这里也整块可拖 —— 不搞"文字区不拖"那种
+            精细规则：实测文字几乎铺满窗口，那样等于没地方可拖。
+            防误触靠 4px 阈值（点一下不会移动）。
+
+            调整模式（M）下改成只认把手，那时是把框当窗口在摆位。
+            """
             if e.button() != Qt.LeftButton:
                 return
-            if not self._in_grip(e.pos()):
-                self._drag = None          # 不在把手上 → 不拖
+            if self.st.get("edit_mode") and not self._in_grip(e.pos()):
+                self._drag = None
                 return
             # 记下按下点与阈值：避免"点一下"也被当成拖动
             self._drag = (e.globalPos(), self.w.pos(), e.globalPos(), False)
@@ -437,10 +511,14 @@ class QtOverlay:
                 self.w.update()
 
         def wheel(e):
+            up = e.angleDelta().y() > 0
             if e.modifiers() & Qt.ControlModifier:
-                self.bump_opacity(0.05 if e.angleDelta().y() > 0 else -0.05)
+                self.bump_opacity(0.05 if up else -0.05)
             elif e.modifiers() & Qt.ShiftModifier:
-                self.bump_lines(1 if e.angleDelta().y() > 0 else -1)
+                self.bump_lines(1 if up else -1)
+            elif e.modifiers() & Qt.AltModifier:
+                # Alt+滑轮 = 调宽度（文字换行宽度）
+                self.bump_width(40 if up else -40)
             else:
                 self.bump_font(1 if e.angleDelta().y() > 0 else -1)
 
@@ -466,6 +544,8 @@ class QtOverlay:
                 self.toggle_theme()
             elif k == Qt.Key_L:
                 self.cycle_layout()
+            elif k == Qt.Key_M:
+                self.toggle_edit()
             # 方向键微调位置（不用鼠标也能挪）
             elif k == Qt.Key_Left:
                 self.nudge(-12, 0)
@@ -528,9 +608,22 @@ class QtOverlay:
         p = QPainter(self.w)
         p.setRenderHint(QPainter.Antialiasing)
 
-        # 圆角半透明底 + 边框
+        # 底色：默认 alpha 0（完全透明）—— 成熟方案的字幕没有窗口框，
+        # 就是文字浮在画面上。想加回底色就把 bg_alpha 调大。
+        alpha = int(255 * float(self.st.get("bg_alpha", 0.0)))
+        if alpha > 0:
+            bg = QColor(self.st.get("bg_color", "#20242A"))
+            bg.setAlpha(alpha)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(bg))
+            p.drawRoundedRect(self.w.rect().adjusted(0, 0, -1, -1), 8, 8)
+
+        # 边框与把手**只在调整模式**画（按 M 切换）
+        if not self.st.get("edit_mode"):
+            p.end()
+            return
         bg = QColor(self.st.get("bg_color", "#20242A"))
-        bg.setAlpha(int(255 * float(self.st.get("bg_alpha", 0.72))))
+        bg.setAlpha(int(255 * float(self.st.get("bg_alpha", 0.0))))
         bw = int(self.st.get("border_width", 1))
         pen = QPen(QColor(self.st.get("border_color", "#3A4450")), bw) \
             if bw > 0 else Qt.NoPen
@@ -625,6 +718,21 @@ class QtOverlay:
             self.w.setWindowOpacity(float(self.st["opacity"]))
         except Exception:
             pass
+        self._save()
+
+    def bump_width(self, d):
+        """调宽度（文字换行的宽度）。
+
+        成熟方案里字幕宽度要么跟随播放器、要么在设置里选；我们给一个
+        快捷键：Alt+滑轮 / Alt+左右方向键（方向键那条见 key 处理）。
+        高度是**自动**的 —— 内容多少就多高，不需要手动拉边。
+        """
+        from PyQt5.QtWidgets import QApplication
+        scr = QApplication.primaryScreen().availableGeometry()
+        w = int(self.st.get("width", 780)) + d
+        self.st["width"] = max(280, min(scr.width() - 8, w))
+        self.st["x"] = None             # 改宽度后水平重新居中，免得跑出屏
+        self._relayout()
         self._save()
 
     def bump_lines(self, d):

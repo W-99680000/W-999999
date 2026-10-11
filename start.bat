@@ -63,18 +63,22 @@ echo.
 echo   Play your video. Subtitles appear at the bottom.
 echo.
 echo   OVERLAY CONTROLS
-echo     drag the grip ..... move  (small dots at top-right)
-echo     double-click grip . back to the default spot
+echo     drag the subtitles  move  (drag anywhere on the text block)
 echo     wheel ............. font size
 echo     Shift + wheel ..... number of lines
+echo     Alt + wheel ....... width (how early the text wraps)
 echo     Ctrl + wheel ...... opacity
 echo     arrow keys ........ nudge
 echo     L ................. layout (same line / two lines / zh only)
+echo     M ................. edit mode (shows border + grip for fine tuning)
 echo     T ................. theme (dark / light video)
 echo     H ................. hide / show
 echo     C ................. recenter
 echo     R ................. reset all
 echo     Esc ............... quit
+echo.
+echo   No frame by default - just text over the video, like mpv or
+echo   YouTube captions. Press M if you want to see the box outline.
 echo.
 echo   Also writes live.srt - load it in your player if the
 echo   overlay does not show up.
