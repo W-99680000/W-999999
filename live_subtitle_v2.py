@@ -183,6 +183,26 @@ _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 _GF_OK = None          # 免 key Google 端点是否可用（探一次就记住）
 
 
+_LLM_SINGLETON = []
+
+
+def _get_llm():
+    """拿一个可用的 LLM 翻译后端（进程内单例），没有就返回 None。
+
+    用单例是因为探测本机端点（Ollama / DeepSeek）每次都有网络开销，
+    而 Translator 会被反复构造（路由切换时）。
+    """
+    if _LLM_SINGLETON:
+        return _LLM_SINGLETON[0]
+    try:
+        from llm_translate import from_env_or_args
+        got = from_env_or_args()
+    except Exception:
+        got = None
+    _LLM_SINGLETON.append(got)
+    return got
+
+
 def _pick_offline_source(lang, prob, min_conf=0.85):
     """本批检测结果是否**足够可信**，可以走离线 argos（en→zh）。
 
@@ -804,6 +824,8 @@ class Translator:
         self.hits_book = self.hits_cache = self.calls = self.rejected = 0
         self.web_cruft_blocked = self.web_cruft_fixed = 0
         self.stale_dropped = self.kept_last = 0
+        self.llm = None            # LLM 后端（_setup 里按可用性赋值）
+        self.llm_fails = 0
         self._gf_fails = 0
         self.last_ok = ""           # 上一句成功译文（失败时保持不刷屏）
         self._setup()
@@ -849,9 +871,26 @@ class Translator:
         #   google-free : → "广宁省警方将被告段忠勇提审"           ← 人名地名都对
         #   MyMemory    : → "tinh Quang Ninh将被告Doan Chung Dung" ← 半截不译
         # 延迟（5 分钟 75 段实测）：中位 0.89s、P90 1.81s、零失败、零积压。
+        #
+        # ⑥ **LLM 后端**（llm_translate.py）—— 如果有可用端点就优先用它。
+        # 实测对比（同一批真实字幕句，DeepSeek deepseek-chat）：
+        #     波兰语  G(3.64s) 那是十万个月，是美国百万富翁的妻子。
+        #             L(0.61s) 这是十万个月，也是美国百万富翁的妻子。
+        #     俄语    G(1.82s) 我真的只是指望着，这里有一个女人。
+        #             L(0.76s) 实际上，我指望着的就是这个，这里有个女人。
+        #     俄语    G(1.23s) 那么，什么，告诉我，那里有什么，这有什么故事？
+        #             L(0.55s) 那么，说说看，那件事到底是怎么回事？
+        #     英语长句 G(1.50s) 最大的优点是，一旦操作员正确锁定目标，制导系统就不会受到干扰。
+        #             L(0.72s) 它最大的优势在于，一旦操作员正确锁定目标，制导系统就能免受干扰。
+        #   → 平均 0.63s vs 2.00s（快 3 倍），且译文明显更像字幕。
+        # 但只在文本够长时才用（碎片会让小模型更啰嗦，见 llm_translate 的说明）。
+        self.llm = _get_llm()          # 可能为 None（那就退回 Google）
         if self.mode in ("none", "argos-pivot", "mymemory", "online-first"):
-            self.mode = "google-free" if _google_free_ok() else (
-                "argos-pivot" if self._pivot else "mymemory")
+            if self.llm is not None:
+                self.mode = "llm"
+            else:
+                self.mode = "google-free" if _google_free_ok() else (
+                    "argos-pivot" if self._pivot else "mymemory")
 
     # ── 免 key 的 Google 端点 ────────────────────────────────
     def _google_free(self, text):
@@ -893,6 +932,15 @@ class Translator:
         d = (self.dst or "").lower()
         return "zh-CN" if d.startswith("zh") else self.dst
 
+    def _target_name(self):
+        """给 LLM 用的目标语言全名（提示词里比语言码更好懂）。"""
+        d = (self.dst or "").lower()
+        if d.startswith("zh"):
+            return "Simplified Chinese"
+        return {"en": "English", "ja": "Japanese", "ko": "Korean",
+                "ru": "Russian", "vi": "Vietnamese",
+                "fr": "French", "de": "German", "es": "Spanish"}.get(d, d)
+
     def __call__(self, text):
         text = (text or "").strip()
         if not text:
@@ -927,6 +975,20 @@ class Translator:
                 out = clean_translation(self._pivot[1](mid))
             except Exception:
                 out = ""
+        elif self.mode == "llm":                   # ⑥ LLM（质量最好）
+            # 长句走 LLM；短句/碎片退回 Google —— 碎片会让小模型更啰嗦，
+            # 而且为十来个字付一次 LLM 往返不划算（见 llm_translate）。
+            from llm_translate import looks_complex
+            if self.llm is not None and looks_complex(text):
+                out = clean_translation(
+                    self.llm(text, target=self._target_name()))
+                if not out:
+                    self.llm_fails += 1
+            if not out or not looks_complex(text):
+                try:
+                    out = clean_translation(self._google_free(text))
+                except Exception:
+                    out = out or ""
         elif self.mode == "google-free":          # ⑤ 免 key Google
             try:
                 out = clean_translation(self._google_free(text))
