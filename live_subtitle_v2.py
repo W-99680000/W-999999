@@ -458,6 +458,15 @@ class LanguageLock:
         self.history = []
         self.switches = 0
 
+    def peek(self):
+        """只看当前认定的语言，**不喂新样本、不改状态**。
+
+        为什么需要它：批处理必须在**转写之前**就把译器定好
+        （不然本批中途语言判定一变，剩下的段就会用新译器译旧语言）。
+        所以先 peek() 拿判定，转写完再 observe() 更新。
+        """
+        return self.locked
+
     def observe(self, lang, prob):
         """喂一次检测结果，返回当前认定的语言（可能还是 None）。"""
         if not lang:
@@ -491,6 +500,49 @@ class LanguageLock:
 
 
 # ── 翻译：四层（短句表 → 缓存 → 直连 → 中继/在线）───────────────
+class LruTtlCache:
+    """带容量上限与过期时间的翻译缓存。
+
+    照搬成熟方案（youtube-live-translate 的 TranslationCache）的两个点：
+      · maxSize = 500，满了淘汰**最旧**的一条（LRU）
+      · ttl = 24 小时
+    为什么要有：新闻/连续剧里重复句非常多（开场白、垫词、口头禅），
+    命中就直接返回，既省一次请求（免 key 端点有限流风险），也瞬间出字。
+    """
+
+    def __init__(self, max_size=500, ttl=24 * 3600):
+        from collections import OrderedDict
+        self.d = OrderedDict()
+        self.max_size = max_size
+        self.ttl = ttl
+        self.hits = self.misses = self.evicted = self.expired = 0
+
+    def get(self, key):
+        item = self.d.get(key)
+        if item is None:
+            self.misses += 1
+            return None
+        val, ts = item
+        if time.time() - ts > self.ttl:
+            self.d.pop(key, None)
+            self.expired += 1
+            self.misses += 1
+            return None
+        self.d.move_to_end(key)          # 命中就挪到最新
+        self.hits += 1
+        return val
+
+    def set(self, key, val):
+        self.d[key] = (val, time.time())
+        self.d.move_to_end(key)
+        while len(self.d) > self.max_size:
+            self.d.popitem(last=False)   # 淘汰最旧
+            self.evicted += 1
+
+    def __len__(self):
+        return len(self.d)
+
+
 class Translator:
     """按语言对自动选路。
 
@@ -510,11 +562,14 @@ class Translator:
         self.mode = "none"
         self._fn = None
         self._pivot = None          # (fn1, fn2) 中继用
-        self.cache = {}
+        # LRU + TTL 缓存（原来只是个普通 dict，无上限、不过期）
+        self.cache = LruTtlCache(max_size=500, ttl=24 * 3600)
         self.book = PHRASEBOOK.get(src, {}) if dst.startswith("zh") else {}
         self.hits_book = self.hits_cache = self.calls = self.rejected = 0
         self.web_cruft_blocked = self.web_cruft_fixed = 0
+        self.stale_dropped = self.kept_last = 0
         self._gf_fails = 0
+        self.last_ok = ""           # 上一句成功译文（失败时保持不刷屏）
         self._setup()
 
     def _setup(self):
@@ -569,12 +624,26 @@ class Translator:
             translate.googleapis.com {client=dict-chrome-ex} → 通，2.30s
             **clients5.google.com    {client=dict-chrome-ex} → 通，0.61s ← 用这个**
         返回格式 [[["译文","原文",...],...],...]
+
+        **sl=auto：源语言交给 Google 判，不用我们传。**
+        借鉴 youtube-live-translate（它一直就是 sl=auto）。
+        为什么必须这样：我们上游是 whisper 的语言检测，而它**会判错**
+        （实测越南语偶尔被判成韩语）。一旦判错，我们原来会把 sl=ko
+        发出去，可文本是越南语 —— 整句译文直接废掉。
+
+        实测对照（同一批越南新闻句，真实请求）：
+            sl=ko   2.81s / 4.47s / 3.16s → **越南语原样返回，没翻译**
+            sl=vi   2.51s / 1.67s / 2.41s → 广宁省警方刚刚以谋杀罪起诉被告段忠勇。
+            sl=auto 0.58s / 1.09s / 0.90s → 同上，完全正确
+        **不但修掉判错，还快 2.8 倍**（0.86s vs 2.36s 平均）。
+        所以 Google 这条路上让它自己判，我们只负责选路
+        （en→argos 离线走专用模型，其他→Google + auto）。
         """
         import urllib.parse
         import urllib.request
         q = urllib.parse.quote((text or "")[:1500])
         url = (f"https://clients5.google.com/translate_a/single"
-               f"?client=dict-chrome-ex&sl={self.src}&tl={self._tl()}&dt=t&q={q}")
+               f"?client=dict-chrome-ex&sl=auto&tl={self._tl()}&dt=t&q={q}")
         r = urllib.request.Request(url, headers={"User-Agent": _UA})
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
@@ -600,27 +669,33 @@ class Translator:
         if key in self.book:                      # ① 短句表
             self.hits_book += 1
             return self.book[key]
-        if key in self.cache:                     # ② 会话缓存
+        hit = self.cache.get(key)                 # ② 会话缓存（LRU+TTL）
+        if hit is not None:
             self.hits_cache += 1
-            return self.cache[key]
+            return hit
         self.calls += 1
+        # **失败一律返回空串，不往字幕里塞 [译错 ...]**。
+        # 原来失败时会 output "[译错 URLError]" 这种占位文本，操作者
+        # 会在画面上真看到它。成熟方案（youtube-live-translate）的做法是
+        # 请求失败直接 throw，字幕保持上一句不动 —— 我们也这样：
+        # 返回空串，上层看到空串就不更新浮窗（见 run() 里的 if zh）。
         out = ""
         if self.mode == "argos":                  # ③ argos 直连 + 清洗
             try:
                 out = clean_translation(self._fn(text))
-            except Exception as e:
-                out = f"[译错 {type(e).__name__}]"
+            except Exception:
+                out = ""
         elif self.mode == "argos-pivot":          # ④ 中继 src→en→dst
             try:
                 mid = self._pivot[0](text)
                 out = clean_translation(self._pivot[1](mid))
-            except Exception as e:
-                out = f"[译错 {type(e).__name__}]"
+            except Exception:
+                out = ""
         elif self.mode == "google-free":          # ⑤ 免 key Google
             try:
                 out = clean_translation(self._google_free(text))
-            except Exception as e:
-                out = f"[译错 {type(e).__name__}]"
+            except Exception:
+                out = ""
                 # 免 key 端点偶尔抽风 → 立刻退回中继，别让字幕断
                 self._gf_fails += 1
                 if self._pivot and self._gf_fails <= 5:
@@ -628,7 +703,7 @@ class Translator:
                         out = clean_translation(
                             self._pivot[1](self._pivot[0](text)))
                     except Exception:
-                        pass
+                        out = ""
         elif self.mode in ("mymemory", "online-first"):   # ⑥ MyMemory（备选）
             out = self._mymemory(text)
             if not out or out.startswith("["):
@@ -657,7 +732,8 @@ class Translator:
             if self._looks_broken(out, text):
                 self.rejected += 1
                 return out          # 仍显示，但明显是胡话时不给它进缓存
-            self.cache[key] = out
+            self.cache.set(key, out)
+            self.last_ok = out
         return out
 
     @staticmethod
@@ -929,8 +1005,9 @@ def run(args):
             print(f"流式统计：更新 {th.stats['updates']} 次，"
                   f"平均 {th.stats['t_upd']/max(1,th.stats['updates']):.2f}s/次，"
                   f"裁剪 {th.stats['trims']} 次")
-            print(f"翻译：短句表命中 {tr.hits_book}　缓存命中 {tr.hits_cache}　"
-                  f"模型调用 {tr.calls}")
+            print(f"翻译：短句表命中 {tr.hits_book}　缓存命中 {tr.hits_cache}"
+                  f"（{tr.cache.hits} 次 LRU 命中 / 淘汰 {tr.cache.evicted}）　"
+                  f"模型调用 {tr.calls}　丢弃 {tr.rejected}")
         return
 
     try:
@@ -953,17 +1030,12 @@ def run(args):
             segs_in, pending, pend_since = pending, [], None
             n_batch += 1
             t0 = time.time()
-            # **强制指定语言是错的默认。** 实测：越南新闻被强制按 en 识别时，
-            # whisper 不是"听错"，而是**把越南语直接意译成英文**（还译错），
-            # 于是后面按 en→zh 翻译全崩。用户实际遇到的就是这个。
-            # 现在默认 auto：whisper 检出 vi 置信度 0.976，识别正确。
-            # 想固定语言用 --lang，不要用 --from 去强制。
-            _lang = None if args.detect else (args.lang or None)
-            texts = th.transcribe_batch(segs_in, lang=_lang)
-
-            # 语言锁定：whisper 逐段检测会抖（实测越南语偶尔被判成韩语），
-            # 所以累计投票、锁住，翻译器再按锁定语言重建。
-            locked = lang_lock.observe(th.last_lang, th.last_lang_prob)
+            # 语言锁定必须在**转写之前**做决定。
+            # 老毛病：原来是在本批转写完之后才 observe()，然后拿 locked 去建
+            # 新译器，可这时 texts 已经用**旧的** lang 参数转写完了 ——
+            # 一旦本批中途语言判定变了，剩下的段就会"用新译器译旧语言"。
+            # 现在：批前取一次判定（它反映的是上一批的结果），本批内固定不再换。
+            locked = lang_lock.peek()
             if locked and locked != tr.src:
                 try:
                     tr = Translator(locked, args.dst)
@@ -971,6 +1043,15 @@ def run(args):
                           f"翻译模式 {tr.mode}")
                 except Exception as e:
                     print(f"  翻译器切换失败: {type(e).__name__} {e}")
+            # **强制指定语言是错的默认。** 实测：越南新闻被强制按 en 识别时，
+            # whisper 不是"听错"，而是**把越南语直接意译成英文**（还译错），
+            # 于是后面按 en→zh 翻译全崩。用户实际遇到的就是这个。
+            # 现在默认 auto：whisper 检出 vi 置信度 0.976，识别正确。
+            # 想固定语言用 --lang，不要用 --from 去强制。
+            _lang = None if args.detect else (args.lang or None)
+            texts = th.transcribe_batch(segs_in, lang=_lang)
+            # 本批转写完再喂一次投票（只影响下一批的译器选择）
+            lang_lock.observe(th.last_lang, th.last_lang_prob)
             t_asr = time.time() - t0
             zh_all = [tr(t) for t in texts]
             t_end = time.time() - t0
@@ -1077,6 +1158,60 @@ def selftest():
     chk("单个短词不被误杀（是）", not Translator._is_web_cruft("是"))
     chk("越南语短语不被误杀", not Translator._is_web_cruft("Cảm ơn các bạn"))
 
+    print("\n  借鉴项：peek / LRU 缓存 / 失败不污染")
+    _lk = LanguageLock()
+    chk("peek 初始为 None", _lk.peek() is None)
+    _lk.observe("vi", 0.97)
+    chk("一票还没锁定（min_votes=2）", _lk.peek() is None)
+    _snap0 = (_lk.locked, dict(_lk.votes), len(_lk.history))
+    _lk.peek()
+    chk("peek 不改状态",
+        (_lk.locked, dict(_lk.votes), len(_lk.history)) == _snap0)
+    _lk.observe("vi", 0.96)
+    chk("两票锁定 vi", _lk.peek() == "vi")
+    _snap = (_lk.locked, dict(_lk.votes), len(_lk.history))
+    _lk.peek()
+    chk("peek 后状态完全没变", (_lk.locked, dict(_lk.votes), len(_lk.history)) == _snap)
+    _c = LruTtlCache(max_size=3, ttl=0.4)
+    _c.set("a", "甲"); _c.set("b", "乙"); _c.set("c", "丙")
+    chk("LRU 命中会挪到最新", _c.get("a") == "甲")
+    _c.set("d", "丁")
+    chk("超容量淘汰最旧的", _c.get("b") is None and len(_c) == 3)
+    _c2 = LruTtlCache(max_size=9, ttl=0.3)
+    _c2.set("k", "v")
+    chk("TTL 内命中", _c2.get("k") == "v")
+    time.sleep(0.35)
+    chk("TTL 过期后失效", _c2.get("k") is None)
+    chk("Translator 用 LruTtlCache",
+        type(Translator("en", "zh").cache).__name__ == "LruTtlCache")
+    _tf = Translator("en", "zh")
+    _tf.mode = "google-free"; _tf._pivot = None
+    _tf._google_free = lambda s: (_ for _ in ()).throw(OSError("x"))
+    _o = _tf("anything that fails")
+    chk("翻译失败返回空串", _o == "")
+    chk("失败不返回 [译错 ...] 占位", "[译错" not in _o and not _o.startswith("["))
+    # 真验 sl=auto：拦下发出的请求，看 URL 里到底是什么
+    _tf2 = Translator("vi", "zh")
+    _seen = {}
+
+    def _cap(url, *a, **k):
+        # urlopen 收到的是 Request 对象（不是字符串），要取 full_url
+        _seen["url"] = getattr(url, "full_url", None) or str(url)
+        raise OSError("captured")          # 截住，别真发出去
+
+    import urllib.request as _ur
+    _orig = _ur.urlopen
+    _ur.urlopen = _cap
+    try:
+        _tf2._google_free("xin chào")
+    except Exception:
+        pass
+    finally:
+        _ur.urlopen = _orig
+    _u = _seen.get("url", "")
+    chk("google-free 请求里带 sl=auto", "sl=auto" in _u)
+    chk("不再出现 sl=vi（源语言由 Google 判）", "sl=vi" not in _u)
+    chk("目标语言仍是 zh-CN", "tl=zh-CN" in _u)
     print("\n二之三、语言锁定（针对两个实测问题）")
     # 问题一："缺少中文翻译" —— 翻译器原来用 args.src（"en"）初始化，
     #   越南语被塞进 en→zh 模型。语言锁定后翻译器跟着实际语言走。

@@ -226,12 +226,27 @@ class QtOverlay:
                 continue
             if isinstance(v, (int, float)) and lo <= v <= hi:
                 out[k] = float(v) if isinstance(lo, float) else int(v)
+        # 位置校验：除了"在屏内"，还要拒绝**默认占位坐标**。
+        # 借鉴 youtube-live-translate（它判断 left==0 && bottom==120 就
+        # 认为那是默认值、不当用户设置用）。
+        # 为什么必须这样：我之前踩过一个 bug —— 默认位置被当成用户设置
+        # 存进 overlay_qt.json，之后每次启动都读它，**坏坐标自我延续**，
+        # 浮窗一直贴在屏幕外面。
+        # 现在：x/y 恰好等于"默认布局算出来的位置"时，就当没设过，
+        # 走自动贴底居中，用户真正拖动过才记。
+        scr2 = QApplication.primaryScreen().availableGeometry()
+        dw = min(int(out.get("width", 780)), scr2.width() - 8)
+        dflt_x = scr2.left() + (scr2.width() - dw) // 2
         for k, lim in (("x", scr.width()), ("y", scr.height())):
             v = d.get(k)
             if v is None:
                 continue
             if isinstance(v, (int, float)) and -8 <= v <= lim + 8:
-                out[k] = int(v)
+                iv = int(v)
+                if k == "x" and iv == dflt_x:
+                    # 就是默认水平居中位置 → 视为"没设过"
+                    continue
+                out[k] = iv
         for k in ("text_color", "original_text_color", "bg_color", "border_color"):
             v = d.get(k)
             if isinstance(v, str) and v.startswith("#") and len(v) in (4, 7):
@@ -919,7 +934,17 @@ if __name__ == "__main__":
         o.cycle_layout(); chk("L 循环 inline -> stacked", o.st["layout"] == "stacked")
         o.cycle_layout(); chk("L 循环 stacked -> zh_only", o.st["layout"] == "zh_only")
         o.cycle_layout(); chk("L 循环 zh_only -> inline", o.st["layout"] == "inline")
-    print("\n  拖拽把手")
+        print("\n  坐标占位符校验（防坏设置自我延续）")
+        from PyQt5.QtWidgets import QApplication as _QA
+        _scr = _QA.primaryScreen().availableGeometry()
+        _dw = min(780, _scr.width() - 8)
+        _dx = _scr.left() + (_scr.width() - _dw) // 2
+        chk("默认居中位置被拒绝（不算用户设置）",
+            "x" not in QtOverlay._validate({"x": _dx, "y": 500, "width": 780}))
+        chk("用户真拖过的 x 保留",
+            QtOverlay._validate({"x": _dx + 137, "width": 780}).get("x")
+            == _dx + 137)
+        print("\n  拖拽把手")
     g = o._grip_rect()
     chk("把手在窗口右上角",
         g.right() >= o.w.width() - 6 and g.left() > o.w.width() // 2)
