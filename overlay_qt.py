@@ -113,7 +113,18 @@ def default_settings():
         "border_color": "#3A4450",
         "border_width": 1,
         "max_lines": 3,              # 原来 5，占屏太多
-        "hold_seconds": 4.0,         # 原来 5
+        # **字幕留到下一句替换它，不再自己消失。**
+        # 原来是 4 秒（更早是 5 秒），后果实测过：
+        #   一条字幕 4 秒后被 _expire 删掉 → entries 空了 →
+        #   补上 idle_hint "● 正在听……"。而那条提示是
+        #   #B7C4D8 暗淡灰 + bg_alpha=0，在视频上**几乎看不见**。
+        #   于是观感就是"字幕消失了"—— 而操作者报过好几次。
+        # 更糟的是间隔：实测 100 秒只出 7 条字幕（平均 14 秒一条，
+        # 合并翻译攒批会拉长间隔），4 秒的保持时间根本盖不住。
+        # 播放器字幕（mpv / YouTube）都是"留到下一句替换"，
+        # 这才是观看习惯。默认给 600 秒，等于"不过期"；
+        # 想恢复旧行为把 hold_seconds 调小即可（范围 1~3600）。
+        "hold_seconds": 600.0,
         "show_original": True,
         # **默认上下两行：中文在上、原语在下**（操作者明确要的排法）。
         # 我之前默认 inline（左右两列）是为了省高度，但那是我的偏好 ——
@@ -255,7 +266,7 @@ class QtOverlay:
         out = {}
         scr = QApplication.primaryScreen().geometry()
         rng = {"font_size": (10, 200), "opacity": (0.15, 1.0),
-               "max_lines": (1, 12), "hold_seconds": (1.0, 60.0),
+               "max_lines": (1, 12), "hold_seconds": (1.0, 3600.0),
                "width": (240, scr.width()), "border_width": (0, 8),
                "max_entry_chars": (30, 400), "ref_height": (200, 4320),
                "original_ratio": (0.3, 1.5),
@@ -1148,7 +1159,13 @@ if __name__ == "__main__":
         chk("原文按比例缩小", o.fs_original() < o.fs())
         chk("行距收紧到 1.15", abs(o.st["line_height"] - 1.15) < 1e-6)
         chk("最多 3 条（从 5 减到 3）", o.st["max_lines"] == 3)
-        chk("每条 4 秒", abs(o.st["hold_seconds"] - 4.0) < 1e-6)
+        # 回归：字幕**必须留到下一句替换**，不能自己消失。
+        # 4 秒的保持时间实测会让字幕过期、然后只剩一条几乎看不见的
+        # 暗淡提示，操作者报"字幕消失"就是这个。改为 600 秒（≈不过期）。
+        chk("字幕留到下一句替换（hold_seconds 足够大）",
+            o.st["hold_seconds"] >= 60.0)
+        chk("保持时间能配到不过期（默认值即为上限内）",
+            o.st["hold_seconds"] <= 3600.0)
         # 默认排布：**中文在上、原语在下**（操作者明确要的）。
         # 我之前默认 inline（左右两列）是为了省高度 —— 那是我的偏好，
         # 不是他要的，已改回 stacked。

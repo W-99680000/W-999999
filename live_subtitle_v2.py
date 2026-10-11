@@ -1750,11 +1750,29 @@ def run(args):
             batch_dur = sum(len(x) for x in pending) / TARGET_RATE
             waited = (time.time() - pend_since) if pend_since else 0
             due = pending and (batch_dur >= args.max_batch or waited >= args.max_wait)
-            if not due:
+            # ── 合并翻译的"窗口到期"必须在**每一轮**检查，不能只在有批时查 ──
+            # 这是实测踩出来的真 bug：原来这段检查写在下面 `if segs_in`
+            # 的分支里（即只在"切出段的那一瞬"评估），而切段间隔是
+            # 2~4 秒 —— 0.35 秒的窗口在两次检查之间白白过去了，永远不触发。
+            # 后果：单元只能等"攒够 mt_batch 个"才发，稀疏语音下
+            # 14 个识别批次只显示 2~3 条字幕，观感就是"字幕消失"。
+            # 探针实测（_probe_units.py）：
+            #     b6 t=12.4s 设了 mt_first，下次检查是 b7 t=16.0s
+            #     中间 3.6 秒，0.35s 窗口早就过了却没被评估
+            if mt_units and mt_first_t is not None \
+                    and time.time() - mt_first_t >= args.mt_batch_wait:
+                mt_flush_now = True
+            else:
+                mt_flush_now = False
+            if not due and not mt_flush_now:
                 continue
 
-            segs_in, pending, pend_since = pending, [], None
-            n_batch += 1
+            if not due:
+                # 只刷翻译批：这一轮没有新音频要识别
+                segs_in, batch_dur, t_asr = [], batch_dur, 0.0
+            else:
+                segs_in, pending, pend_since = pending, [], None
+                n_batch += 1
             t0 = time.time()
             # ── 源语言：完全不做"锁定"，每批独立决策 ──────────────
             # 操作者要求去掉语言锁定。为什么可以去掉：
@@ -1791,9 +1809,13 @@ def run(args):
             # 现在默认 auto：whisper 检出 vi 置信度 0.976，识别正确。
             # 想固定语言用 --lang，不要用 --from 去强制。
             _lang = None if args.detect else (args.lang or None)
-            texts = th.transcribe_batch(segs_in, lang=_lang)
-            # 仍然喂投票，但只用于**诊断显示**，不再决定路由
-            lang_lock.observe(th.last_lang, th.last_lang_prob)
+            if segs_in:
+                texts = th.transcribe_batch(segs_in, lang=_lang)
+                # 仍然喂投票，但只用于**诊断显示**，不再决定路由
+                lang_lock.observe(th.last_lang, th.last_lang_prob)
+            else:
+                # 只刷翻译批：这一轮没有新音频要识别
+                texts = []
             t_asr = time.time() - t0
 
             # ── 翻译并行化 ──────────────────────────────────────
@@ -1843,18 +1865,21 @@ def run(args):
                 # 攒成**一个语义单元**（合并多段原文，译文更完整）
                 mt_units.append(" ".join(t for _s, t in mt_pending))
                 mt_pending = []
-            # ── 合并翻译的触发：攒够 mt_batch 个单元，或等太久 ──────
+            # ── 合并翻译的触发：攒够 mt_batch 个单元，或**短窗到期就发** ──────
             # 为什么要攒**单元**而不是只合并单批内的段：
             # qwen-mt 每次调用 0.57s 是**固定开销**（实测耗时≈
             # 0.770ms/字符+0.569s），一批通常只有一个语义单元，
             # 所以只在批内合并等于没省 —— 必须跨批攒几个单元再一次译。
             #     4 单元合并 0.734s　vs　逐条 2.428s（每段 0.61s→0.18s）
-            # 攒批上限用时间兜底（args.mt_batch_wait），避免为等第 N 个
-            # 单元让字幕卡住。
+            #
+            # **但攒批上限绝不能设长。** 实测过一次真实翻车：
+            # mt_batch=3 + wait=2.0s，而这段素材每 4 秒才切出一个单元，
+            # 于是"等够 3 个"永远等不到（要 12 秒音频），
+            # 14 个识别批次只显示了 2 条字幕 —— 看起来就是"字幕消失"。
+            # 所以主判据必须是**时间**：窗口一到就发，能凑几个算几个。
+            # 默认 0.35s：密集语音时仍能合并 2~3 个单元，稀疏时不会饿死。
             _now = time.time()
-            if mt_units and (len(mt_units) >= args.mt_batch
-                             or (mt_first_t and
-                                 _now - mt_first_t >= args.mt_batch_wait)):
+            if mt_units and (len(mt_units) >= args.mt_batch or mt_flush_now):
                 _units = mt_units[:]
                 mt_units = []
                 mt_first_t = None
@@ -2418,9 +2443,11 @@ def build_parser():
                     help="指定本地翻译模型路径（默认自动找 F 盘的 HY-MT）")
     ap.add_argument("--mt-batch", type=int, default=3,
                     help="攒几个语义单元合并成一次翻译调用（1=关闭）")
-    ap.add_argument("--mt-batch-wait", type=float, default=2.0,
-                    help="攒批最多等多少秒（防字幕卡住）")
-    ap.add_argument("--mt-cap", type=float, default=8.0,
+    # **这个值设长了会让字幕消失** —— 实测 mt_batch_wait=2.0 且
+    # 语音稀疏时，14 个识别批次只显示 2 条字幕。窗口一到就发才是对的。
+    ap.add_argument("--mt-batch-wait", type=float, default=0.35,
+                    help="合并翻译的攒批窗口秒数（默认 0.35，设大反而会让字幕变少）")
+    ap.add_argument("--mt-cap", type=float, default=3.0,
                     help="翻译最多攒多少秒音频（到上限就译，防止一句话等太久）")
     ap.add_argument("--no-mt-merge", dest="mt_cap", action="store_const",
                     const=0.0,
