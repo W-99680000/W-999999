@@ -1755,6 +1755,8 @@ def run(args):
 
 
 def selftest():
+    import re
+    _SRC = open(__file__, encoding="utf-8").read()
     # 错误分类来自远端模块（自检要验它）
     from remote_asr import classify_error
     ok = fail = 0
@@ -1883,6 +1885,33 @@ def selftest():
     chk("google-free 请求里带 sl=auto", "sl=auto" in _u)
     chk("不再出现 sl=vi（源语言由 Google 判）", "sl=vi" not in _u)
     chk("目标语言仍是 zh-CN", "tl=zh-CN" in _u)
+    print("\n二之七、命令行参数一致性（防「用了没定义」）")
+    # 回归：我把 args.prefer_offline 用进了代码，却没写 --prefer-offline
+    # 的 add_argument，程序**启动即崩**（操作者看到的是"不显示字幕"）。
+    # 这里做通用检查：源码里每个 args.X 都必须在 parser 里有定义。
+    _ap2 = build_parser()
+    _defined = set()
+    for _act in _ap2._actions:
+        _defined.add(_act.dest)
+    # 只扫**代码行**：注释里可能写字面占位（如说明文字里的 args.X），
+    # 那不是真引用，不能当成"未定义参数"。
+    _used = set()
+    for _ln in _SRC.split("\n"):
+        if _ln.lstrip().startswith("#"):
+            continue
+        for _m in re.finditer(r"\bargs\.([A-Za-z_][A-Za-z0-9_]*)", _ln):
+            if _m.group(1) not in ("X", "x", "name"):
+                _used.add(_m.group(1))
+    _missing = sorted(_used - _defined)
+    chk("所有 args.X 都有定义（缺: %s）" % (_missing or "无"), not _missing)
+    chk("参数数量合理（>=25）", len(_defined) >= 25)
+    # 直接跑一次 parse_args，确保不会抛异常
+    try:
+        _ap2.parse_args(["--selftest"])
+        chk("parse_args 能跑通", True)
+    except SystemExit:
+        chk("parse_args 能跑通", False)
+
     print("\n二之六、远端错误分类（欠费不该让字幕消失）")
     _cases = [
         ("HTTP 429: rate limit exceeded", 429, "transient"),
@@ -2093,12 +2122,32 @@ def selftest():
     return 0 if fail == 0 else 1
 
 
-def main():
+def build_parser():
+    """命令行解析器。**抽成独立函数是为了让自检能拿到它。**
+
+    为什么必须这么做：我把 `args.prefer_offline` 用在了代码里，却没把
+    `--prefer-offline` 的 add_argument 写进去（脚本替换时锚点没匹配上，
+    而我只核对了成功的那一项）。结果程序**启动即 AttributeError 崩掉** ——
+    操作者看到的是"又不显示字幕了"，实际是根本没起来。
+
+    自检里现在有一条通用检查：源码里出现的每个 `args.X` 都必须在
+    这个 parser 里有定义。那类"用了没定义"的 bug 从此会被拦住。
+    """
     ap = argparse.ArgumentParser(description="外文视频实时翻译字幕 v2")
     ap.add_argument("--from", dest="src", default="en")
     ap.add_argument("--to", dest="dst", default="zh")
     ap.add_argument("--model", default="small")
     ap.add_argument("--threads", type=int, default=4)
+    # 英文是否优先走离线 argos。**默认否** —— 实测 qwen-mt 每项都优于
+    # argos（"东京都知事" 被 argos 译成 "东京都督"），代价只有 0.25s。
+    # 加上这个开关是为了想省那 0.25s 的人能退回去。
+    #
+    # 注意：这个 add_argument **曾经漏掉过** —— 调用点写好了、
+    # 参数定义没写进去，于是 args.prefer_offline 不存在，
+    # 程序一启动就 AttributeError 崩掉（启动即崩，不是没字幕）。
+    # 根因是我用脚本做替换时只核对了成功的那一项，没逐条确认。
+    ap.add_argument("--prefer-offline", action="store_true",
+                    help="英文优先走离线 argos（更快但专有名词易错）")
     ap.add_argument("--max-batch", type=float, default=4.0,
                     help="攒够多少秒音频就转写（摊薄固定开销）")
     ap.add_argument("--max-wait", type=float, default=1.2,
@@ -2166,6 +2215,11 @@ def main():
                     help="不写字幕文件，只用浮窗")
     ap.add_argument("--reset-ui", action="store_true",
                     help="清掉保存的浮窗位置/字号/透明度，回到默认")
+    return ap
+
+
+def main():
+    ap = build_parser()
     a = ap.parse_args()
     if a.reset_ui:
         try:
