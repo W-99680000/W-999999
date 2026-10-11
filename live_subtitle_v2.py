@@ -47,6 +47,7 @@ live-subtitle v2 —— 针对三个实测问题的重做
 from __future__ import annotations
 
 import argparse
+import concurrent.futures as _concurrent
 import collections
 import json
 import os
@@ -1175,6 +1176,65 @@ def run(args):
     pending, pend_since = [], None
     t_all = time.time()
 
+    # ── 翻译并行化所需的状态（分块路线用） ──────────────────────
+    # 为什么要并行：实测（_measure_e2e_lag.py，70 秒真实音频）字幕平均落后
+    # 4.8 秒，其中翻译占 1~2.3 秒，而原来是串行 —— 翻译那段时间机器空着、
+    # 下一批音频已经在积压（后半 5.35s 比前半 4.07s 更落后）。
+    #
+    # 设计：
+    #   _seq_in   批号，提交时自增
+    #   _txtq     批号 → (原文段, 该批的 [段, 文本] 列表)
+    #   done_q    后台译好的 (批号, [译文...])
+    #   _order    {批号: (段列表, 译文列表)}，用来**按批序**显示
+    #   之所以要按序：长句后译完、短句先译完时，字幕会乱序。
+    import queue as _queue_mod
+    _th_pool = _concurrent.ThreadPoolExecutor(max_workers=2)
+    done_q = _queue_mod.Queue()
+    _order = {}
+    _next_show = [0]              # 下一个该显示的批号
+    _seq_in = [0]                 # 下一个要提交的批号
+
+    def _drain_one(timeout=None):
+        """取一批译文进来（耐心可选）。"""
+        try:
+            if timeout is None:
+                batch = done_q.get_nowait()
+            else:
+                batch = done_q.get(timeout=timeout)
+        except Exception:
+            return False
+        _order[batch[0]] = (batch[1], batch[2])
+        return True
+
+    def _show_ready():
+        """按批序把已译好的批次显示出来。返回显示了几段。"""
+        shown = 0
+        while _next_show[0] in _order:
+            segs_k, zh_k = _order.pop(_next_show[0])
+            _next_show[0] += 1
+            # segs_k 的元素是 (段音频, 原文)；zh_k 是等长译文列表
+            for (seg, txt), zh in zip(segs_k, zh_k):
+                if not txt:
+                    continue
+                shown += 1
+                dur = len(seg) / TARGET_RATE if seg is not None else 0.0
+                print(f"[{shown:>3}] 段{dur:4.1f}s | 原: {txt[:52]}")
+                if zh:
+                    print(f"      译: {zh[:52]}")
+                if ov:
+                    ui_q.put((txt, zh))
+                if srt:
+                    srt.add(txt, zh)
+        return shown
+
+    def _drain_translations(block=False, timeout=0.2):
+        if block:
+            _drain_one(timeout=timeout)
+        else:
+            while _drain_one():
+                pass
+        return _show_ready()
+
     # 流式模式：音频直接喂给 StreamingTranscriber，由它自己触发更新
     if streaming:
         try:
@@ -1283,28 +1343,56 @@ def run(args):
             # 本批转写完再喂一次投票（只影响下一批的译器选择）
             lang_lock.observe(th.last_lang, th.last_lang_prob)
             t_asr = time.time() - t0
-            zh_all = [tr(t) for t in texts]
+
+            # ── 翻译并行化 ──────────────────────────────────────
+            # 实测（_measure_e2e_lag.py，70 秒真实音频）：
+            #     产出时刻  音频位置  落后   转写   翻译
+            #       9.8      6.0   +3.83  2.58  1.26
+            #      16.3     12.0   +4.31  2.78  1.54
+            #      47.5     42.0   +5.51  3.77  1.75
+            #      66.2     60.0   +6.21  3.89  2.34
+            #   → 平均落后 4.8s，其中翻译占 1~2.3s。
+            #   原来是串行：转写完 → 才翻译 → 才显示。翻译那段时间机器
+            #   完全空着，而下一批音频已经在积压（后半比前半更落后）。
+            #   现在把翻译丢给后台队列，主循环立刻回去收下一批音频。
+            #   代价：多个译器实例会被同时使用（argos 是纯函数式、Google
+            #   是 HTTP，两者都无共享可变状态）；tr 这个变量在批边界被
+            #   换掉，线程里用**当前**引用即可。
+            _keep = [(segs_in[i], texts[i]) for i in range(len(texts))
+                     if texts[i]]
+            if _keep:
+                _tr_now = tr          # 快照：批边界可能换译器
+                _bno = _seq_in[0]
+                _seq_in[0] += 1
+
+                def _do_translate(_bno, _keep, _tr):
+                    try:
+                        _zh = [_tr(t) for (_s, t) in _keep]
+                    except Exception as _e:
+                        print(f"  翻译线程异常: {type(_e).__name__} {_e}")
+                        _zh = ["" for _ in _keep]
+                    done_q.put((_bno, _keep, _zh))
+
+                _th_pool.submit(_do_translate, _bno, _keep, _tr_now)
             t_end = time.time() - t0
             per_call = t_asr
-            for s, txt, zh in zip(segs_in, texts, zh_all):
-                n_seg += 1
-                if not txt:
-                    continue
-                dur = len(s) / TARGET_RATE
-                print(f"[{n_seg:>3}] 段{dur:4.1f}s 批{batch_dur:4.1f}s "
-                      f"→转写{t_asr:4.2f}s 译{t_end-t_asr:4.2f}s "
-                      f"| 原: {txt[:52]}")
-                if zh:
-                    print(f"      译: {zh[:52]}")
-                if ov:
-                    ui_q.put((txt, zh))
-                if srt:
-                    srt.add(txt, zh)
+            # 顺手把已经译好的批显示掉（不阻塞）
+            _n_shown = _drain_translations(block=False)
             print(f"      (批次 {n_batch}：{len(segs_in)} 段 / {batch_dur:.1f}s "
-                  f"音频，一次转写；固定开销摊了 {len(segs_in)} 份)")
+                  f"音频，转写 {t_asr:.2f}s；翻译并行，已显示 {_n_shown} 段)")
     except KeyboardInterrupt:
         print("\n中断。")
     finally:
+        # 收尾：把后台还没显示的译文全部取出显示（否则最后几批会丢）
+        try:
+            _deadline = time.time() + 20.0
+            while _next_show[0] < _seq_in[0] and time.time() < _deadline:
+                if not _drain_one(timeout=0.5):
+                    continue
+                _show_ready()
+        except Exception:
+            pass
+        _th_pool.shutdown(wait=False)
         stop.set()
         cap.stop()
         if ov:
