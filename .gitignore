@@ -10,6 +10,7 @@ live.srt
 overlay_qt.json
 overlay_settings.json
 control_cmd.json
+overlay_state.json
 *.log
 __pycache__/
 *.py[cod]

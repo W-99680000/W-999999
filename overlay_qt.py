@@ -51,6 +51,21 @@ import time
 
 SETTINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "overlay_qt.json")
+# 浮窗**实时状态**（给外部观察用）。
+#
+# 为什么需要：操作者报过几次"字幕消失"，而我只能靠读日志推断 ——
+# 日志能证明"字幕产出了"，但**证明不了"屏幕上显示了"**。
+# 我试过用截屏 + 像素判据来判断，失败了两次：
+#   ① "亮像素占比"把背后浏览器窗口的亮色也算成字幕（实测 25%）
+#   ② 按设置文件里的坐标裁剪 —— 那是 **Qt 逻辑坐标**，截屏是物理像素，
+#      系统缩放 125% 时两者差 20%（实测 288,734 960x77 vs 360,831 1200x165）
+# 而且浮窗会**重叠在别的窗口上**，任何"找字幕带"的算法都会混入背景内容。
+#
+# 所以改成让浮窗自己报告：每次画面变化就写这个文件。
+# 格式：{"ts": 时间戳, "kind": "subtitle"/"idle"/"empty",
+#        "zh": 译文, "en": 原文, "n": 当前条数}
+STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     "overlay_state.json")
 # 控制面板往这里写命令，浮窗轮询它（见 control_panel.py 的协议说明）
 CMD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "control_cmd.json")
@@ -609,6 +624,34 @@ class QtOverlay:
         except Exception:
             pass
         self.w.update()
+        self._write_state()
+
+    def _write_state(self):
+        """把浮窗的**实际显示状态**写到 overlay_state.json。
+
+        为什么需要：日志能证明"字幕产出了"，但证明不了"屏幕上显示了"。
+        我两次用像素判据失败（见 STATE 定义的注释），所以让浮窗自己报告。
+
+        kind:
+          subtitle → 屏上有真字幕
+          idle     → 只有"正在听……"提示（没字幕）
+          empty    → 什么都没有（**这才是真故障**）
+        """
+        try:
+            n = len(self.entries)
+            subs = [e for e in self.entries if e[2]]
+            if subs:
+                kind, en, zh = "subtitle", subs[-1][1], subs[-1][2]
+            elif n:
+                kind, en, zh = "idle", self.entries[-1][1], ""
+            else:
+                kind, en, zh = "empty", "", ""
+            json.dump({"ts": time.time(), "kind": kind, "n": n,
+                       "en": en[:200], "zh": zh[:200]},
+                      open(STATE, "w", encoding="utf-8"),
+                      ensure_ascii=False)
+        except Exception:
+            pass
 
     # ── 事件：拖动 / 滑轮 / 快捷键 ────────────────────────────
     # ── 拖拽把手 ─────────────────────────────────────────────
@@ -1162,6 +1205,27 @@ if __name__ == "__main__":
         # 回归：字幕**必须留到下一句替换**，不能自己消失。
         # 4 秒的保持时间实测会让字幕过期、然后只剩一条几乎看不见的
         # 暗淡提示，操作者报"字幕消失"就是这个。改为 600 秒（≈不过期）。
+        # 回归：浮窗必须暴露自身显示状态。
+        # 为什么：日志能证明"字幕产出了"，但证明不了"屏幕上显示了" ——
+        # 操作者几次报"字幕消失"，我两次用像素判据都失败：
+        #   ① 亮像素占比把背后浏览器窗口也算成字幕
+        #   ② 按设置文件坐标裁剪，但那是 Qt 逻辑坐标、截屏是物理像素，
+        #      缩放 125% 时差 20%（实测 288,734 960x77 vs 360,831 1200x165）
+        # 现在让浮窗自己写 overlay_state.json，外部读它就能拿到真值。
+        chk("浮窗有状态输出方法", hasattr(o, "_write_state"))
+        chk("状态文件路径已定义", STATE.endswith("overlay_state.json"))
+        import json as _j
+        o._write_state()
+        _s1 = _j.load(open(STATE, encoding="utf-8"))
+        chk("状态文件可读且 kind 合法",
+            _s1.get("kind") in ("subtitle", "idle", "empty"))
+        chk("空浮窗 -> kind=empty", _s1.get("kind") == "empty")
+        o.add("hello", "你好")
+        _s2 = _j.load(open(STATE, encoding="utf-8"))
+        chk("有字幕 -> kind=subtitle", _s2.get("kind") == "subtitle")
+        chk("状态里带译文", _s2.get("zh") == "你好")
+        chk("状态里带时间戳", float(_s2.get("ts", 0)) > 0)
+
         chk("字幕留到下一句替换（hold_seconds 足够大）",
             o.st["hold_seconds"] >= 60.0)
         chk("保持时间能配到不过期（默认值即为上限内）",
