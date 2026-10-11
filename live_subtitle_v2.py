@@ -1350,6 +1350,18 @@ def run(args):
                     th.max_batch, th.max_wait = args.max_batch, args.max_wait
                     print(f"      批次 {old}s → {args.max_batch}s"
                           f"（远端固定开销仅 0.43s，小批次延迟更低）")
+                # **段长不要收，保持默认。** 我先把它收到 2.0s，
+                # 理由是"段长才是延迟来源" —— 但扫参数实测
+                # （_bench_params.py，45 秒真实音频）打翻了这个判断：
+                #     段长  合并上限  条数  平均字  中位等待
+                #     1.0    2.0     25     8      2.0s    "请。"
+                #     1.0    4.0     14    15      2.7s    "真相就是。是。"
+                #     2.0    8.0      5    13      2.7s    "赶紧离开这里，不然我就报警。"
+                #     4.0    8.0     12    13      3.0s    "在我报警之前，赶紧离开这里。"
+                # 4.0s 段长给出的完整句最多，而**等待并不比 2.0s 差**
+                # （3.0s vs 2.7s）。段长缩短只是让段变多、译文变碎，
+                # 并没有换来延迟。所以这里不动段长，只把**翻译合并上限**
+                # 调大（默认 6.0 → 8.0），让译文攒得更完整。
         print(f"转写: 分块 {args.model}　批量≤{args.max_batch}s / 等≤{args.max_wait}s")
         print("      优点：字幕与音频同步、不积压")
         print("      代价：要等整段说完（首字延迟 = 段长 + 1.5s）")
@@ -1416,6 +1428,9 @@ def run(args):
     _order = {}
     _next_show = [0]              # 下一个该显示的批号
     _seq_in = [0]                 # 下一个要提交的批号
+    # 待翻译的 (段, 原文)：识别保持小块高频，翻译攒到语义边界再做。
+    # 依据见主循环里那段注释（碎片翻译 vs 整句翻译，质量差别实测很大）。
+    mt_pending = []
 
     def _drain_one(timeout=None):
         """取一批译文进来（耐心可选）。"""
@@ -1606,20 +1621,50 @@ def run(args):
             #   换掉，线程里用**当前**引用即可。
             _keep = [(segs_in[i], texts[i]) for i in range(len(texts))
                      if texts[i]]
-            if _keep:
+            # ── 翻译节拍与识别节拍**解耦** ────────────────────────
+            # 实测（_bench_merge_translate.py，同一段 16.4 秒真实语音）：
+            #   识别块 1.5s → 11 条碎片："我从没想过我会。" "再见。" "警察。"
+            #   识别块 4.0s →  4 条完整："我从没想过还能再见到你。走吧。"
+            #   识别块 8.0s →  2 条更完整
+            # 也就是说：小批次**延迟低但字幕是碎的**，大批次译文好但延迟高。
+            # 我上一轮只量了延迟就选 1.5s —— **没量翻译质量**，
+            # 那是个片面的决定。
+            #
+            # HW-TSC（华为，IWSLT 2024 字幕赛道）把这两件事**分开**：
+            # 识别出声，句边界由另一套机制决定。我们照这个思路做，
+            # 但判定手段不同（他们用词级时间戳 + 标点恢复模型，
+            # 实测我们这边不能用：远端识别给每个碎片都补句号，
+            # 见 _bench_punct2.py）。
+            #
+            # 我们可用的判定：**Segmenter 的静音切分**。
+            #   · 静音切出的段 → 长度 < max_len（自然句边界）
+            #   · 长度上限强制的段 → 长度 ≈ max_len（不是语义边界）
+            # 所以：识别继续小块高频（延迟不变），
+            #       翻译等**遇到自然句边界**再做，且累计不超过 mt_cap 秒。
+            _is_natural = any(len(s) / TARGET_RATE < args.max_seg - 0.05
+                              for s in segs_in)
+            mt_pending.extend(_keep)
+            _pt = sum(len(s) / TARGET_RATE for s, _ in mt_pending)
+            # --no-mt-merge（mt_cap<=0）→ 每批立即翻译，回到旧行为
+            _flush = (args.mt_cap <= 0 or _is_natural
+                      or _pt >= args.mt_cap)
+            if mt_pending and _flush:
+                _keep_out = list(mt_pending)
+                mt_pending = []
                 _tr_now = tr          # 快照：批边界可能换译器
                 _bno = _seq_in[0]
                 _seq_in[0] += 1
 
                 def _do_translate(_bno, _keep, _tr):
+                    # 合并成一个语义单元再翻译（这是质量提升的来源）
                     try:
-                        _zh = [_tr(t) for (_s, t) in _keep]
+                        _zh = [_tr(" ".join(t for _s, t in _keep))]
                     except Exception as _e:
                         print(f"  翻译线程异常: {type(_e).__name__} {_e}")
-                        _zh = ["" for _ in _keep]
+                        _zh = [""]
                     done_q.put((_bno, _keep, _zh))
 
-                _th_pool.submit(_do_translate, _bno, _keep, _tr_now)
+                _th_pool.submit(_do_translate, _bno, _keep_out, _tr_now)
             t_end = time.time() - t0
             per_call = t_asr
             # 顺手把已经译好的批显示掉（不阻塞）
@@ -1646,6 +1691,15 @@ def run(args):
                 if not _drain_one(timeout=0.5):
                     continue
                 _show_ready()
+        except Exception:
+            pass
+        # 收尾：把还没达到语义边界的待译文本也译掉，否则最后一句会丢
+        try:
+            if mt_pending:
+                _tail = " ".join(t for _s, t in mt_pending)
+                if _tail:
+                    done_q.put((_seq_in[0], list(mt_pending), [tr(_tail)]))
+                    _seq_in[0] += 1
         except Exception:
             pass
         _th_pool.shutdown(wait=False)
@@ -1788,6 +1842,28 @@ def selftest():
     chk("google-free 请求里带 sl=auto", "sl=auto" in _u)
     chk("不再出现 sl=vi（源语言由 Google 判）", "sl=vi" not in _u)
     chk("目标语言仍是 zh-CN", "tl=zh-CN" in _u)
+    print("\n二之五、识别节拍与翻译节拍解耦（回归碎片字幕）")
+    # 故障复现：识别块太小 → 每个碎片被单独翻译 →
+    # 我从没想过我会。 / 再见。 / 警察。 这种碎字幕。
+    # 修法：识别保持小块，**翻译攒到语义边界再译**。
+    import inspect as _insp
+    _src = _insp.getsource(run)
+    chk("翻译前有合并（mt_pending）", "mt_pending" in _src)
+    chk("合并用 ' '.join（整句交给译器，不是逐片）",
+        chr(34) + " " + chr(34) + ".join" in _src or "' '.join(t for _s, t in _keep)" in _src)
+    chk("有语义边界判据（静音切出的段比 max_seg 短）",
+        "_is_natural" in _src and "args.max_seg - 0.05" in _src)
+    chk("有攒批上限兜底（mt_cap）", "args.mt_cap" in _src)
+    # 参数默认值从**源码文本**里核对（argparse 建在 main() 内，自检拿不到
+    # parser 对象）。这样也顺带保证文档/注释里的数字和代码一致。
+    _fsrc = open(os.path.join(HERE, "live_subtitle_v2.py"),
+                 encoding="utf-8").read()
+    chk("默认 mt_cap = 8.0", "default=8.0," in _fsrc and "mt-cap" in _fsrc)
+    chk("默认 max_seg = 4.0（实测 2.0 会让译文变碎）",
+        "max-seg" in _fsrc and "default=4.0" in _fsrc)
+    chk("可以整体关掉（--no-mt-merge 置 0）",
+        "args.mt_cap <= 0" in _src)
+
     print("\n二之四、噪声门不能吃掉正常语音（回归「识别不到声音」）")
     # 故障复现：开机时音量正常 → floor 高 → 门限顶到上限，
     # 之后音量一小就全被拒，字幕整场消失。
@@ -1977,6 +2053,15 @@ def main():
     ap.set_defaults(remote_asr=True)
     ap.add_argument("--no-widen", action="store_true",
                     help="远端识别时不自动放宽批量上限（默认会放宽到 8s）")
+    # 翻译节拍：识别保持小块高频，翻译攒到**静音边界**或上限再做。
+    # 实测（_bench_merge_translate.py）：识别块 1.5s 会产出 11 条碎片
+    # （"我从没想过我会。" / "再见。" / "警察。"），而攒到语义边界后
+    # 只有 3~4 条完整句。延迟低和译文好原来被绑在一个开关上，现在拆开。
+    ap.add_argument("--mt-cap", type=float, default=8.0,
+                    help="翻译最多攒多少秒音频（到上限就译，防止一句话等太久）")
+    ap.add_argument("--no-mt-merge", dest="mt_cap", action="store_const",
+                    const=0.0,
+                    help="关掉翻译合并，回到「每块单独翻译」的旧行为")
     ap.add_argument("--min-seg", type=float, default=0.5)
     # 单段最长 4 秒：实测 argos 在长句上会退化
     # （真实案例：She'll hate me forever... → "亦复如是. 师曰. 那她会永远恨我"
