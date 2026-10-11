@@ -1254,10 +1254,18 @@ def run(args):
     if srt:
         print(f"字幕文件: {args.srt}　（播放器加载它，不依赖浮窗）")
     if ov:
-        # 立刻显示一行，让用户确认框在哪
-        ov.flash("live-subtitle ready — listening…", 5.0)
+        # 先闪一行让用户确认框在哪；随后由 idle_hint() 接替成**常驻**的
+        # "正在听"提示。为什么需要常驻：没有音频时浮窗是全透明的
+        # （bg_alpha=0），于是"程序在跑但没声音"和"程序没启动"看起来
+        # 完全一样 —— 操作者几次报"字幕消失"都是这个。
+        ov.flash("live-subtitle ready — listening…", 3.0)
         print(f"浮窗位置: {ov.geo[0]},{ov.geo[1]}  尺寸 {ov.geo[2]}x{ov.geo[3]}  "
               f"flags=0x{int(ov.w.windowFlags()):08X}")
+        try:
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(3200, ov.idle_hint)
+        except Exception:
+            ov.idle_hint()
     stop = threading.Event()
 
     # **Qt 的 GUI 操作必须在主线程。**

@@ -123,7 +123,11 @@ def default_settings():
         "gap_px": 10,                # inline 时译文与原文之间的间距
         "x": None,
         "y": None,                   # None = 自动贴底部
-        "width": 780,
+        # 宽度基准：字幕行业惯例是**每行约 42 个字符**（Netflix 指南）。
+        # 我们 1080p 下字号 42px，42 字符约 1420px。原来 780px 太窄 ——
+        # 实测长句在 780px 下要 4~6 行，一条就占 300px、3 条铺满屏幕。
+        # 1200px 在 1920 屏上仍留足边距，而长句降到 2~3 行。
+        "width": 1200,
         "max_entry_chars": 180,
         "line_height": 1.15,         # 原来 1.30
         "theme_dark_video": True,
@@ -278,7 +282,8 @@ class QtOverlay:
             v = d.get(k)
             if isinstance(v, str) and v.startswith("#") and len(v) in (4, 7):
                 out[k] = v
-        for k in ("show_original", "theme_dark_video", "edit_mode"):
+        for k in ("show_original", "theme_dark_video", "edit_mode",
+                  "show_idle_hint"):
             if isinstance(d.get(k), bool):
                 out[k] = d[k]
         lv = d.get("layout")
@@ -436,6 +441,29 @@ class QtOverlay:
                     f'{escape(en)}</span>')
 
         if layout == "inline":
+            # ── 两列布局，但要先判断"放不放得下" ──────────────────
+            #
+            # 教训：我上一轮把顺序流式改成两列表格，理由是"inline 最省高度"。
+            # 实测那个理由**只对短文本成立**：780px 宽度下两列各约 390px，
+            # 一句长字幕中英文都要折 5~6 行，于是**每条占 300px**，
+            # 3 条 = 906px，几乎铺满屏幕（比 stacked 严重得多）。
+            #     短文本 1 条 → 126px
+            #     长文本 1 条 → 318px   ← 回归
+            # 所以加判据：只有"两列各自都放得下"时才用两列，
+            # 放不下就退回上下两行（那才是长文本下更省高度的排法）。
+            avail = max(200, self.w.width() - 28)
+            gap = float(self.st.get("gap_px", 10))
+            # 估算两列各自需要的行数（按字符宽度估，不求精确，够做决策）
+            zh_w = len(zh) * fs * 0.95
+            en_w = sum(fs_o * (0.28 if ch in " .,!?'\"" else 0.50)
+                       for ch in en)
+            n_zh = max(1, int((zh_w + gap) / (avail * 0.5 - 6 - gap)) + 1)
+            n_en = max(1, int(en_w / (avail * 0.5 - 6)) + 1)
+            fits_two_cols = (n_zh <= 2 and n_en <= 2)
+            if not fits_two_cols:
+                layout = "stacked"      # 退回上下两行（下面那段会处理）
+
+        if layout == "inline":
             # **真的"同行"：两列并排，各自在列内居中。**
             #
             # 我第一版只是把两个 span 顺序拼在一行里（中间塞 &nbsp;），
@@ -496,6 +524,37 @@ class QtOverlay:
         for e in self.entries:
             h += e[3].sizeHint().height() + self.box.spacing()
         return max(60, h + 4)
+
+    # ── 空状态提示 ───────────────────────────────────────────
+    # 为什么需要：没有音频时浮窗是全透明的（bg_alpha=0），所以
+    # "程序在跑但没声音" 和 "程序没启动" 看起来一模一样 ——
+    # 操作者几次报"字幕消失"都是这个原因。加一行暗淡的常驻提示，
+    # 让空状态也能看出程序活着。
+    IDLE_HINT = "● 正在听……（有声音就出字幕）"
+
+    def idle_hint(self):
+        """显示空状态提示（hold=None，不参与过期清理）。"""
+        if not self.st.get("show_idle_hint", True):
+            return
+        for e in self.entries:
+            if e[1] == self.IDLE_HINT:
+                return                      # 已经有了
+        lb = self._make_label()
+        lb.setText(
+            f'<div style="text-align:center; line-height:1.15; '
+            f'font-size:{max(11, int(self.fs() * 0.55))}px; '
+            f'color:{self.st.get("original_text_color", "#B7C4D8")}; '
+            f'-webkit-text-stroke:0.6px #000; '
+            f'text-shadow:0 1px 3px rgba(0,0,0,0.8);">'
+            f'{self.IDLE_HINT}</div>')
+        self.box.insertWidget(self.box.count() - 1, lb)
+        self.entries.append([time.time(), self.IDLE_HINT, "", lb, None])
+        self._relayout()
+
+    def clear_idle_hint(self):
+        for i in reversed(range(len(self.entries))):
+            if self.entries[i][1] == self.IDLE_HINT:
+                self._drop(i)
 
     def _layout(self):
         from PyQt5.QtCore import Qt
@@ -791,6 +850,7 @@ class QtOverlay:
         zh = clean_caption(zh, int(self.st["max_entry_chars"]))
         if not en and not zh:
             return
+        self.clear_idle_hint()      # 有真字幕了，提示该撤掉
         lb = self._make_label()
         lb.setText(self._render_html(en, zh))
         # 插在末尾 stretch 之前，这样内容整体靠底、向上长
@@ -810,14 +870,22 @@ class QtOverlay:
             pass
 
     def _expire(self):
-        """超时条目淡出（成熟方案的 fade_duration=5 秒）。"""
+        """超时条目淡出（成熟方案的 fade_duration=5 秒）。
+
+        hold=None 的条目（空状态提示）**永不过期**，要跳过 ——
+        否则会 NameError/TypeError（None 不能和数字比大小），
+        而且提示本来就应该一直在。
+        """
         now = time.time()
         dead = [i for i, (ts, _, _, _, hold) in enumerate(self.entries)
-                if now - ts > hold]
+                if hold is not None and now - ts > hold]
         if dead:
             for i in reversed(dead):
                 self._drop(i)
             self._relayout()
+            # 字幕全过期了 → 把空状态提示放回来
+            if not self.entries:
+                self.idle_hint()
 
     def clear(self):
         while self.entries:
@@ -1128,6 +1196,18 @@ if __name__ == "__main__":
         chk("用户真拖过的 x 保留",
             QtOverlay._validate({"x": _dx + 137, "width": 780}).get("x")
             == _dx + 137)
+    print("\n  空状态提示（没有音频时也能看出程序在跑）")
+    o.clear()
+    _IH = QtOverlay.IDLE_HINT
+    o.idle_hint()
+    chk("提示已加", any(e[1] == _IH for e in o.entries))
+    chk("提示让窗口有可见高度", o.geo[3] > 60)
+    o._expire()
+    chk("hold=None 的提示不被过期清理", any(e[1] == _IH for e in o.entries))
+    o.set("real sub", "真字幕")
+    chk("有真字幕时提示被撤", not any(e[1] == _IH for e in o.entries))
+    o.clear()
+
     print("\n  拖拽把手")
     g = o._grip_rect()
     # 把手已从"右上角小方块"改成"顶部整条"（操作者反馈拖动困难）：
