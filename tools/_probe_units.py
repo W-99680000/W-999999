@@ -13,7 +13,7 @@ import sys
 import time
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, "D:/NEW WORK/work/subtitle")
 
 import numpy as np
 from live_subtitle_v2 import (LoopbackCapture, to_mono16k, Segmenter,
