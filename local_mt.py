@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import json
 import os
+import struct
 import subprocess
 import sys
 import time
@@ -218,7 +219,7 @@ class LocalMT:
         # 术语表 [(源词, 目标译法)]。注入时按"源词出现在文本里"逐条加。
         self.terms = list(terms or [])
         # 模型代次决定用哪套 token 标记（见 MODEL_FAMILIES 的说明）
-        self.family = detect_family(self.model) if self.model else hy18
+        self.family = detect_family(self.model) if self.model else "hy18"
         self.start_timeout = start_timeout
         self.proc = None
         self.ok = bool(self.bin and self.model)
