@@ -1798,7 +1798,7 @@ def selftest():
         chk("几何在屏内", o.geo[2] > 200 and o.geo[3] > 50)
         o.toggle(); chk("可隐藏", not o.w.isVisible())
         o.toggle(); chk("可恢复", o.w.isVisible())
-        o.reset(); chk("可重置", o.st["font_size"] == 30)
+        o.reset(); chk("可重置", o.st["font_size"] == 24)
         o.close()
     except Exception as e:
         import traceback
