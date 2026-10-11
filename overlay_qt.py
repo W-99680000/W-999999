@@ -71,15 +71,24 @@ def default_settings():
         text_color #00FF00 / original_text_color #B7C4D8
 
     两处冲突时以可读性为准：
-      · 字号取 38 的**等比缩放**（1080p 下约 57px），不写死小数
+      · 字号取 mpv 的**等比缩放规则**（每 720p 窗口高度对应一个基准字号），
+        不写死像素；基准值见下面 font_size
       · 译文用 mpv 的白色（最中性、最耐看），不用 VoxGo 的亮绿
-      · 原文仍退一档（0.68 倍）——mpv 默认虽是 1 倍，但那是给"两条独立字幕轨"的，
-        我们这里是同一框内上下两行，缩一档更清楚
+      · 原文退一档（0.68 倍）
+
+    用户反馈后的调整（操作者原话：字幕规格太大、上下文占屏太多、
+    字小一点、间距窄一点、显示内容不要上下堆积）：
+      · font_size   38 → 26      （1080p 下约 37px，比原来的 54px 小三分之一）
+      · line_height 1.30 → 1.15  （行间距收紧）
+      · layout      新增，默认 inline —— 译文与原文**排在同一行**，
+                    一条字幕恒定只占一行，不再上下堆积
+      · max_lines   5 → 3        （占屏更少）
+      · width       900 → 780    （窄一点，少挡画面）
     """
-    import tkinter  # noqa: F401  (仅用于探测屏幕，无则回退)
     return {
-        # mpv: 在 720p 窗口下 38px，随窗口高度等比缩放
-        "font_size": 38,
+        # mpv 的基准是 38（720p 窗口高度）；按用户反馈压到 26。
+        # 它仍随屏幕高度等比缩放：1080p → 39px，720p → 26px。
+        "font_size": 26,
         "ref_height": 720,           # mpv 的基准窗口高度
         "original_ratio": 0.68,      # 原文相对译文的字号比
         "opacity": 0.92,
@@ -90,14 +99,16 @@ def default_settings():
         "bg_color": "#20242A",
         "border_color": "#3A4450",
         "border_width": 1,
-        "max_lines": 5,              # VoxGo: max_lines 5
-        "hold_seconds": 5.0,         # VoxGo: fade_duration 5
+        "max_lines": 3,              # 原来 5，占屏太多
+        "hold_seconds": 4.0,         # 原来 5
         "show_original": True,
+        "layout": "inline",          # inline / stacked / zh_only
+        "gap_px": 10,                # inline 时译文与原文之间的间距
         "x": None,
         "y": None,                   # None = 自动贴底部
-        "width": 900,
+        "width": 780,
         "max_entry_chars": 180,
-        "line_height": 1.30,
+        "line_height": 1.15,         # 原来 1.30
         "theme_dark_video": True,
     }
 
@@ -187,7 +198,8 @@ class QtOverlay:
                "max_lines": (1, 12), "hold_seconds": (1.0, 60.0),
                "width": (240, scr.width()), "border_width": (0, 8),
                "max_entry_chars": (30, 400), "ref_height": (200, 4320),
-               "original_ratio": (0.3, 1.5)}
+               "original_ratio": (0.3, 1.5),
+               "line_height": (0.9, 2.5), "gap_px": (0, 80)}
         for k, (lo, hi) in rng.items():
             v = d.get(k)
             if v is None:
@@ -207,6 +219,9 @@ class QtOverlay:
         for k in ("show_original", "theme_dark_video"):
             if isinstance(d.get(k), bool):
                 out[k] = d[k]
+        lv = d.get("layout")
+        if lv in ("inline", "stacked", "zh_only"):
+            out["layout"] = lv
         ow = d.get("outline_width")
         if isinstance(ow, (int, float)) and 0 <= ow <= 5:
             out["outline_width"] = float(ow)
@@ -271,30 +286,57 @@ class QtOverlay:
         return lb
 
     def _render_html(self, en, zh):
-        """渲染一条字幕：译文在上（大、亮），原文在下（小、暗）。
+        """渲染一条字幕。三种排布（layout 设置）：
 
-        加**描边**：字幕的标准做法。浅色画面上亮字会糊在背景里，
-        描边保证任何背景都能读。
+            inline      译文和原文排在同一行（**默认**）
+                        最省高度：一条字幕始终只占一行
+            stacked     译文一行、原文一行（原来的做法）
+            zh_only     只显示译文
+
+        都有描边：浅色画面上亮字会糊在背景里，描边保证任何背景都能读。
         """
         from html import escape
         fs = self.fs()
         fs_o = self.fs_original()
-        lh = float(self.st["line_height"])
+        lh = float(self.st.get("line_height", 1.15))
         oc = self.st.get("outline_color", "#000000")
         ow = float(self.st.get("outline_width", 1.65))
-        parts = []
+        gap = int(self.st.get("gap_px", 10))      # 同行时译文与原文的间距
+        layout = self.st.get("layout", "inline")
+        show_en = bool(en) and self.st.get("show_original", True) \
+            and layout != "zh_only"
+
+        def zh_div(extra=""):
+            return (f'<span style="color:{self.st["text_color"]}; '
+                    f'font-size:{fs}px; '
+                    f'-webkit-text-stroke:{ow:.2f}px {oc};">'
+                    f'{escape(zh)}{extra}</span>')
+
+        def en_div(extra=""):
+            return (f'<span style="color:{self.st["original_text_color"]}; '
+                    f'font-size:{fs_o}px; '
+                    f'-webkit-text-stroke:{ow * 0.8:.2f}px {oc};">'
+                    f'{escape(en)}{extra}</span>')
+
+        if layout == "inline":
+            parts = []
+            if zh:
+                parts.append(zh_div(f"&nbsp;&nbsp;" if show_en else ""))
+            if show_en:
+                parts.append(en_div())
+            body = "".join(parts) or "&nbsp;"
+            return (f'<div style="line-height:{lh}; margin:0; '
+                    f'white-space:pre-wrap; word-wrap:break-word;">{body}</div>')
+
+        # stacked / zh_only
+        rows = []
         if zh:
-            parts.append(
-                f'<div style="color:{self.st["text_color"]}; font-size:{fs}px; '
-                f'line-height:{lh}; margin:0; word-wrap:break-word; '
-                f'-webkit-text-stroke:{ow:.2f}px {oc};">{escape(zh)}</div>')
-        if en and self.st.get("show_original", True):
-            parts.append(
-                f'<div style="color:{self.st["original_text_color"]}; '
-                f'font-size:{fs_o}px; line-height:{lh}; '
-                f'margin:3px 0 0 0; word-wrap:break-word; '
-                f'-webkit-text-stroke:{ow * 0.8:.2f}px {oc};">{escape(en)}</div>')
-        return "".join(parts)
+            rows.append(f'<div style="font-size:{fs}px; line-height:{lh}; '
+                        f'margin:0; word-wrap:break-word;">{zh_div()}</div>')
+        if show_en:
+            rows.append(f'<div style="font-size:{fs_o}px; line-height:{lh}; '
+                        f'margin:1px 0 0 0; word-wrap:break-word;">{en_div()}</div>')
+        return "".join(rows) or "&nbsp;"
 
     # ── 几何：贴底部，按内容向上长 ────────────────────────────
     def _content_height(self):
@@ -373,6 +415,8 @@ class QtOverlay:
                 self.bump_opacity(0.05)
             elif k == Qt.Key_T:
                 self.toggle_theme()
+            elif k == Qt.Key_L:
+                self.cycle_layout()
 
         w.mousePressEvent = press
         w.mouseMoveEvent = move
@@ -465,17 +509,43 @@ class QtOverlay:
         self._relayout()
         self._save()
 
+    def cycle_layout(self):
+        """L 键循环：同行 → 上下两行 → 只译文。
+
+        操作者反馈"显示内容不要上下堆积"，所以默认是 inline（同行）。
+        想回原来的上下两行按 L。
+        """
+        order = ["inline", "stacked", "zh_only"]
+        cur = self.st.get("layout", "inline")
+        nxt = order[(order.index(cur) + 1) % len(order)] if cur in order else order[0]
+        self.st["layout"] = nxt
+        self.refresh()
+        names = {"inline": "同行（译文+原文）", "stacked": "上下两行",
+                 "zh_only": "只显示译文"}
+        print(f"排布 → {names[nxt]}", flush=True)
+
+    def refresh(self):
+        """按当前设置重绘所有条目。"""
+        for e in self.entries:
+            _, en, zh, lb, _ = e
+            lb.setText(self._render_html(en, zh))
+        self._relayout()
+
     def toggle_theme(self):
-        """暗画面用亮字，亮画面用白字+重描边。字幕的常规做法。"""
+        """T 键：暗画面 ↔ 亮画面。
+
+        暗画面用白色（mpv 的 --sub-color），亮画面用白字 + 更重描边。
+        （早先版本暗画面用亮绿 #00FF00，看影视太累，已改成白。）
+        """
         self.st["theme_dark_video"] = not self.st.get("theme_dark_video", True)
         if self.st["theme_dark_video"]:
-            self.st["text_color"] = "#00FF00"
+            self.st["text_color"] = "#FFFFFF"
             self.st["original_text_color"] = "#B7C4D8"
-            self.st["outline_width"] = 1.2
+            self.st["outline_width"] = 1.65
         else:
             self.st["text_color"] = "#FFFFFF"
             self.st["original_text_color"] = "#E0E0E0"
-            self.st["outline_width"] = 2.0
+            self.st["outline_width"] = 2.6
         self._apply_style()
         for e in self.entries:
             _, en, zh, lb, _ = e
@@ -576,22 +646,39 @@ if __name__ == "__main__":
         chk("Tool", bool(o.w.windowFlags() & _Q.Tool))
         chk("WA_TranslucentBackground", o.w.testAttribute(_Q.WA_TranslucentBackground))
 
-        print("\n  显示规范（照搬成熟方案）")
-    from PyQt5.QtWidgets import QApplication
-    sh = QApplication.primaryScreen().availableGeometry().height()
-    chk("字号基准 38（mpv --sub-font-size 默认）", o.st["font_size"] == 38)
-    chk("基准高度 720（mpv 的窗口高度基准）", o.st["ref_height"] == 720)
-    exp = max(10, int(round(38 * sh / 720)))
-    chk(f"随屏幕等比缩放（{sh}p → {o.fs()}px，期望 {exp}px）", o.fs() == exp)
-    chk("原文按比例缩小", o.fs_original() < o.fs())
-    chk("译文色 = 白（mpv --sub-color）", o.st["text_color"] == "#FFFFFF")
-    chk("描边色 = 黑（mpv --sub-outline-color）", o.st["outline_color"] == "#000000")
-    chk("描边宽 1.65（mpv --sub-outline-size）",
-        abs(o.st["outline_width"] - 1.65) < 1e-6)
-    chk("最多 5 条（VoxGo max_lines）", o.st["max_lines"] == 5)
-    chk("每条 5 秒（VoxGo fade_duration）", abs(o.st["hold_seconds"] - 5.0) < 1e-6)
-    chk("显示原文", o.st["show_original"] is True)
+        print("\n  显示规格（操作者反馈后调小）")
+        sh = o._screen_h()
+        chk("字号基准 26（从 38 压到 26）", o.st["font_size"] == 26)
+        chk("基准高度 720（mpv 的窗口高度基准）", o.st["ref_height"] == 720)
+        exp = max(10, int(round(26 * sh / 720)))
+        chk(f"随屏幕等比缩放（{sh}p → {o.fs()}px，期望 {exp}px）", o.fs() == exp)
+        chk("原文按比例缩小", o.fs_original() < o.fs())
+        chk("行距收紧到 1.15", abs(o.st["line_height"] - 1.15) < 1e-6)
+        chk("最多 3 条（从 5 减到 3）", o.st["max_lines"] == 3)
+        chk("每条 4 秒", abs(o.st["hold_seconds"] - 4.0) < 1e-6)
+        chk("默认同行排布（不上下堆积）", o.st["layout"] == "inline")
+        chk("译文色 = 白（mpv --sub-color）", o.st["text_color"] == "#FFFFFF")
+        chk("描边色 = 黑（mpv --sub-outline-color）", o.st["outline_color"] == "#000000")
+        chk("描边宽 1.65（mpv --sub-outline-size）",
+            abs(o.st["outline_width"] - 1.65) < 1e-6)
+        chk("显示原文", o.st["show_original"] is True)
 
+        print("\n  三种排布")
+        o.clear()
+        o.st["layout"] = "inline"
+        h_in = o._render_html("hello world", "你好世界")
+        chk("inline：只占一行", h_in.count("<div") == 1)
+        chk("inline：译文和原文都在", "你好世界" in h_in and "hello world" in h_in)
+        o.st["layout"] = "stacked"
+        h_st = o._render_html("hello world", "你好世界")
+        chk("stacked：两行", h_st.count("<div") == 2)
+        o.st["layout"] = "zh_only"
+        h_zh = o._render_html("hello world", "你好世界")
+        chk("zh_only：不含原文", "hello world" not in h_zh and "你好世界" in h_zh)
+        o.st["layout"] = "inline"
+        o.cycle_layout(); chk("L 循环 inline -> stacked", o.st["layout"] == "stacked")
+        o.cycle_layout(); chk("L 循环 stacked -> zh_only", o.st["layout"] == "zh_only")
+        o.cycle_layout(); chk("L 循环 zh_only -> inline", o.st["layout"] == "inline")
     print("\n  文本规范化")
     chk("压空白", clean_caption("a   b\n\nc") == "a b c")
     chk("去标签", clean_caption("<target_text>你好</target_text>") == "你好")
@@ -605,7 +692,7 @@ if __name__ == "__main__":
     chk("加了 3 条", len(o.entries) == 3)
     for i in range(6):
             o.set(f"en {i}", f"zh {i}")
-    chk("超上限自动丢弃，最多 5 条", len(o.entries) == 5)
+    chk("超上限自动丢弃，最多 3 条", len(o.entries) == 3)
     chk("留的是最新的", o.entries[-1][2] == "zh 5")
     h1 = o.geo[3]
     o.bump_lines(-4)
@@ -628,7 +715,7 @@ if __name__ == "__main__":
     chk("透明度可调", abs(o.st["opacity"] - (a0 - 0.1)) < 1e-6)
     chk("几何在屏内", o.geo[2] > 200 and o.geo[3] > 40)
     o.reset()
-    chk("可重置", o.st["font_size"] == 38)
+    chk("可重置", o.st["font_size"] == 26)
     o.close()
     chk("设置落盘", os.path.exists(SETTINGS))
     print(f"\n合计 {ok} 通过 / {fail} 失败")
