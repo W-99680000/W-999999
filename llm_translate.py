@@ -121,6 +121,68 @@ def _clean(s):
     return s
 
 
+# ── 合并翻译（一次调用译多段）──────────────────────────────────
+#
+# 为什么需要：实测（_bench_mt_cost.py）每次调用有 **0.57 秒固定开销**，
+# 而真实翻译计算几乎为 0 ——
+#     qwen-mt-flash: 耗时 ≈ 0.770ms/字符 × 长度 + 0.569s
+#     5 字符 0.554s　→　133 字符 0.660s（长 27 倍，耗时只涨 19%）
+# 所以同一批里多段分开译，等于把固定开销付了多次。
+#
+# 什么格式能用（_bench_mt_batch.py 实测，4 段）：
+#     编号行   解析 1/4  ✗  "1. 好吧。"
+#     XML标记  解析 1/4  ✗  "<t>好的。</t>"
+#     分隔符   解析 4/4  ✓
+#     JSON数组 解析 4/4  ✓
+# **qwen-mt 是纯翻译引擎、不执行指令** —— 它把"编号行/XML"当成待翻译的
+# 正文，译了第一行就停。而分隔符与 JSON 结构被当作文本保留下来。
+# 所以只能用分隔符，不能用"请按编号输出"这类指令式提示。
+#
+# 效果：4 段合并 0.73s vs 逐条 2.36s（每段 0.59s → 0.18s）。
+# **分隔符必须是纯字母。** 我第一版用 |||，模型输出里确实保留了，
+# 但**我们自己的 clean_translation 把它删掉了** ——
+# 那个函数用白名单过滤（只留 CJK + 拉丁字母 + 数字），
+# 竖线/at 号/百分号/段落分隔符全在白名单外。
+# 实测（_bench_sep 系列）：
+#     'XXSEPXX' 保留 ✓   'SEP' 保留 ✓   'ZzQq' 保留 ✓
+#     '|||' '@@@' '%%%' '§§§' '\u2028' 全被删 ✗
+# 所以用什么分隔符的决定性约束不是模型，是**我们自己后处理的白名单**。
+BATCH_SEP = "XXSEPXX"
+
+BATCH_PROMPT = (
+    "把下面用 {sep} 分隔的每一段翻译成{target}。"
+    "输出同样用 {sep} 分隔，段数必须与输入完全一致，只输出译文。\n\n{body}"
+)
+
+
+def translate_batch(translator, texts, target="Simplified Chinese",
+                    max_items=6):
+    """一次调用翻译多段；返回与 texts **等长**的列表。
+
+    失败（段数对不上/异常）就退回**逐条翻译** —— 宁可慢，不能错位。
+    调用方按 zip 取用，所以返回长度必须严格等于输入长度。
+    """
+    items = [("" if x is None else str(x)) for x in texts]
+    if not items:
+        return []
+    if len(items) == 1 or max_items < 2 or len(items) > max_items:
+        return [translator(x, target=target) if x else "" for x in items]
+    body = (" " + BATCH_SEP + " ").join(items)
+    prompt = BATCH_PROMPT.format(sep=BATCH_SEP, target=target, body=body)
+    try:
+        raw = translator(prompt, target=target)
+    except Exception:
+        raw = ""
+    if raw and BATCH_SEP in raw:
+        parts = [p.strip() for p in raw.split(BATCH_SEP)]
+        parts = [p for p in parts if p]
+        if len(parts) == len(items):
+            return parts
+    # 退回逐条（并留下痕迹，便于诊断为什么合并失败）
+    translator.batch_fallbacks = getattr(translator, "batch_fallbacks", 0) + 1
+    return [translator(x, target=target) if x else "" for x in items]
+
+
 class LLMTranslator:
     """一个后端，两种协议。
 

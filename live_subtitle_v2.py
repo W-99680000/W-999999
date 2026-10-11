@@ -1066,7 +1066,15 @@ class Translator:
                 "ru": "Russian", "vi": "Vietnamese",
                 "fr": "French", "de": "German", "es": "Spanish"}.get(d, d)
 
-    def __call__(self, text):
+    def __call__(self, text, target=None):
+        """target 参数是为了和 llm_translate.translate_batch 的接口对齐。
+
+        translate_batch 会对译器调 `tr(text, target=...)`，而这个类的
+        目标语言在构造时就定了（self.dst），所以这里**忽略 target**。
+        没对齐时的后果实测过：TypeError 被 translate_batch 吞掉 →
+        合并翻译永远退回逐条 → 优化静默失效（日志里只有
+        "翻译线程异常: ... unexpected keyword argument 'target'"）。
+        """
         text = (text or "").strip()
         if not text:
             return ""
@@ -1536,6 +1544,15 @@ def run(args):
     # 待翻译的 (段, 原文)：识别保持小块高频，翻译攒到语义边界再做。
     # 依据见主循环里那段注释（碎片翻译 vs 整句翻译，质量差别实测很大）。
     mt_pending = []
+    # 合并翻译的状态：
+    #   mt_units    攒好的"语义单元"，等够 mt_batch 个再一次译完
+    #   mt_first_t  第一个单元的到达时间（攒批的兜底计时）
+    #   _ph_seg     占位段：显示只需文本，段长只在日志里用
+    # 为什么攒单元而不只合并批内段：qwen-mt 每次调用 0.57s 是**固定开销**，
+    # 而一批通常只有一个语义单元 —— 只在批内合并等于没省。
+    mt_units = []
+    mt_first_t = None
+    _ph_seg = np.zeros(int(0.5 * TARGET_RATE), dtype=np.float32)
 
     def _drain_one(timeout=None):
         """取一批译文进来（耐心可选）。"""
@@ -1755,22 +1772,50 @@ def run(args):
             _flush = (args.mt_cap <= 0 or _is_natural
                       or _pt >= args.mt_cap)
             if mt_pending and _flush:
-                _keep_out = list(mt_pending)
+                # 攒成**一个语义单元**（合并多段原文，译文更完整）
+                mt_units.append(" ".join(t for _s, t in mt_pending))
                 mt_pending = []
+            # ── 合并翻译的触发：攒够 mt_batch 个单元，或等太久 ──────
+            # 为什么要攒**单元**而不是只合并单批内的段：
+            # qwen-mt 每次调用 0.57s 是**固定开销**（实测耗时≈
+            # 0.770ms/字符+0.569s），一批通常只有一个语义单元，
+            # 所以只在批内合并等于没省 —— 必须跨批攒几个单元再一次译。
+            #     4 单元合并 0.734s　vs　逐条 2.428s（每段 0.61s→0.18s）
+            # 攒批上限用时间兜底（args.mt_batch_wait），避免为等第 N 个
+            # 单元让字幕卡住。
+            _now = time.time()
+            if mt_units and (len(mt_units) >= args.mt_batch
+                             or (mt_first_t and
+                                 _now - mt_first_t >= args.mt_batch_wait)):
+                _units = mt_units[:]
+                mt_units = []
+                mt_first_t = None
                 _tr_now = tr          # 快照：批边界可能换译器
                 _bno = _seq_in[0]
                 _seq_in[0] += 1
+                # 用占位段：显示时只需要文本，段长只用于日志
+                _segs_b = [(_ph_seg, u) for u in _units]
 
-                def _do_translate(_bno, _keep, _tr):
-                    # 合并成一个语义单元再翻译（这是质量提升的来源）
+                def _do_batch(_bno, _units, _segs, _tr):
+                    """一次调用译多个语义单元（分隔符格式）。"""
                     try:
-                        _zh = [_tr(" ".join(t for _s, t in _keep))]
+                        from llm_translate import translate_batch
+                        _zh = translate_batch(_tr, _units,
+                                              max_items=max(2, args.mt_batch))
                     except Exception as _e:
                         print(f"  翻译线程异常: {type(_e).__name__} {_e}")
-                        _zh = [""]
-                    done_q.put((_bno, _keep, _zh))
+                        _zh = ["" for _ in _units]
+                    if len(_zh) != len(_units):
+                        # 长度对不上宁可退回逐条，也不能错位
+                        try:
+                            _zh = [_tr(u) for u in _units]
+                        except Exception:
+                            _zh = ["" for _ in _units]
+                    done_q.put((_bno, _segs, _zh))
 
-                _th_pool.submit(_do_translate, _bno, _keep_out, _tr_now)
+                _th_pool.submit(_do_batch, _bno, _units, _segs_b, _tr_now)
+            elif mt_units and mt_first_t is None:
+                mt_first_t = _now
             t_end = time.time() - t0
             per_call = t_asr
             # 顺手把已经译好的批显示掉（不阻塞）
@@ -1801,10 +1846,11 @@ def run(args):
             pass
         # 收尾：把还没达到语义边界的待译文本也译掉，否则最后一句会丢
         try:
-            if mt_pending:
-                _tail = " ".join(t for _s, t in mt_pending)
-                if _tail:
-                    done_q.put((_seq_in[0], list(mt_pending), [tr(_tail)]))
+            _tail_all = [x for _s, x in mt_pending] + list(mt_units)
+            if _tail_all:
+                _joined = " ".join(_tail_all)
+                if _joined:
+                    done_q.put((_seq_in[0], [(_ph_seg, _joined)], [tr(_joined)]))
                     _seq_in[0] += 1
         except Exception:
             pass
@@ -1952,6 +1998,20 @@ def selftest():
     chk("google-free 请求里带 sl=auto", "sl=auto" in _u)
     chk("不再出现 sl=vi（源语言由 Google 判）", "sl=vi" not in _u)
     chk("目标语言仍是 zh-CN", "tl=zh-CN" in _u)
+    print("\n二之八、合并翻译的分隔符必须能活过清理函数")
+    # 故障复现：分隔符用 "|||"，模型输出里保留了，但**我们自己的
+    # clean_translation 把它删掉了**（白名单只留 CJK+拉丁字母+数字），
+    # 于是合并结果被粘成一段、长度对不上、静默退回逐条 —— 优化失效
+    # 但没有任何报错。所以这里断言：分隔符必须活过清理。
+    from llm_translate import BATCH_SEP as _BS
+    _probe = "第一段。" + _BS + "第二段。"
+    chk("分隔符 %r 能活过 clean_translation" % _BS,
+        _BS in clean_translation(_probe))
+    chk("分隔符是纯字母（白名单才留）", _BS.isalpha())
+    for _bad in ("|||", "@@@", "%%%"):
+        chk("反例 %r 确实会被删（说明这条检查有意义）" % _bad,
+            _bad not in clean_translation("甲。" + _bad + "乙。"))
+
     print("\n二之七、命令行参数一致性（防「用了没定义」）")
     # 回归：我把 args.prefer_offline 用进了代码，却没写 --prefer-offline
     # 的 add_argument，程序**启动即崩**（操作者看到的是"不显示字幕"）。
@@ -2247,6 +2307,11 @@ def build_parser():
     # 实测（_bench_merge_translate.py）：识别块 1.5s 会产出 11 条碎片
     # （"我从没想过我会。" / "再见。" / "警察。"），而攒到语义边界后
     # 只有 3~4 条完整句。延迟低和译文好原来被绑在一个开关上，现在拆开。
+    # 合并翻译：攒几个语义单元一次译完（摊薄 qwen-mt 的 0.57s 固定开销）
+    ap.add_argument("--mt-batch", type=int, default=3,
+                    help="攒几个语义单元合并成一次翻译调用（1=关闭）")
+    ap.add_argument("--mt-batch-wait", type=float, default=2.0,
+                    help="攒批最多等多少秒（防字幕卡住）")
     ap.add_argument("--mt-cap", type=float, default=8.0,
                     help="翻译最多攒多少秒音频（到上限就译，防止一句话等太久）")
     ap.add_argument("--no-mt-merge", dest="mt_cap", action="store_const",
