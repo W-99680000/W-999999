@@ -27,6 +27,7 @@ import shutil
 import sys
 
 ROOT_FILES = ["live_subtitle_v2.py", "overlay_qt.py", "streaming_asr.py",
+              "streaming_asr2.py",
               "get_models.py", "get_vi_models.py", "README.md",
               "start.bat", "stream.bat",
               "publish_github.py", "sync_release.py"]
