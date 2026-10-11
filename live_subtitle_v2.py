@@ -1284,15 +1284,26 @@ def run(args):
                 print(f"  远端识别已启用：{_rasr.status()}")
                 print(f"      批量上限放宽到 {args.max_batch}s"
                       f"（远端一次吃得下长音频）")
-                # 远端能吃长音频：批次放大以减少调用次数与等待次数。
-                # 这是端到端延迟的主要来源之一（"等句子说完"）。
-                if args.max_batch < 8.0 and not args.no_widen:
+                # **批次要缩小，不是放大。** 我第一版想反了：以为远端能
+                # 吃长音频就该放大批次来摊薄调用开销。那是**本地**的逻辑
+                # （本地固定开销 2.0s，只有放大批次才划算）。
+                # 远端固定开销只有 0.427s、斜率 0.029s/音频秒，所以
+                # **等批次攒齐的时间反而成了主要成本**。
+                # 实测（_bench_chunk_size.py，45 秒真实音频、实时喂入）：
+                #     max_batch  中位延迟  P90    调用数
+                #       12.0s     0.77s   0.83s     3
+                #        8.0s     0.69s   0.71s     4
+                #        2.0s     0.49s   0.55s    15
+                #        1.0s     0.37s   0.45s    39
+                # 限流 RPM=100，1 秒一批 = 60 RPM，在限内。
+                # 取 1.5s：延迟接近最优，调用数只有一半，留足余量。
+                if args.max_batch > 1.5 and not args.no_widen:
                     old = args.max_batch
-                    args.max_batch = 8.0
-                    args.max_wait = max(args.max_wait, 2.0)
+                    args.max_batch = 1.5
+                    args.max_wait = 0.6
                     th.max_batch, th.max_wait = args.max_batch, args.max_wait
                     print(f"      批次 {old}s → {args.max_batch}s"
-                          f"，等待 ≤{th.max_wait}s")
+                          f"（远端固定开销仅 0.43s，小批次延迟更低）")
         print(f"转写: 分块 {args.model}　批量≤{args.max_batch}s / 等≤{args.max_wait}s")
         print("      优点：字幕与音频同步、不积压")
         print("      代价：要等整段说完（首字延迟 = 段长 + 1.5s）")
