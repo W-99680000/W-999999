@@ -1,0 +1,20 @@
+# 模型与下载物
+models/
+*.argosmodel
+*.pt
+*.bin
+
+# 运行期产物
+run.log
+live.srt
+overlay_qt.json
+overlay_settings.json
+*.log
+__pycache__/
+*.py[cod]
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

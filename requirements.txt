@@ -1,0 +1,11 @@
+# live-subtitle dependencies
+#   pip install -r requirements.txt
+#
+# 实测环境无可用 GPU（cuBLAS 缺失），全部按 CPU 调优。
+# 需要 GPU 推理请自行安装对应 cuBLAS / cuDNN。
+
+numpy>=1.24
+PyAudioWPatch>=0.2.12.8      # WASAPI 环回采集（抓系统播放的声音）
+faster-whisper>=1.0          # 语音识别
+PyQt5>=5.15                  # 透明置顶浮窗
+argostranslate>=1.9          # 离线翻译（注意：没有 vi->zh 直连包）
