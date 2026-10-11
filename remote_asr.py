@@ -42,6 +42,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import ssl
 import time
 import urllib.error
@@ -66,6 +67,48 @@ def read_key(path=DASHSCOPE_KEYS_FILE):
     except Exception:
         pass
     return ""
+
+
+# ── 错误分类 ────────────────────────────────────────────────────
+# 借鉴华为 AICaptionComponent 的做法：它把失败分成不同错误码，
+# 每种含义不同 ——
+#     1012900010  AI caption service is busy       服务忙
+#     1012900011  controller initialized failed    初始化失败
+#     1012900012  Audio recognition failed         识别失败
+# **我们原来四种错误一律当"无结果"**：欠费、限流、网络断、这段音频
+# 真的没内容，全都走同一条路（丢掉这段字幕），既不重试也不回退。
+# 那是"字幕消失"类故障的温床。
+#
+# 现在分三类，处理方式不同：
+#   transient  临时故障（限流/网络/服务忙）→ 值得重试，重试不成继续试
+#   permanent  不会自愈（欠费/鉴权/余额）→ 重试无用，**停用远端改走本地**
+#   none       调用成功但这段没内容（静音/噪声）→ 正常情况，不该告警
+TRANSIENT_CODES = {429, 500, 502, 503, 504}
+PERMANENT_CODES = {401, 403}
+PERMANENT_WORDS = ("arrearage", "insufficient", "balance", "quota",
+                   "invalid api key", "incorrect api key", "not authorized",
+                   "authentication")
+
+
+def classify_error(err, http_code=None):
+    """把错误归到 transient / permanent / none。
+
+    err: last_err 字符串（形如 "HTTP 429: ..." 或 "URLError: ..."）
+    """
+    e = (err or "").lower()
+    code = http_code
+    if code is None:
+        m = re.match(r"http\s+(\d+)", e)
+        if m:
+            code = int(m.group(1))
+    if code in PERMANENT_CODES or any(w in e for w in PERMANENT_WORDS):
+        return "permanent"
+    if code in TRANSIENT_CODES:
+        return "transient"
+    if not e:
+        return "none"            # 没有错误 = 调用成功但没内容
+    # 没识别出 HTTP 码的网络类错误都算临时
+    return "transient"
 
 
 def pcm_to_wav_bytes(pcm_f32, rate=16000):
@@ -100,12 +143,28 @@ class RemoteASR:
         self.last_emotion = None
 
     def __call__(self, audio, rate=16000):
-        """audio: float32 numpy 数组 → (文本, 语种)。失败返回 ("", None)。"""
+        """audio: float32 numpy 数组 → (文本, 语种)。
+
+        失败返回 ("", None)，并设置 self.last_err / last_kind：
+            last_kind = "transient" | "permanent" | "none"
+        调用方（BatchTranscriber）按类别决定**重试还是回退本地**。
+        临时故障在这里内部重试一次（限流与网络抖动很常见，重试往往就成了）；
+        只重试一次，再失败交给上层，不在这里拖时间。
+        """
         if not self.ok or audio is None or len(audio) == 0:
             return "", None
+        txt, lang = self._attempt(audio, rate)
+        if txt or self.last_kind != "transient":
+            return txt, lang
+        time.sleep(0.25)          # 限流的恢复窗口通常很短
+        self.retries += 1
+        return self._attempt(audio, rate)
+
+    def _attempt(self, audio, rate=16000):
         try:
             wav = pcm_to_wav_bytes(audio, rate)
         except Exception:
+            self.last_kind = "none"
             return "", None
         uri = "data:audio/wav;base64," + base64.b64encode(wav).decode()
         body = json.dumps({
@@ -126,14 +185,21 @@ class RemoteASR:
                 j = json.loads(r.read().decode("utf-8", "replace"))
         except urllib.error.HTTPError as e:
             self.fails += 1
-            self.last_err = f"HTTP {e.code}: {e.read().decode('utf-8','replace')[:150]}"
+            self.last_code = e.code
+            self.last_err = (f"HTTP {e.code}: "
+                             f"{e.read().decode('utf-8', 'replace')[:150]}")
+            self.last_kind = classify_error(self.last_err, e.code)
             return "", None
         except Exception as e:
             self.fails += 1
+            self.last_code = None
             self.last_err = f"{type(e).__name__}: {str(e)[:120]}"
+            self.last_kind = classify_error(self.last_err)
             return "", None
         self.calls += 1
         self.t_last = time.time() - t0
+        self.last_err = ""
+        self.last_kind = "none"       # 调用成功；没内容也算 none
         try:
             msg = j["choices"][0]["message"]
             text = (msg.get("content") or "").strip()

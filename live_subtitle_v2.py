@@ -648,13 +648,38 @@ class BatchTranscriber:
                 self.last_lang_prob = 0.99      # 远端自己判的，视为高置信
             if not txt:
                 self.rejected_remote += 1
-                if self.rejected_remote in (1, 5, 20) or \
-                        self.rejected_remote % 50 == 0:
-                    _s = self.last_remote_stats
-                    print(f"  ！远端识别无结果（连续第 {self.rejected_remote} 次）"
-                          f"　音频 {_s['secs']:.1f}s RMS {_s['rms']:.4f}"
-                          f"　调用 {_s['calls']} 失败 {_s['fails']}"
-                          f"　错误: {_s['err'] or '无（返回空串）'}", flush=True)
+                # ── 按错误类别处理（借鉴华为 AICaptionComponent）──────
+                # 原来四种情况一律"丢掉这段字幕"：欠费、限流、网络断、
+                # 这段音频真的没内容 —— 全走同一条路。那是"字幕消失"类
+                # 故障的温床。现在分三类：
+                #   permanent → 重试无用（欠费/鉴权），**停用远端走本地**
+                #               （慢 2 秒但有字幕，不会整场消失）
+                #   transient → 已经在 RemoteASR 里重试过一次仍失败，
+                #               保留远端继续试下一批（限流通常很快恢复）
+                #   none      → 调用成功、这段确实没内容（静音/噪声），
+                #               正常情况，不该告警
+                _kind = getattr(_rem, "last_kind", "none")
+                if _kind == "permanent":
+                    self.remote_disabled = True
+                    self.remote = None       # 主循环下一批自动走本地
+                    print(f"  ！远端识别不可用（{_kind}）——已**切回本地 whisper**"
+                          f"　原因: {getattr(_rem, 'last_err', '')[:110]}",
+                          flush=True)
+                    print("     字幕不会消失，但延迟会从 ~0.9s 升到 ~4.9s",
+                          flush=True)
+                elif _kind == "transient":
+                    if self.rejected_remote in (1, 5, 20) or \
+                            self.rejected_remote % 50 == 0:
+                        _s = self.last_remote_stats
+                        print(f"  ！远端临时故障（连续第 "
+                              f"{self.rejected_remote} 次，已内部重试 "
+                              f"{getattr(_rem, 'retries', 0)} 次）"
+                              f"　音频 {_s['secs']:.1f}s"
+                              f"　错误: {_s['err'][:100]}", flush=True)
+                else:
+                    # none：调用成功但这段没内容（静音/纯噪声）。
+                    # 正常现象，不告警、不计入故障。
+                    self.rejected_remote = max(0, self.rejected_remote - 1)
                 return [""] * n_in
             self.rejected_remote = 0
             # 远端不做字级时间戳，无法按段切分 → 整段结果给最长的那一段，
@@ -1716,6 +1741,8 @@ def run(args):
 
 
 def selftest():
+    # 错误分类来自远端模块（自检要验它）
+    from remote_asr import classify_error
     ok = fail = 0
 
     def chk(n, c):
@@ -1842,6 +1869,21 @@ def selftest():
     chk("google-free 请求里带 sl=auto", "sl=auto" in _u)
     chk("不再出现 sl=vi（源语言由 Google 判）", "sl=vi" not in _u)
     chk("目标语言仍是 zh-CN", "tl=zh-CN" in _u)
+    print("\n二之六、远端错误分类（欠费不该让字幕消失）")
+    _cases = [
+        ("HTTP 429: rate limit exceeded", 429, "transient"),
+        ("HTTP 503: service unavailable", 503, "transient"),
+        ("URLError: connection reset", None, "transient"),
+        ("HTTP 401: Incorrect API key provided", 401, "permanent"),
+        ("HTTP 403: forbidden", 403, "permanent"),
+        ("HTTP 400: Arrearage", 400, "permanent"),
+        ("HTTP 400: insufficient balance", 400, "permanent"),
+        ("", None, "none"),
+    ]
+    for _e, _c, _want in _cases:
+        chk("分类 %s -> %s" % (_e[:32] or "(空)", _want),
+            classify_error(_e, _c) == _want)
+
     print("\n二之五、识别节拍与翻译节拍解耦（回归碎片字幕）")
     # 故障复现：识别块太小 → 每个碎片被单独翻译 →
     # 我从没想过我会。 / 再见。 / 警察。 这种碎字幕。
