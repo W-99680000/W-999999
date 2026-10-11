@@ -27,7 +27,7 @@ import shutil
 import sys
 
 ROOT_FILES = ["live_subtitle_v2.py", "overlay_qt.py", "streaming_asr.py",
-              "streaming_asr2.py", "llm_translate.py", "remote_asr.py", "streaming_asr_remote.py", "control_panel.py",
+              "streaming_asr2.py", "llm_translate.py", "remote_asr.py", "gpu_setup.py", "streaming_asr_remote.py", "control_panel.py",
               "get_models.py", "get_vi_models.py", "README.md",
               "start.bat", "stream.bat", "panel.bat",
               "publish_github.py", "sync_release.py"]
@@ -47,7 +47,7 @@ TOOLS = ["test_pipeline.py", "test_borrowed.py", "test_drag2.py", "test_loopback
          "_bench_chunk_size.py",      # 批次大小 vs 端到端延迟
          "_probe_streaming_asr.py",   # 流式 WebSocket 探测
          "_probe_streaming2.py",      # 流式精确延迟（修正版）
-         "_measure_e2e_lag.py", "_bench_ja.py", "_diag_ja.py", "_diag_ja2.py", "_bench_punct_split.py", "_bench_punct2.py", "_bench_merge_translate.py", "_bench_decouple.py", "_bench_params.py",       # 端到端延迟主测量工具
+         "_measure_e2e_lag.py", "_test_full_gpu.py", "_test_multilang.py", "_test_compare.py", "_bench_gpu.py", "_bench_ja.py", "_diag_ja.py", "_diag_ja2.py", "_bench_punct_split.py", "_bench_punct2.py", "_bench_merge_translate.py", "_bench_decouple.py", "_bench_params.py",       # 端到端延迟主测量工具
          "_measure_lag.py", "_trace_drop.py", "_capture_streaming.py"]
 # 样本：只放跑得动的小文件。vi_long.wav / vi_sample.wav 是几 MB 的
 # 真实素材，属于本地测试资产，不进仓库。

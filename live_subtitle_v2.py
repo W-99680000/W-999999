@@ -592,9 +592,25 @@ class BatchTranscriber:
       · 或攒了 max_wait 秒还没走（防止一直等不到长音频而不出字幕）
     """
 
-    def __init__(self, model="small", threads=4, max_batch=5.0, max_wait=1.2):
+    def __init__(self, model="small", threads=4, max_batch=5.0, max_wait=1.2,
+                 device="cpu", compute_type="int8"):
+        """device/compute_type 可切 GPU。
+
+        GPU 实测（RTX 4070，_test_compare.py）：4 秒音频
+            CPU int8   2.134s   （固定成本约 2.0s，与音频长短无关）
+            GPU float16 0.603s（medium）／0.405s（small）
+        差 3.5~11 倍。所以默认优先 GPU，见 run() 里的设备选择。
+        """
         from faster_whisper import WhisperModel
-        self.m = WhisperModel(model, device="cpu", compute_type="int8",
+        if device == "cuda":
+            # 必须先把 CUDA 库目录加进 PATH，否则前向时报
+            # cublas64_12.dll not found（加载模型时不报，很有误导性）
+            try:
+                from gpu_setup import enable_cuda_dlls
+                enable_cuda_dlls()
+            except Exception:
+                pass
+        self.m = WhisperModel(model, device=device, compute_type=compute_type,
                               cpu_threads=threads)
         self.max_batch = max_batch
         self.max_wait = max_wait
@@ -1344,9 +1360,60 @@ def run(args):
         print("      优点：首字延迟 ≈ 一次更新耗时（1–2s），不用等整句")
         print("      代价：CPU 上长时间连续说话时缓冲会积压到上限，字幕会落后")
     else:
-        th = BatchTranscriber(args.model, args.threads,
-                              max_batch=args.max_batch, max_wait=args.max_wait)
-        # ── 远端识别（阿里云百炼 qwen3-asr-flash）────────────────
+        # ── 识别设备选择：**本地 GPU 优先** ─────────────────────
+        #
+        # 我之前的判断错了，这里记下来：
+        #   早先一次 "cublas64_12.dll not found" 报错，我据此推断
+        #   "本机没有可用 GPU"，于是把识别搬到远端，并把这个前提写进了
+        #   README 和注释。**实际是 GPU 存在、只缺 CUDA 运行库。**
+        #   nvidia-smi 显示：RTX 4070 Laptop，8188 MiB，CC 8.9。
+        #   正确做法是查硬件，不是从一次失败推断硬件不存在。
+        #
+        # 补齐 CUDA 库后（pip install nvidia-cublas-cu12，加到 PATH）
+        # 实测 GPU 全面优于远端（_test_compare.py，12 个 4 秒批次）：
+        #     方案              中位    识别     显存
+        #     本地 small (GPU)  1.04s  0.405s   605MB
+        #     本地 medium(GPU)  1.22s  0.603s  1615MB   ← 默认
+        #     本地 large-v3     1.46s  0.846s  3127MB
+        #     远端 qwen3-asr     1.54s  0.899s     —
+        # 而且准确度更高：同段越南语 news，远端把
+        #   "mua vé tàu"（买火车票）听成其他词，medium/large-v3 正确；
+        # 远端还全部输出小写（API 不还原大小写）。
+        # 另外：本地才有 no_speech_prob / avg_logprob 这些**幻觉检测信号**，
+        # 远端只返回一段文本，无法判废。
+        _dev = getattr(args, "device", "auto")
+        _use_gpu = False
+        if _dev in ("auto", "cuda"):
+            try:
+                from gpu_setup import enable_cuda_dlls, gpu_available
+                enable_cuda_dlls()
+                _use_gpu = gpu_available()
+            except Exception as e:
+                print(f"  GPU 探测失败: {type(e).__name__} {e}")
+                _use_gpu = False
+        if _use_gpu and args.model == "small" and not args.no_gpu_upgrade:
+            # small 在 GPU 上准确度明显不足（越南语实测错词），
+            # 而 medium 只慢 0.2s、显存多 1GB。自动升到 medium。
+            args.model = "medium"
+            print("  模型自动升到 medium（small 在 GPU 上准确度不足，"
+                  "medium 只慢 0.2s）")
+        if _use_gpu:
+            th = BatchTranscriber(args.model, args.threads,
+                                  max_batch=args.max_batch,
+                                  max_wait=args.max_wait,
+                                  device="cuda", compute_type="float16")
+            args.remote_asr = False        # 本地可用时不走远端
+            print(f"  识别：本地 GPU　模型 {args.model}　float16")
+        elif _dev == "cuda":
+            print("  指定了 --device cuda 但 GPU 不可用，回退")
+            th = BatchTranscriber(args.model, args.threads,
+                                  max_batch=args.max_batch,
+                                  max_wait=args.max_wait)
+        else:
+            th = BatchTranscriber(args.model, args.threads,
+                                  max_batch=args.max_batch,
+                                  max_wait=args.max_wait)
+        # ── 远端识别（仅在没有可用 GPU 时）──────────────────────
         # 本地 CPU 的延迟已到天花板（_bench_bottleneck.py 实测）：
         #   一次 transcribe 固定成本 ≈ 2.0 秒，**与音频长短无关**
         #   （0.2 秒音频 2.078s、8 秒音频 2.288s）
@@ -2137,6 +2204,16 @@ def build_parser():
     ap.add_argument("--from", dest="src", default="en")
     ap.add_argument("--to", dest="dst", default="zh")
     ap.add_argument("--model", default="small")
+    # 识别设备。**默认 auto：有可用 GPU 就用 GPU。**
+    # 实测（_test_compare.py，12 个 4 秒批次）：
+    #     本地 medium (GPU)  中位 1.22s　识别 0.603s　显存 1615MB
+    #     远端 qwen3-asr     中位 1.54s　识别 0.899s
+    # 本地又快又准，还不花钱、不联网。
+    ap.add_argument("--device", choices=["auto", "cpu", "cuda"],
+                    default="auto",
+                    help="识别设备：auto(默认，有 GPU 就用) / cpu / cuda")
+    ap.add_argument("--no-gpu-upgrade", action="store_true",
+                    help="GPU 上不自动把 small 升到 medium")
     ap.add_argument("--threads", type=int, default=4)
     # 英文是否优先走离线 argos。**默认否** —— 实测 qwen-mt 每项都优于
     # argos（"东京都知事" 被 argos 译成 "东京都督"），代价只有 0.25s。
