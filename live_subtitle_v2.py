@@ -1370,7 +1370,20 @@ def run(args):
     if getattr(args, "mt_local", False) and not LOCAL_MT:
         try:
             from local_mt import from_args as _local_from_args
-            _lm = _local_from_args(model=args.mt_local_model)
+            _terms = []
+            for _it in (getattr(args, "mt_terms", None) or []):
+                if os.path.isfile(_it):
+                    for _ln in open(_it, encoding="utf-8"):
+                        _ln = _ln.strip()
+                        if _ln and not _ln.startswith("#") and "=" in _ln:
+                            _a, _b = _ln.split("=", 1)
+                            _terms.append((_a.strip(), _b.strip()))
+                elif "=" in _it:
+                    _a, _b = _it.split("=", 1)
+                    _terms.append((_a.strip(), _b.strip()))
+            if _terms:
+                print(f"  术语表 {len(_terms)} 条")
+            _lm = _local_from_args(model=args.mt_local_model, terms=_terms)
             if _lm is not None:
                 LOCAL_MT.append(_lm)
         except Exception as _e:
@@ -2367,6 +2380,12 @@ def build_parser():
     # 接上后用 --mt-local 切过去，可以对比着看。
     ap.add_argument("--mt-local", action="store_true",
                     help="用本地 HY-MT 翻译模型（需 llama.cpp + GGUF 模型）")
+    # 术语干预（官方能力，实测真生效）：修人名/地名/专业词。
+    # 格式 原文=译文，可重复；或给一个文件，每行一条。
+    # 实测：doãn chung dũng 无术语→邓忠义，注入后→段忠勇；
+    #       số phét 无术语→各种证据，注入后→指纹。
+    ap.add_argument("--mt-terms", action="append", default=[],
+                    help="术语干预，格式 原词=译法；给文件路径则逐行读")
     ap.add_argument("--mt-local-model", default=None,
                     help="指定本地翻译模型路径（默认自动找 F 盘的 HY-MT）")
     ap.add_argument("--mt-batch", type=int, default=3,

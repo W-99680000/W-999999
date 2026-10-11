@@ -73,7 +73,37 @@ BOS = "<\uff5chy_begin\u2581of\u2581sentence\uff5c>"
 USER = "<\uff5chy_User\uff5c>"
 ASST = "<\uff5chy_Assistant\uff5c>"
 
-DEFAULT_PROMPT = "把下面的文本翻译成中文，只输出译文：\n{src}"
+# ── 官方提示词模板（来源：Tencent-Hunyuan/HY-MT README，非推测）──────
+# 官方区分两种，**不能混用**：
+#   中↔XX（含中文，用中文提示词）→ 下面这个
+#   XX↔XX（不含中文，用英文提示词）→ TPL_XX
+# 实测差异（_bench_hymt_official.py，真实越南语 4 段）：
+#     我的自造模板 + 我的参数   0.49s
+#     官方模板     + 我的参数   0.49s
+#     **官方模板 + 官方参数     0.25s（快 2~4 倍）**
+TPL_ZH = ("将以下文本翻译为{target}，注意只需要输出翻译后的结果，"
+          "不要额外解释：\n\n{src}")
+TPL_XX = ("Translate the following segment into {target}, "
+          "without additional explanation.\n\n{src}")
+
+# 术语干预（官方预留的能力）。实测**真的生效**：
+#     "số phét"     无术语→"各种证据"   注入后→"指纹"        ✓
+#     "doãn chung dũng" 无术语→"邓忠义"  注入后→"段忠勇"      ✓
+#     "quảng ninh"  无术语→"广宁"      注入后→"广宁省"      ✓
+# 注意它救不了**源文本自身就是错的**情况（如 ASR 错字）—— 上游错则下游难救。
+TPL_TERM = ("参考下面的翻译：\n{src_term} 翻译成 {tgt_term}\n\n" + TPL_ZH)
+
+# 官方推荐推理参数（README 给的 JSON）。
+# 我原来用 top_p=1.0 且没开 repetition_penalty —— 那很可能就是
+# 复读（"thep thep thep..."）的来源。实测官方参数还快 2~4 倍。
+OFFICIAL_PARAMS = {
+    "temperature": 0.7,
+    "top_k": 20,
+    "top_p": 0.6,
+    "repeat_penalty": 1.05,
+}
+# 兼容旧名（我最初的参数）
+DEFAULT_PROMPT = TPL_ZH
 
 
 def find_binary(name="llama-server.exe"):
@@ -103,13 +133,20 @@ class LocalMT:
     """管理 llama-server 子进程，并按 HY-MT 的模板发请求。"""
 
     def __init__(self, model=None, port=8145, n_ctx=1024, n_gpu_layers=99,
-                 prompt_template=DEFAULT_PROMPT, start_timeout=180):
+                 prompt_template=None, start_timeout=180, target="中文",
+                 params=None, terms=None):
         self.model = model or find_model()
         self.bin = find_binary()
         self.port = int(port)
         self.n_ctx = int(n_ctx)
         self.ngl = int(n_gpu_layers)
-        self.tpl = prompt_template or DEFAULT_PROMPT
+        self.tpl = prompt_template or TPL_ZH
+        self.target = target or "中文"
+        self.params = dict(OFFICIAL_PARAMS)
+        if params:
+            self.params.update(params)
+        # 术语表 [(源词, 目标译法)]。注入时按"源词出现在文本里"逐条加。
+        self.terms = list(terms or [])
         self.start_timeout = start_timeout
         self.proc = None
         self.ok = bool(self.bin and self.model)
@@ -117,6 +154,7 @@ class LocalMT:
         self.t_last = 0.0
         self.t_start = 0.0
         self.last_err = ""
+        self.terms_used = 0
 
     @property
     def base(self):
@@ -167,14 +205,21 @@ class LocalMT:
         text = (text or "").strip()
         if not text or not self.ok:
             return ""
-        prompt = BOS + USER + self.tpl.format(src=text) + ASST
-        body = json.dumps({
-            "prompt": prompt, "n_predict": max(64, 4 * len(text)),
-            # 贪心解码：翻译要稳定，不要发挥（模型自带推荐是 temp0.7，
-            # 但实测 temp0 更稳、也不影响质量）
-            "temperature": 0.0, "top_k": 1, "top_p": 1.0,
-            "stream": False,
-        }, ensure_ascii=False).encode()
+        # 术语干预：只注入**在本文本里出现**的词条（官方模板）
+        hits = [(s, t) for s, t in self.terms if s and s.lower() in text.lower()]
+        if hits:
+            self.terms_used += len(hits)
+            body = "\n".join(TPL_TERM.format(src_term=s, tgt_term=t,
+                                            target=self.target, src=text)
+                             for s, t in hits)
+            prompt = body
+        else:
+            prompt = self.tpl.format(target=self.target, src=text)
+        payload = {"prompt": BOS + USER + prompt + ASST,
+                   "n_predict": max(64, 6 * len(text)),
+                   "stream": False}
+        payload.update(self.params)
+        body = json.dumps(payload, ensure_ascii=False).encode()
         req = urllib.request.Request(self.base + "/completion", data=body,
                                     headers={"Content-Type": "application/json"})
         t0 = time.time()
@@ -199,12 +244,12 @@ class LocalMT:
                 f"　失败 {self.fails}　上次 {self.t_last:.2f}s")
 
 
-def from_args(model=None, port=8145, n_ctx=1024):
+def from_args(model=None, port=8145, n_ctx=1024, terms=None):
     ok, why = available()
     if not ok:
         print(f"  本地翻译不可用：{why}")
         return None
-    m = LocalMT(model=model, port=port, n_ctx=n_ctx)
+    m = LocalMT(model=model, port=port, n_ctx=n_ctx, terms=terms)
     print(f"  启动本地翻译 {os.path.basename(m.model)} …")
     if not m.start():
         print(f"  启动失败：{m.last_err}")
