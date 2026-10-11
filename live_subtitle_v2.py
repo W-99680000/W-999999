@@ -1244,7 +1244,7 @@ def run(args):
     print(f"采集: [{cap.dev['index']}] {cap.dev['name'][:44]}")
     print("控制：**拖动字幕本身**移动（整块都能拖，点一下不会动）")
     print("      滑轮字号　Shift+滑轮条数　Alt+滑轮宽度　Ctrl+滑轮透明度")
-    print("      方向键微调　L 排布　M 调整模式（显示边框+把手）　T 深浅底")
+    print("      方向键微调　L 排布　J 对齐　M 调整模式　T 深浅底")
     print("      H 隐藏　R 重置　C 回默认位置　Esc 退出\n")
 
     seg = Segmenter(min_len=args.min_seg, max_len=args.max_seg,

@@ -70,6 +70,7 @@ echo     Alt + wheel ....... width (how early the text wraps)
 echo     Ctrl + wheel ...... opacity
 echo     arrow keys ........ nudge
 echo     L ................. layout (same line / two lines / zh only)
+echo     J ................. text align (center / left / right)
 echo     M ................. edit mode (shows border + grip for fine tuning)
 echo     T ................. theme (dark / light video)
 echo     H ................. hide / show

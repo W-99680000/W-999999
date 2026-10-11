@@ -110,6 +110,9 @@ def default_settings():
         "hold_seconds": 4.0,         # 原来 5
         "show_original": True,
         "layout": "inline",          # inline / stacked / zh_only
+        # 文字对齐。默认 center：字幕的行业惯例，而且译文/原文长度不同时
+        # 各自居中才对齐（原来没有这个设置，是左对齐）。
+        "text_align": "center",
         # 调整模式：只有打开时才画边框和拖拽把手。
         # 默认关 —— 成熟方案的字幕就是"文字浮在画面上"，没有窗口框。
         # 按 M 切换。
@@ -257,6 +260,9 @@ class QtOverlay:
         lv = d.get("layout")
         if lv in ("inline", "stacked", "zh_only"):
             out["layout"] = lv
+        tav = d.get("text_align")
+        if tav in ("left", "center", "right"):
+            out["text_align"] = tav
         ow = d.get("outline_width")
         if isinstance(ow, (int, float)) and 0 <= ow <= 5:
             out["outline_width"] = float(ow)
@@ -337,6 +343,11 @@ class QtOverlay:
         ow = float(self.st.get("outline_width", 1.65))
         gap = int(self.st.get("gap_px", 10))      # 同行时译文与原文的间距
         layout = self.st.get("layout", "inline")
+        # 对齐方式。默认居中对齐 —— 字幕的标准做法（mpv / YouTube 都是居中），
+        # 而且译文与原文长度不同时，只有各自居中才在视觉上对齐。
+        ta = self.st.get("text_align", "center")
+        if ta not in ("left", "center", "right"):
+            ta = "center"
         show_en = bool(en) and self.st.get("show_original", True) \
             and layout != "zh_only"
 
@@ -360,16 +371,22 @@ class QtOverlay:
                 parts.append(en_div())
             body = "".join(parts) or "&nbsp;"
             return (f'<div style="line-height:{lh}; margin:0; '
+                    f'text-align:{ta}; '
                     f'white-space:pre-wrap; word-wrap:break-word;">{body}</div>')
 
         # stacked / zh_only
+        # **每行各自居中**（text-align:center）。译文与原文长度不同，
+        # 各自居中才会在视觉上对齐 —— 原来完全没有 text-align，
+        # 所以是左对齐，两行左边缘齐、右边缘参差。
         rows = []
         if zh:
             rows.append(f'<div style="font-size:{fs}px; line-height:{lh}; '
-                        f'margin:0; word-wrap:break-word;">{zh_div()}</div>')
+                        f'margin:0; text-align:{ta}; '
+                        f'word-wrap:break-word;">{zh_div()}</div>')
         if show_en:
             rows.append(f'<div style="font-size:{fs_o}px; line-height:{lh}; '
-                        f'margin:1px 0 0 0; word-wrap:break-word;">{en_div()}</div>')
+                        f'margin:1px 0 0 0; text-align:{ta}; '
+                        f'word-wrap:break-word;">{en_div()}</div>')
         return "".join(rows) or "&nbsp;"
 
     # ── 几何：贴底部，按内容向上长 ────────────────────────────
@@ -561,6 +578,8 @@ class QtOverlay:
                 self.cycle_layout()
             elif k == Qt.Key_M:
                 self.toggle_edit()
+            elif k == Qt.Key_J:
+                self.cycle_align()
             # 方向键微调位置（不用鼠标也能挪）
             elif k == Qt.Key_Left:
                 self.nudge(-12, 0)
@@ -778,6 +797,20 @@ class QtOverlay:
         self._relayout()
         self._save()
 
+    def cycle_align(self):
+        """J 键循环：居中 → 左对齐 → 右对齐。
+
+        默认居中（字幕惯例）。想改的时候不用编辑配置文件。
+        """
+        order = ["center", "left", "right"]
+        cur = self.st.get("text_align", "center")
+        nxt = order[(order.index(cur) + 1) % len(order)] if cur in order else order[0]
+        self.st["text_align"] = nxt
+        self.refresh()
+        self._save()
+        print("对齐 → " + {"center": "居中", "left": "左对齐",
+                          "right": "右对齐"}[nxt], flush=True)
+
     def cycle_layout(self):
         """L 键循环：同行 → 上下两行 → 只译文。
 
@@ -966,6 +999,22 @@ if __name__ == "__main__":
         o.set("only", o.PENDING_KEEP_OLD)
         chk("哨兵且无历史译文：原文在、译文空",
             o.entries[-1][1] == "only" and o.entries[-1][2] == "")
+
+        print("\n  居中对齐（译文与原文各自居中）")
+        chk("默认 text_align = center", o.st.get("text_align") == "center")
+        o.st["layout"] = "inline"
+        _h1 = o._render_html("I never thought I would see you again",
+                             "我从没想过还能再见到你")
+        chk("inline 行有 text-align:center", "text-align:center" in _h1)
+        o.st["layout"] = "stacked"
+        _h2 = o._render_html("I never thought I would see you again",
+                             "我从没想过还能再见到你")
+        chk("stacked 两行各自居中", _h2.count("text-align:center") == 2)
+        o.cycle_align()
+        chk("J 键切到左对齐", o.st["text_align"] == "left")
+        o.cycle_align(); o.cycle_align()
+        chk("J 键循环回居中", o.st["text_align"] == "center")
+        o.st["layout"] = "inline"
 
         print("\n  坐标占位符校验（防坏设置自我延续）")
         from PyQt5.QtWidgets import QApplication as _QA
