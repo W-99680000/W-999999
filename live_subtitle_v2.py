@@ -2792,7 +2792,17 @@ def build_parser():
                     help="术语干预，格式 原词=译法；给文件路径则逐行读")
     ap.add_argument("--mt-local-model", default=None,
                     help="指定本地翻译模型路径（默认自动找 F 盘的 HY-MT）")
-    ap.add_argument("--mt-batch", type=int, default=1,
+    # **这个值和识别批是两回事，别一起改。**
+    # 实测（measure_mt2.py，每轮新建译器避开缓存）：
+    #     mt-batch 1 → 24 次调用　0.345 秒/条（慢 106%）
+    #     mt-batch 2 → 12 次调用　0.213 秒/条（慢 27%）← 默认，拐点
+    #     mt-batch 3 →  8 次调用　0.171 秒/条（慢 2%）
+    # qwen-mt 每次调用约 0.3 秒**固定开销**，合并越多摊得越薄。
+    # 我上一轮为了"字幕换得快"把它降到 1 —— 那是白搭上翻译效率：
+    # "换得慢"的杠杆是 --max-batch（识别批），不是这个。
+    # 改回 3 不会拖慢字幕：--mt-batch-wait 0.35 秒到期就发。
+
+    ap.add_argument("--mt-batch", type=int, default=2,
                     help="攒几个语义单元合并成一次翻译调用（1=关闭）")
     # **这个值设长了会让字幕消失** —— 实测 mt_batch_wait=2.0 且
     # 语音稀疏时，14 个识别批次只显示 2 条字幕。窗口一到就发才是对的。
