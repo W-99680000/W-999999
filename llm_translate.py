@@ -26,11 +26,13 @@
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
 import ssl
 import time
+import urllib.parse
 import urllib.request
 
 # 只挡掉"不值得送"的极短碎片与噪声。
@@ -207,6 +209,52 @@ class LLMTranslator:
         self.ok = bool(self.base and self.model)
         self.calls = self.fails = 0
         self.t_last = 0.0
+        # -- 连接复用（修"翻译无端断掉"）--
+        # 原来每次翻译都 urllib.request.urlopen()，**每条请求新建
+        # 一次 TCP+TLS 握手**，而且没有重连。空闲一会儿后服务端会关掉
+        # 空闲连接、代理链路上的空闲连接更容易被掐断；下一次请求失败
+        # 就直接返回空 —— 那条字幕就没译文了，看着就是"自己断了一下"。
+        # 现在复用一条长连接，断了丢掉重建并**重试一次**。
+        self._hc = None              # http.client 连接（懒建）
+        self._reconnects = 0         # 诊断：重连过几次
+
+    # -- 连接管理 --
+    def _conn(self):
+        """拿一条可用连接（懒建；断了靠 _drop_conn 重建）。"""
+        if self._hc is None:
+            u = urllib.parse.urlsplit(self.base)
+            if u.scheme == "https":
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                self._hc = http.client.HTTPSConnection(
+                    u.hostname, u.port or 443, timeout=self.timeout,
+                    context=ctx)
+            else:
+                self._hc = http.client.HTTPConnection(
+                    u.hostname, u.port or 80, timeout=self.timeout)
+        return self._hc
+
+    def _drop_conn(self):
+        try:
+            if self._hc is not None:
+                self._hc.close()
+        except Exception:
+            pass
+        self._hc = None
+
+    def _post_once(self, body, hdr):
+        """单次 POST，用复用连接。异常直接抛给调用方。"""
+        c = self._conn()
+        c.request("POST", self._path(), body=body, headers=hdr)
+        resp = c.getresponse()
+        # **必须把响应体读空**，否则连接算脏的，无法复用。
+        raw = resp.read()
+        if resp.status != 200:
+            raise RuntimeError(
+                "HTTP %d: %s" % (resp.status,
+                                 raw.decode("utf-8", "replace")[:150]))
+        return json.loads(raw.decode("utf-8", "replace"))
 
     # ── 请求体 ───────────────────────────────────────────────
     def _payload(self, text, target):
@@ -230,6 +278,17 @@ class LLMTranslator:
                 "temperature": self.temperature, "max_tokens": 220,
                 "messages": msgs}
 
+    def _path(self):
+        """请求路径（含 base 里的前缀，如 /compatible-mode/v1）。
+
+        连接复用要求主机与路径分开给 —— http.client 建连只要
+        (host, port)，路径在 request() 里给。
+        """
+        u = urllib.parse.urlsplit(self.base)
+        prefix = u.path.rstrip("/")
+        tail = "/api/generate" if self.kind == "ollama" else "/chat/completions"
+        return prefix + tail
+
     def _url(self):
         return (f"{self.base}/api/generate" if self.kind == "ollama"
                 else f"{self.base}/chat/completions")
@@ -251,27 +310,28 @@ class LLMTranslator:
         hdr = {"Content-Type": "application/json"}
         if self.kind == "openai" and self.key:
             hdr["Authorization"] = f"Bearer {self.key}"
-        req = urllib.request.Request(self._url(), data=body, headers=hdr)
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
         t0 = time.time()
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout,
-                                        context=ctx) as r:
-                j = json.loads(r.read().decode("utf-8", "replace"))
-            self.calls += 1
-            self.t_last = time.time() - t0
-            return _clean(self._extract(j))
-        except Exception:
-            self.fails += 1
-            return ""
+        # 两次尝试：连接类失败很常见（服务端空闲断连、代理抽风）。
+        # 丢掉旧连接重建再试一次；两次都失败才算真失败。
+        for attempt in (0, 1):
+            try:
+                j = self._post_once(body, hdr)
+                self.calls += 1
+                self.t_last = time.time() - t0
+                return _clean(self._extract(j))
+            except Exception:
+                self._drop_conn()
+                self._reconnects += 1
+                if attempt == 1:
+                    self.fails += 1
+                    return ""
 
     def status(self):
         if not self.ok:
             return "LLM=未配置"
         return (f"LLM={self.kind}:{self.model}　调用 {self.calls}"
-                f"　失败 {self.fails}　上次 {self.t_last:.2f}s")
+                f"　失败 {self.fails}　重连 {self._reconnects}"
+                f"　上次 {self.t_last:.2f}s")
 
 
 def from_env_or_args(base_url=None, model=None, kind=None):
