@@ -340,6 +340,25 @@ def is_hallucination(s: str) -> bool:
             chunk = core[:w]
             if core == chunk * (len(core) // w) and len(core) // w >= 5:
                 return True
+    # ④ 多词短语连环复读：「A B C, A B C, A B C, A B C, …」
+    #    （②只看单词、③只看整串，都抓不到这种 —— 实测 base 模型在
+    #    低能量音频上产出 "and that he had forgotten what he was doing"
+    #    ×12，前面三条规则全漏。）连续重复同一短语达到次数即判废。
+    words = re.findall(r"[\w\u4e00-\u9fff]+", s)
+    n = len(words)
+    for w in range(1, 13):
+        if n < w * (6 if w == 1 else 4):
+            break
+        i = 0
+        while i + w * (6 if w == 1 else 4) <= n:
+            block = words[i:i + w]
+            cnt, j = 1, i + w
+            while j + w <= n and words[j:j + w] == block:
+                cnt += 1
+                j += w
+            if cnt >= (6 if w == 1 else 4):
+                return True
+            i += 1
     return False
 
 
@@ -462,9 +481,12 @@ def to_mono16k(a: np.ndarray, rate: int, ch: int) -> np.ndarray:
     if ch == 2 and len(x) % 2 == 0:
         x = x.reshape(-1, 2).mean(axis=1)
     if rate != TARGET_RATE and len(x):
+        # 线性插值代替最近邻：最近邻会引入高频锯齿（混叠噪声），
+        # np.interp 成本几乎相同，识别输入更干净。
         n = int(len(x) / rate * TARGET_RATE)
-        idx = np.clip((np.arange(n) * rate / TARGET_RATE).astype(np.int64), 0, len(x) - 1)
-        x = x[idx]
+        pos = np.arange(n, dtype=np.float64) * rate / TARGET_RATE
+        x = np.interp(pos, np.arange(len(x), dtype=np.float64),
+                      x).astype(np.float32)
     return x
 
 
@@ -606,8 +628,15 @@ class NoiseGate:
         self.observe(x)                 # 开机阶段持续收集，够时长就校准
         if self.threshold_dbfs is None:
             return True                 # 还没校准 → 放过
-        if self.dbfs(x) < self.threshold_dbfs:
+        d = self.dbfs(x)
+        if d < self.threshold_dbfs:
             self.rejected += 1
+            # ── 慢速自适应：底噪会随环境漂移（空调启动、背景音乐响起），
+            # 一次性校准的门限会失真。对被拒的低能样本做 EMA，
+            # 缓慢修正噪声底（约 200 段的时间常数），不影响正常语音。
+            self.floor_dbfs = 0.995 * self.floor_dbfs + 0.005 * d
+            self.threshold_dbfs = max(self.lo_dbfs, min(
+                self.hi_dbfs, self.floor_dbfs + self.margin_db))
             return False
         return True
 
@@ -654,8 +683,19 @@ class BatchTranscriber:
         # 降级状态：资源类错误退 CPU 后置位，避免反复重建
         self.fell_back_to_cpu = False
         self.fallback_reason = ""
-        self.m = WhisperModel(model, device=device, compute_type=compute_type,
-                              cpu_threads=threads)
+        try:
+            self.m = WhisperModel(model, device=device,
+                                  compute_type=compute_type,
+                                  cpu_threads=threads)
+        except Exception:
+            # **区分"模型坏"和"网络坏"。** faster-whisper 加载**已缓存**
+            # 的模型前也会先问 huggingface hub；代理故障（实测 502）时
+            # 这一步直接抛，整机启动崩掉。网络类失败时用 HF_HUB_OFFLINE
+            # 重试一次：缓存完整就照常加载，缓存不全才真报错。
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            self.m = WhisperModel(model, device=device,
+                                  compute_type=compute_type,
+                                  cpu_threads=threads)
         self.max_batch = max_batch
         self.max_wait = max_wait
         # 远端识别器。非 None 时 transcribe_batch 会改走它
@@ -1480,13 +1520,30 @@ def run(args):
     if streaming:
         # 流式模式（LocalAgreement-2，见 streaming_asr.py 的说明）
         from streaming_asr import StreamingTranscriber
+        # **流式也要优先用 GPU。** 这里原来根本没传 device ——
+        # StreamingTranscriber 默认 cpu/int8，在 GPU 机器上白跑 CPU：
+        # 每次更新慢 3~10 倍，且模型升到 small 后 CPU 更新跟不上
+        # 0.5s 的节奏，缓冲积压、字幕越来越落后（用户实测"变慢"的元凶）。
+        _st_dev, _st_ct = "cpu", "int8"
+        try:
+            from gpu_setup import gpu_available, enable_cuda_dlls
+            if gpu_available():
+                enable_cuda_dlls()
+                _st_dev, _st_ct = "cuda", "float16"
+        except Exception:
+            pass
+        if _st_dev == "cpu" and args.stream_model not in ("tiny", "base"):
+            print("  ！无 GPU，流式跑 CPU —— 模型降回 base，"
+                  "否则 0.5s 更新间隔跟不上、字幕会持续落后")
+            args.stream_model = "base"
         th = StreamingTranscriber(
             model=args.stream_model, threads=args.threads,
             language=args.src, update_interval=args.stream_interval,
-            tail_seconds=args.stream_tail, max_buffer=args.stream_maxbuf)
+            tail_seconds=args.stream_tail, max_buffer=args.stream_maxbuf,
+            device=_st_dev, compute_type=_st_ct)
         print(f"转写: 流式 {args.stream_model}（LocalAgreement-2）"
               f"　更新间隔 {args.stream_interval}s　tail {args.stream_tail}s"
-              f"　上限 {args.stream_maxbuf}s")
+              f"　上限 {args.stream_maxbuf}s　设备 {_st_dev}/{_st_ct}")
         print("      优点：首字延迟 ≈ 一次更新耗时（1–2s），不用等整句")
         print("      代价：CPU 上长时间连续说话时缓冲会积压到上限，字幕会落后")
     else:
@@ -1773,9 +1830,35 @@ def run(args):
     ui_q = queue.Queue()
     try:
         from PyQt5.QtCore import QTimer
+
+        def _flush_ui():
+            """一次排空 ui_q。原来每个 tick 只消费**一条**（40ms/条），
+            合并翻译一次放出 2~3 个语义单元时显示要排队，积压时更滞后。"""
+            if ov is None:
+                return
+            while True:
+                try:
+                    _item = ui_q.get_nowait()
+                except Exception:
+                    break
+                try:
+                    # 三元组带显示语义标记（流式模式用）：
+                    #   "update"   → 更新最后一条临时字幕（partial）
+                    #   "finalize" → 临时条目转正（stable 已确认）
+                    if len(_item) >= 3:
+                        if _item[2] == "update":
+                            ov.update_last(_item[0], _item[1])
+                        elif _item[2] == "finalize":
+                            ov.finalize_last()
+                        else:
+                            ov.set(_item[0], _item[1])
+                    else:
+                        ov.set(*_item)
+                except Exception:
+                    pass
+
         _qt_timer = QTimer()
-        _qt_timer.timeout.connect(
-            lambda: (ov.set(*ui_q.get()) if not ui_q.empty() else None))
+        _qt_timer.timeout.connect(_flush_ui)
         _qt_timer.start(40)
         print("浮窗更新：主线程 QTimer（Qt 要求 GUI 在主线程）")
     except Exception as e:
@@ -1826,33 +1909,62 @@ def run(args):
         _order[batch[0]] = (batch[1], batch[2])
         return True
 
+    # 队头阻塞保护：下一批迟迟未归（翻译卡住/网络抖动）时不能无限等，
+    # 否则字幕整体冻结数秒后连刷。记录每批"开始等"的时间，超时就跳过。
+    _missing_since = {}
+    _HOL_TIMEOUT = 4.0          # 秒；Google 超时 8s，但 LLM/本地通常 <2s
+
     def _show_ready():
         """按批序把已译好的批次显示出来。返回显示了几段。"""
         shown = 0
+        # 下一批已提交但未归：等；等太久就跳过它（宁可漏一句，不能冻全屏）
+        while _next_show[0] < _seq_in[0] and _next_show[0] not in _order:
+            _t0 = _missing_since.setdefault(_next_show[0], time.time())
+            if time.time() - _t0 < _HOL_TIMEOUT:
+                break
+            print(f"  ！批次 {_next_show[0]} 翻译超过 {_HOL_TIMEOUT:.0f}s 未归，"
+                  f"跳过显示（防队头阻塞）", flush=True)
+            _missing_since.pop(_next_show[0], None)
+            _next_show[0] += 1
         while _next_show[0] in _order:
             segs_k, zh_k = _order.pop(_next_show[0])
+            _missing_since.pop(_next_show[0], None)
             _next_show[0] += 1
             # segs_k 的元素是 (段音频, 原文)；zh_k 是等长译文列表
-            for (seg, txt), zh in zip(segs_k, zh_k):
-                if not txt:
-                    continue
-                shown += 1
-                dur = len(seg) / TARGET_RATE if seg is not None else 0.0
-                print(f"[{shown:>3}] 段{dur:4.1f}s | 原: {txt[:52]}")
-                if zh:
-                    print(f"      译: {zh[:52]}")
-                if ov:
-                    if zh:
-                        ui_q.put((txt, zh))
-                    else:
-                        # 译文为空（可能是被质量闸挡了、或还没回来）：
-                        # 传哨兵，让浮窗**保留上一帧译文**而不是闪成空白
-                        # （借鉴 Whisper-Ollama-Translator 的 PENDING_KEEP_OLD）
-                        _SENT = getattr(ov, "PENDING_KEEP_OLD",
-                                        "\x00PENDING_KEEP_OLD\x00")
-                        ui_q.put((txt, _SENT))
-                if srt:
+            _pairs = [(txt, zh) for (seg, txt), zh in zip(segs_k, zh_k) if txt]
+            for seg, txt in segs_k:
+                if txt:
+                    dur = len(seg) / TARGET_RATE if seg is not None else 0.0
+                    print(f"[{shown + 1:>3}] 段{dur:4.1f}s | 原: {txt[:52]}")
+            shown += len(_pairs)
+            if srt:
+                for txt, zh in _pairs:
                     srt.add(txt, zh)
+            if ov and _pairs:
+                for txt, zh in _pairs:
+                    if zh:
+                        print(f"      译: {zh[:52]}")
+                # **一次涌入多段时合并成一条显示。** 合并翻译攒批后一次
+                # 可能放出 3+ 个语义单元，逐条 add 会立刻把 max_lines(3) 的
+                # 旧字幕顶光 —— 用户还没看完就消失（"字幕一闪而过"）。
+                # 合成一条后只占一行，且不会被自己人顶掉。
+                if len(_pairs) >= 3:
+                    _SENT = getattr(ov, "PENDING_KEEP_OLD",
+                                    "\x00PENDING_KEEP_OLD\x00")
+                    _mj = " ".join(t for t, _ in _pairs)
+                    _zj = " ".join(z for _, z in _pairs if z)
+                    ui_q.put((_mj, _zj if _zj else _SENT))
+                else:
+                    for txt, zh in _pairs:
+                        if zh:
+                            ui_q.put((txt, zh))
+                        else:
+                            # 译文为空（可能是被质量闸挡了、或还没回来）：
+                            # 传哨兵，让浮窗**保留上一帧译文**而不是闪成空白
+                            # （借鉴 Whisper-Ollama-Translator 的 PENDING_KEEP_OLD）
+                            _SENT = getattr(ov, "PENDING_KEEP_OLD",
+                                            "\x00PENDING_KEEP_OLD\x00")
+                            ui_q.put((txt, _SENT))
         return shown
 
     def _drain_translations(block=False, timeout=0.2):
@@ -1865,6 +1977,16 @@ def run(args):
 
     # 流式模式：音频直接喂给 StreamingTranscriber，由它自己触发更新
     if streaming:
+        # ── 翻译异步化 ─────────────────────────────────────────
+        # 原来 tr(src_txt) 在主循环里**同步**执行（0.6~2s/次），期间
+        # 音频不读、缓冲积压 —— 这正是"长时间说话字幕越来越落后"的
+        # 放大器。现在：翻译丢给单后台线程，主循环立刻回去收音频；
+        # 译文没回来时沿用上一帧译文（PENDING_KEEP_OLD 语义）。
+        _stream_pool = _concurrent.ThreadPoolExecutor(max_workers=1)
+        _mt_fut = None              # 在途的翻译 future
+        _mt_fut_txt = ""            # 该 future 对应的原文
+        _zh_last = ""               # 最近一次完成的译文（对应 _mt_fut_txt）
+        _stable_seen = ""           # 上次显示时的 stable（增长→临时条目转正）
         try:
             while True:
                 if ov:
@@ -1893,19 +2015,46 @@ def run(args):
                         n_hallu += 1
                         print(f"[{n_seg:>3}] 丢弃复读幻觉: {src_txt[:44]}")
                         continue
-                    zh = tr(src_txt)
+                    # ── 异步翻译：收上一个的结果，交一个新的 ──
+                    if _mt_fut is not None and _mt_fut.done():
+                        try:
+                            _r = _mt_fut.result()
+                            if _r:
+                                _zh_last = _r
+                        except Exception:
+                            pass
+                        _mt_fut = None
+                    if _mt_fut is None and src_txt and src_txt != _mt_fut_txt:
+                        _mt_fut = _stream_pool.submit(tr, src_txt)
+                        _mt_fut_txt = src_txt
+                    # 当前文本已有对应译文就用；否则交还在途 → 沿用旧译文
+                    zh = _zh_last if src_txt == _mt_fut_txt else ""
                     print(f"[{n_seg:>3}] 稳定: {stable[-60:]}")
                     if partial:
                         print(f"      局部: {partial[:60]}")
                     if zh:
                         print(f"      译: {zh[:60]}")
                     if ov:
-                        ui_q.put((src_txt, zh))
+                        # stable 增长 = 上一句确认 → 临时条目转正，
+                        # 本次显示新起一条（不再就地覆盖上一句）
+                        if stable != _stable_seen:
+                            ui_q.put(("", "", "finalize"))
+                            _stable_seen = stable
+                        if zh:
+                            ui_q.put((src_txt, zh, "update"))
+                        else:
+                            _SENT = getattr(ov, "PENDING_KEEP_OLD",
+                                            "\x00PENDING_KEEP_OLD\x00")
+                            ui_q.put((src_txt, _SENT, "update"))
                     if srt:
                         srt.add(src_txt, zh)
         except KeyboardInterrupt:
             print("\n中断。")
         finally:
+            try:
+                _stream_pool.shutdown(wait=False)
+            except Exception:
+                pass
             try:
                 for inc in th.flush():
                     pass
@@ -1957,6 +2106,12 @@ def run(args):
             else:
                 mt_flush_now = False
             if not due and not mt_flush_now:
+                # **每轮都要顺手显示已译好的批次，不能只在新识别批时显示。**
+                # 原来这里直接 continue，而 _drain_translations 在循环底部 ——
+                # 译文回来了却要等下一个 ASR 批触发才露面。稀疏语音下
+                # "最后一句"之后没有新音频，due 永远为 False，
+                # 译文可能一直不显示（观感 = 字幕消失）。
+                _drain_translations(block=False)
                 continue
 
             if not due:

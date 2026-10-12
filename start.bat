@@ -54,6 +54,11 @@ if not defined PY (
 
 set HF_HUB_DISABLE_SYMLINKS_WARNING=1
 set PYTHONIOENCODING=utf-8
+rem Models are already cached locally; skip hub network checks so a
+rem broken proxy cannot kill startup (observed: 502 -> GPU misdetected
+rem -> CPU fallback -> download attempt -> crash). Remove this line if
+rem you need to download a new model (or use get_models.py).
+set HF_HUB_OFFLINE=1
 
 echo ============================================================
 echo   live-subtitle - realtime translated subtitles
@@ -90,7 +95,17 @@ echo   If something goes wrong, see run.log
 echo ============================================================
 echo.
 
-"%PY%" -u live_subtitle_v2.py %*
+rem ── local translation (offline HY-MT via llama.cpp) ────────────
+rem Default model: medium 1.8B (best speed/quality balance).
+rem For better quality (7B, slower first load), run:
+rem   set HYMT_MODEL=F:\hh_si_pro\hh-translate-model\hh-translate-large.gguf
+rem   start.bat
+if not defined HYMT_MODEL set "HYMT_MODEL=F:\hh_si_pro\hh-translate-model\hh-translate-medium.gguf"
+
+echo   Translation: local HY-MT (offline) - %HYMT_MODEL%
+echo.
+
+"%PY%" -u live_subtitle_v2.py --mt-local --mt-local-model "%HYMT_MODEL%" %*
 
 echo.
 echo (subtitle stopped - exit %ERRORLEVEL%)

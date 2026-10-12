@@ -130,18 +130,31 @@ def gpu_available():
     except Exception:
         return False
     # 真跑一次极短前向，确认 DLL 真能找到
-    try:
-        from faster_whisper import WhisperModel
-        import numpy as np
+    from faster_whisper import WhisperModel
+    import numpy as np
+
+    def _probe():
         m = WhisperModel("tiny", device="cuda", compute_type="float16")
         segs, _ = m.transcribe(np.zeros(16000, dtype=np.float32),
                                beam_size=1, vad_filter=False,
                                condition_on_previous_text=False)
         list(segs)
         del m
+
+    try:
+        _probe()
         return True
     except Exception:
-        return False
+        # **区分"GPU 坏"和"网络坏"。** 实测踩到：huggingface_hub 加载
+        # 缓存模型前会先问 hub（代理 502 时直接抛），于是一台 GPU 完全
+        # 正常的机器被判成"GPU 不可用"，连锁回退 CPU + 联网下载 → 崩。
+        # 网络类失败时用 HF_HUB_OFFLINE 重试：tiny 已缓存的话照样能探。
+        try:
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            _probe()
+            return True
+        except Exception:
+            return False
 
 
 def describe():
