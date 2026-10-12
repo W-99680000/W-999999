@@ -2724,7 +2724,15 @@ def build_parser():
     # 根因是我用脚本做替换时只核对了成功的那一项，没逐条确认。
     ap.add_argument("--prefer-offline", action="store_true",
                     help="英文优先走离线 argos（更快但专有名词易错）")
-    ap.add_argument("--max-batch", type=float, default=4.0,
+        # **识别批大小是"字幕连贯度"的主要杠杆**（实测，150 秒真实速率）：
+        #     配置          换新中位   最大间隔   译文中位   碎片率
+        #     4.0/3.0/3      13.2s     23.5s     20 字符    0%
+        #     **2.0/2.0/1     4.4s     10.1s     14 字符    0%**
+        # 而单独把 mt_cap 3→2 毫无改善（13.6 vs 13.2）——
+        # 瓶颈在"识别批多久产出一段"，不在攒单元。
+        # 最大间隔（观感最差的一下）从 23.8s 降到 10.3s。
+
+    ap.add_argument("--max-batch", type=float, default=2.0,
                     help="攒够多少秒音频就转写（摊薄固定开销）")
     ap.add_argument("--max-wait", type=float, default=1.2,
                     help="最多等多少秒就转写（防积压）")
@@ -2760,13 +2768,13 @@ def build_parser():
                     help="术语干预，格式 原词=译法；给文件路径则逐行读")
     ap.add_argument("--mt-local-model", default=None,
                     help="指定本地翻译模型路径（默认自动找 F 盘的 HY-MT）")
-    ap.add_argument("--mt-batch", type=int, default=3,
+    ap.add_argument("--mt-batch", type=int, default=1,
                     help="攒几个语义单元合并成一次翻译调用（1=关闭）")
     # **这个值设长了会让字幕消失** —— 实测 mt_batch_wait=2.0 且
     # 语音稀疏时，14 个识别批次只显示 2 条字幕。窗口一到就发才是对的。
     ap.add_argument("--mt-batch-wait", type=float, default=0.35,
                     help="合并翻译的攒批窗口秒数（默认 0.35，设大反而会让字幕变少）")
-    ap.add_argument("--mt-cap", type=float, default=3.0,
+    ap.add_argument("--mt-cap", type=float, default=2.0,
                     help="翻译最多攒多少秒音频（到上限就译，防止一句话等太久）")
     ap.add_argument("--no-mt-merge", dest="mt_cap", action="store_const",
                     const=0.0,
