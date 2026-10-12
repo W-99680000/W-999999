@@ -520,7 +520,23 @@ class Segmenter:
                 back = int(TARGET_RATE * min(self.silence, 0.3))
                 cut = max(min_s, self.analyzed - back)
             elif self.analyzed >= int(TARGET_RATE * self.max_len):
-                cut = self.analyzed
+                # ── 软切点：到上限不就地硬断，在尾部 0.6s 窗口内找
+                # RMS 最低点切。连续语音（电影/新闻）几乎全靠这条路径
+                # 切段（实测日志里 4.0s 强制切段占绝大多数），硬切可能
+                # 从一个词中间断开 —— 断点处 ASR 必然听错半个词，
+                # 而这个错会原样进字幕。窗口内总有一个相对最轻的点，
+                # 哪怕全是有声，切在能量谷底也比切在随机位置好。
+                _back = int(TARGET_RATE * 0.6)
+                _lo = max(min_s, self.analyzed - _back)
+                _best_p, _best_r = self.analyzed, None
+                _p = _lo
+                while _p + step <= self.analyzed:
+                    _w2 = self.buf[_p:_p + step].astype(np.float64)
+                    _r = float(np.sqrt((_w2 ** 2).mean()))
+                    if _best_r is None or _r < _best_r:
+                        _best_r, _best_p = _r, _p + step
+                    _p += step
+                cut = _best_p
             if cut is not None:
                 audio = self.buf[:cut]
                 self.buf = self.buf[cut:]
@@ -692,7 +708,15 @@ class BatchTranscriber:
             # 的模型前也会先问 huggingface hub；代理故障（实测 502）时
             # 这一步直接抛，整机启动崩掉。网络类失败时用 HF_HUB_OFFLINE
             # 重试一次：缓存完整就照常加载，缓存不全才真报错。
+            # 注意：huggingface_hub 在 **import 时**就把 HF_HUB_OFFLINE
+            # 读进了 constants，只改 os.environ 不生效（实测重试仍 502
+            # 崩掉）——必须连常量一起改。
             os.environ["HF_HUB_OFFLINE"] = "1"
+            try:
+                import huggingface_hub.constants as _hfc
+                _hfc.HF_HUB_OFFLINE = True
+            except Exception:
+                pass
             self.m = WhisperModel(model, device=device,
                                   compute_type=compute_type,
                                   cpu_threads=threads)
@@ -1017,28 +1041,33 @@ class LruTtlCache:
         self.max_size = max_size
         self.ttl = ttl
         self.hits = self.misses = self.evicted = self.expired = 0
+        # **必须加锁**：翻译线程池是 2 个 worker，两个线程并发 get/set
+        # 同一个 OrderedDict，move_to_end 与插入交错可能丢条目。
+        self._lock = threading.Lock()
 
     def get(self, key):
-        item = self.d.get(key)
-        if item is None:
-            self.misses += 1
-            return None
-        val, ts = item
-        if time.time() - ts > self.ttl:
-            self.d.pop(key, None)
-            self.expired += 1
-            self.misses += 1
-            return None
-        self.d.move_to_end(key)          # 命中就挪到最新
-        self.hits += 1
-        return val
+        with self._lock:
+            item = self.d.get(key)
+            if item is None:
+                self.misses += 1
+                return None
+            val, ts = item
+            if time.time() - ts > self.ttl:
+                self.d.pop(key, None)
+                self.expired += 1
+                self.misses += 1
+                return None
+            self.d.move_to_end(key)          # 命中就挪到最新
+            self.hits += 1
+            return val
 
     def set(self, key, val):
-        self.d[key] = (val, time.time())
-        self.d.move_to_end(key)
-        while len(self.d) > self.max_size:
-            self.d.popitem(last=False)   # 淘汰最旧
-            self.evicted += 1
+        with self._lock:
+            self.d[key] = (val, time.time())
+            self.d.move_to_end(key)
+            while len(self.d) > self.max_size:
+                self.d.popitem(last=False)   # 淘汰最旧
+                self.evicted += 1
 
     def __len__(self):
         return len(self.d)
@@ -1065,7 +1094,8 @@ class Translator:
         self._pivot = None          # (fn1, fn2) 中继用
         # LRU + TTL 缓存（原来只是个普通 dict，无上限、不过期）
         self.cache = LruTtlCache(max_size=500, ttl=24 * 3600)
-        self.book = PHRASEBOOK.get(src, {}) if dst.startswith("zh") else {}
+        self.book = {}
+        self.set_book(src)
         self.hits_book = self.hits_cache = self.calls = self.rejected = 0
         self.web_cruft_blocked = self.web_cruft_fixed = 0
         self.stale_dropped = self.kept_last = 0
@@ -1074,6 +1104,20 @@ class Translator:
         self._gf_fails = 0
         self.last_ok = ""           # 上一句成功译文（失败时保持不刷屏）
         self._setup()
+
+    def set_book(self, lang):
+        """按**检测到的语言**切换短句表。
+
+        原来 book 在构造时按 src 定死，而默认路由全程是
+        Translator("auto") → PHRASEBOOK.get("auto") = {} ——
+        越南语短句表建好了却一次都没被用过（日志里"短句表 0 条"）。
+        现在主循环每批按 th.last_lang 调一次这个函数，
+        高频短句直接查表：零延迟、零成本、且不会译错。
+        """
+        if not self.dst.startswith("zh"):
+            self.book = {}
+            return
+        self.book = PHRASEBOOK.get((lang or "")[:2], {})
 
     def _setup(self):
         try:
@@ -1483,34 +1527,62 @@ def run(args):
     # 结果还没出来，万一不是英语就把非英语喂给了 en→zh 模型 → 垃圾。
     # 用 auto 起步（Google + sl=auto，判错也无所谓），等检测结果出来
     # 再按 _pick_offline_source 决定是否切到 argos。
+    # ── 术语表：本地 HY-MT 与远端 qwen-mt 共用一份 ─────────────
+    # 原来只在 --mt-local 时解析，走远端 qwen-mt 时 --mt-terms 是哑的。
+    # qwen-mt 支持官方术语定制（translation_options，实测生效：
+    # doãn chung dũng → 段忠勇），所以解析提到前面，两边都喂。
+    _terms = []
+    for _it in (getattr(args, "mt_terms", None) or []):
+        try:
+            if os.path.isfile(_it):
+                for _ln in open(_it, encoding="utf-8"):
+                    _ln = _ln.strip()
+                    if _ln and not _ln.startswith("#") and "=" in _ln:
+                        _a, _b = _ln.split("=", 1)
+                        _terms.append((_a.strip(), _b.strip()))
+            elif "=" in _it:
+                _a, _b = _it.split("=", 1)
+                _terms.append((_a.strip(), _b.strip()))
+        except Exception:
+            pass
+    if _terms:
+        print(f"  术语表 {len(_terms)} 条（本地与远端翻译共用）")
     # 本地翻译（可选）：启动 llama-server 子进程并挂到单例上
     if getattr(args, "mt_local", False) and not LOCAL_MT:
         try:
             from local_mt import from_args as _local_from_args
-            _terms = []
-            for _it in (getattr(args, "mt_terms", None) or []):
-                if os.path.isfile(_it):
-                    for _ln in open(_it, encoding="utf-8"):
-                        _ln = _ln.strip()
-                        if _ln and not _ln.startswith("#") and "=" in _ln:
-                            _a, _b = _ln.split("=", 1)
-                            _terms.append((_a.strip(), _b.strip()))
-                elif "=" in _it:
-                    _a, _b = _it.split("=", 1)
-                    _terms.append((_a.strip(), _b.strip()))
-            if _terms:
-                print(f"  术语表 {len(_terms)} 条")
             _lm = _local_from_args(model=args.mt_local_model, terms=_terms)
             if _lm is not None:
                 LOCAL_MT.append(_lm)
         except Exception as _e:
             print(f"  本地翻译加载失败: {type(_e).__name__} {_e}")
     tr = Translator("auto", args.dst)
+    # 把术语挂到 LLM 单例上（_get_llm 已在 Translator._setup 里建过实例，
+    # 这里直接改它的 terms；只有 qwen-mt 会在 _payload 里真正下发）
+    if _terms:
+        try:
+            _llm0 = _get_llm()
+            if _llm0 is not None:
+                _llm0.terms = list(_terms)
+        except Exception:
+            pass
     _tr_key[0] = None if not args.lang else args.lang
     print(f"翻译: {tr.mode}　短句表 {len(tr.book)} 条")
     # **翻译器要跟着实际语言走。** 原来用 args.src（默认 "en"）初始化，
     # 看越南语时越南语被塞进 en→zh 模型 —— 这是"缺中文翻译"的真原因。
     lang_lock = LanguageLock(min_votes=3)
+    # ── 识别语言锁定（分块路径）──────────────────────────────
+    # 为什么锁：每批 lang=None 都让 whisper 重跑一次语言检测（多一次
+    # 前向，GPU 上几十~一百多 ms），且 2~4s 短音频上检测会抖（README
+    # 记录过 vi 被判成 ko 的实测）。连续 3 批同语言高置信（≥0.85）后
+    # 锁定传入；每 15 批留一批探针（lang=None）复检，连续 2 次探针
+    # 检出别的语言才解锁 —— 防止中途换内容被锁死在错语言上
+    # （那是"强制错语言"灾难的翻版，必须留退路）。
+    _asr_lang = [None]           # 当前锁定（None = 每批自动检测）
+    _asr_vote_lang = [None]      # 投票候选
+    _asr_vote_n = [0]            # 候选连续高置信次数
+    _asr_since = [0]             # 锁定后经过的批数
+    _asr_probe_miss = [0]        # 探针连续"检出别的语言"次数
     # （_tr_cache / _tr_key 已在上面、初始化 tr 之前定义）
     # 计数器必须在两个分支**之前**初始化：流式分支里也要用 n_hallu，
     # 原来它是在流式分支之后才定义的（会把流式模式直接 NameError 崩掉）。
@@ -1538,7 +1610,12 @@ def run(args):
             args.stream_model = "base"
         th = StreamingTranscriber(
             model=args.stream_model, threads=args.threads,
-            language=args.src, update_interval=args.stream_interval,
+            # **流式也不能强制源语言。** 这里原来传 args.src（默认 "en"），
+            # 看越南语时等于把越南语硬塞给英语解码器 —— 正是分块路径
+            # 用血泪换来的那条教训（whisper 不是听错，是把越南语意译成
+            # 错误的英文）。默认 None = 自动检测，--lang 固定时才传。
+            language=(args.lang if not args.detect else None),
+            update_interval=args.stream_interval,
             tail_seconds=args.stream_tail, max_buffer=args.stream_maxbuf,
             device=_st_dev, compute_type=_st_ct)
         print(f"转写: 流式 {args.stream_model}（LocalAgreement-2）"
@@ -1897,6 +1974,27 @@ def run(args):
     mt_first_t = None
     _ph_seg = np.zeros(int(0.5 * TARGET_RATE), dtype=np.float32)
 
+    def _emit_pairs(pairs):
+        """把一批 (原文, 译文) 送显示与 srt（迟到批补显用）。"""
+        if srt:
+            for txt, zh in pairs:
+                srt.add(txt, zh)
+        if ov and pairs:
+            for txt, zh in pairs:
+                if zh:
+                    print(f"      译: {zh[:52]}")
+            # 与 _show_ready 相同的合并规则：≥3 段并成一条显示，
+            # 免得瞬间把 max_lines(3) 的旧字幕顶光
+            _SENT = getattr(ov, "PENDING_KEEP_OLD",
+                            "\x00PENDING_KEEP_OLD\x00")
+            if len(pairs) >= 3:
+                _mj = " ".join(t for t, _ in pairs)
+                _zj = " ".join(z for _, z in pairs if z)
+                ui_q.put((_mj, _zj if _zj else _SENT))
+            else:
+                for txt, zh in pairs:
+                    ui_q.put((txt, zh if zh else _SENT))
+
     def _drain_one(timeout=None):
         """取一批译文进来（耐心可选）。"""
         try:
@@ -1906,6 +2004,19 @@ def run(args):
                 batch = done_q.get(timeout=timeout)
         except Exception:
             return False
+        if batch[0] < _next_show[0]:
+            # 迟到批：队头超时（_HOL_TIMEOUT）已经跳过它，但译文后来
+            # 还是回来了。原来它会永远躺在 _order 里 —— _next_show 已
+            # 越过它，while 循环再也不会取，**一句字幕就静默丢了**
+            # （还泄漏内存）。现在补显：宁可晚到，不能消失。
+            segs_k, zh_k = batch[1], batch[2]
+            _pairs = [(txt, zh) for (seg, txt), zh in zip(segs_k, zh_k)
+                      if txt and zh]
+            if _pairs:
+                print(f"  · 迟到批次 {batch[0]} 补显 {len(_pairs)} 段"
+                      f"（队头超时后译文才回）", flush=True)
+                _emit_pairs(_pairs)
+            return True
         _order[batch[0]] = (batch[1], batch[2])
         return True
 
@@ -2000,6 +2111,7 @@ def run(args):
                     locked = lang_lock.observe(
                         getattr(th, "last_lang", None),
                         getattr(th, "last_lang_prob", 0.0))
+                    tr.set_book(locked or getattr(th, "last_lang", None))
                     if locked and locked != tr.src:
                         try:
                             tr = Translator(locked, args.dst)
@@ -2139,8 +2251,12 @@ def run(args):
                                          allow_offline=args.prefer_offline)
             cur_src = "en" if want else None
             if cur_src != _tr_key[0]:
+                # **先查缓存再新建**：原来这里直接 Translator(...)，
+                # 语言来回切换时 argos 模型反复加载（加载是秒级的），
+                # _tr_cache 形同虚设 —— 只写不读。
                 try:
-                    tr = Translator(cur_src or "auto", args.dst)
+                    tr = _tr_cache.get(cur_src) or Translator(
+                        cur_src or "auto", args.dst)
                     _tr_key[0] = cur_src
                     _tr_cache[cur_src] = tr
                     print(f"  → 译器切到 {cur_src or 'auto'}"
@@ -2155,11 +2271,54 @@ def run(args):
             # 于是后面按 en→zh 翻译全崩。用户实际遇到的就是这个。
             # 现在默认 auto：whisper 检出 vi 置信度 0.976，识别正确。
             # 想固定语言用 --lang，不要用 --from 去强制。
-            _lang = None if args.detect else (args.lang or None)
+            # 语言锁定（_asr_lang）介于两者之间：是**高置信投票的结果**，
+            # 且每 15 批探针复检，不是拍脑袋的硬约束。
+            if args.detect and not args.lang:
+                _probe = (_asr_lang[0] is not None
+                          and (_asr_since[0] + 1) % 15 == 0)
+                _lang = None if _probe else _asr_lang[0]
+            else:
+                _probe = False
+                _lang = None if args.detect else (args.lang or None)
             if segs_in:
                 texts = th.transcribe_batch(segs_in, lang=_lang)
                 # 仍然喂投票，但只用于**诊断显示**，不再决定路由
                 lang_lock.observe(th.last_lang, th.last_lang_prob)
+                # 短句表跟检测语言走（默认译器是 auto，不跟就是死代码）
+                tr.set_book(th.last_lang or lang_lock.peek())
+                # ── 识别语言锁定状态机 ────────────────────────
+                if args.detect and not args.lang:
+                    _lg, _lp = th.last_lang, th.last_lang_prob
+                    if _asr_lang[0] is None:
+                        if _lg and _lp >= 0.85:
+                            if _asr_vote_lang[0] == _lg:
+                                _asr_vote_n[0] += 1
+                            else:
+                                _asr_vote_lang[0], _asr_vote_n[0] = _lg, 1
+                            if _asr_vote_n[0] >= 3:
+                                _asr_lang[0] = _lg
+                                _asr_since[0] = 0
+                                print(f"  ★ 识别语言锁定 {_lg}"
+                                      f"（跳过逐批检测；每 15 批探针复检）",
+                                      flush=True)
+                        else:
+                            _asr_vote_lang[0], _asr_vote_n[0] = None, 0
+                    else:
+                        _asr_since[0] += 1
+                        if _probe:
+                            # 探针批：这轮是拿 lang=None 重检的，结果可信
+                            if _lg and _lg != _asr_lang[0] and _lp >= 0.9:
+                                _asr_probe_miss[0] += 1
+                                if _asr_probe_miss[0] >= 2:
+                                    print(f"  ★ 探针连续检出 {_lg}"
+                                          f"（≠锁定 {_asr_lang[0]}），解锁重检",
+                                          flush=True)
+                                    _asr_lang[0] = None
+                                    _asr_vote_lang[0] = None
+                                    _asr_vote_n[0] = 0
+                                    _asr_probe_miss[0] = 0
+                            else:
+                                _asr_probe_miss[0] = 0
             else:
                 # 只刷翻译批：这一轮没有新音频要识别
                 texts = []

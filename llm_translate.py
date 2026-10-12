@@ -181,7 +181,19 @@ def translate_batch(translator, texts, target="Simplified Chinese",
         if len(parts) == len(items):
             return parts
     # 退回逐条（并留下痕迹，便于诊断为什么合并失败）
+    # **必须打出来，不能只在计数器里** —— 这个项目踩过同类坑：
+    # 分隔符被后处理删掉时合并翻译静默失效，表面一切正常，
+    # 只是翻译变慢了。退回原因分三种：空返回 / 无分隔符 / 段数对不上。
     translator.batch_fallbacks = getattr(translator, "batch_fallbacks", 0) + 1
+    n_fb = translator.batch_fallbacks
+    if n_fb <= 3 or n_fb % 20 == 0:
+        if not raw:
+            why = "空返回"
+        elif BATCH_SEP not in raw:
+            why = f"输出无分隔符（{raw[:40]!r}…）"
+        else:
+            why = f"段数对不上（出 {len(parts)} / 入 {len(items)}）"
+        print(f"  ！合并翻译第 {n_fb} 次退回逐条：{why}", flush=True)
     return [translator(x, target=target) if x else "" for x in items]
 
 
@@ -190,15 +202,22 @@ class LLMTranslator:
 
     kind="openai"  → POST {base}/chat/completions  （DeepSeek / vLLM / 中转）
     kind="ollama"  → POST {base}/api/generate      （Ollama 原生）
+
+    **长连接**：每次调用新开 TCP+TLS 的代价是 qwen-mt 那 0.57s 固定开销
+    的重要组成部分（握手一次约 0.1~0.3s）。这里用 http.client 保持连接，
+    只在连接断裂时重建并重试一次。
     """
 
     def __init__(self, base_url, model, api_key=None, kind="openai",
-                 timeout=20.0, temperature=0.1, num_ctx=1024,
-                 no_system=False):
+                 timeout=8.0, temperature=0.1, num_ctx=1024,
+                 no_system=False, terms=None):
         self.base = (base_url or "").rstrip("/")
         self.model = model
         self.key = api_key or ""
         self.kind = kind
+        # timeout 从 20s 收紧到 8s：显示层 4s 就放弃队头了，20s 的超时
+        # 意味着"显示放弃后翻译线程还在干等十几秒"，兜底（google-free）
+        # 永远来不及生效。8s 内失败 → 立刻走兜底，字幕不断。
         self.timeout = float(timeout)
         self.temperature = float(temperature)
         self.num_ctx = int(num_ctx)
@@ -206,21 +225,73 @@ class LLMTranslator:
         self.base = self.base.replace("//localhost:", "//127.0.0.1:")
         # qwen-mt 不接受 system 角色（实测 400），构造时置 True
         self.no_system = bool(no_system)
+        # 术语表 [(原文, 译法), ...]：qwen-mt 走 translation_options 注入，
+        # 其他后端忽略（本地 HY-MT 的术语在 local_mt.py 里处理）
+        self.terms = list(terms or [])
+        self.terms_used = 0
         self.ok = bool(self.base and self.model)
         self.calls = self.fails = 0
         self.t_last = 0.0
-        # -- 连接复用（修"翻译无端断掉"）--
-        # 原来每次翻译都 urllib.request.urlopen()，**每条请求新建
-        # 一次 TCP+TLS 握手**，而且没有重连。空闲一会儿后服务端会关掉
-        # 空闲连接、代理链路上的空闲连接更容易被掐断；下一次请求失败
-        # 就直接返回空 —— 那条字幕就没译文了，看着就是"自己断了一下"。
-        # 现在复用一条长连接，断了丢掉重建并**重试一次**。
-        self._hc = None              # http.client 连接（懒建）
-        self._reconnects = 0         # 诊断：重连过几次
+        self._hc = None             # 长连接（懒建）
+        self._reconnects = 0
 
-    # -- 连接管理 --
+    # ── 请求体 ───────────────────────────────────────────────
+    def _payload(self, text, target):
+        # **qwen-mt 只接受 user / assistant 角色，发 system 会 400。**
+        # 实测报错：Role must be in [user, assistant].
+        # 这是翻译专用模型的特性 —— 翻译指令本身就该写在 user 里，
+        # 它不需要（也不支持）system prompt。
+        # 我第一版统一发 system+user，于是 qwen-mt 全部返回空
+        # （异常被吞掉 → 空串），表面上"模式选对了但没译文"。
+        prompt = (f"Translate the following text into {target}. "
+                  f"Output ONLY the translation.\n\n{text}")
+        if self.kind == "ollama":
+            return {"model": self.model, "prompt": prompt, "stream": False,
+                    "options": {"temperature": self.temperature,
+                                "num_ctx": self.num_ctx,
+                                "stop": ["\n"]}}
+        msgs = [{"role": "user", "content": prompt}]
+        if not self.no_system:
+            msgs.insert(0, {"role": "system", "content": SYSTEM})
+        # max_tokens 不能写死 220：合并翻译多段时输出被截断 → 分隔符段数
+        # 对不上 → translate_batch 静默退回逐条（优化失效且无报错，
+        # 这个项目已经踩过同类坑）。按输入长度放大：中文约 1 字 ≈ 1 token，
+        # 译文长度与原文同量级，留足余量并封顶。
+        max_tokens = max(220, min(1024, len(text) + 64))
+        body = {"model": self.model, "stream": False,
+                "temperature": self.temperature, "max_tokens": max_tokens,
+                "messages": msgs}
+        # ── qwen-mt 术语定制（translation_options）─────────────
+        # 只注入**本句命中**的术语（全量注入会稀释提示、还可能撞 API
+        # 的术语条数上限）。这是官方能力：terms 的 source/target 对。
+        # 只对 qwen-mt 系列下发，其他 OpenAI 兼容端点不认识这个字段。
+        if self.terms and "qwen-mt" in (self.model or ""):
+            hits = [(s, t) for s, t in self.terms
+                    if s and s.lower() in text.lower()]
+            if hits:
+                self.terms_used += len(hits)
+                body["translation_options"] = {
+                    "terms": [{"source": s, "target": t} for s, t in hits]}
+        return body
+
+    def _path(self):
+        """请求路径（含 base 里的前缀，如 /compatible-mode/v1）。"""
+        u = urllib.parse.urlsplit(self.base)
+        prefix = u.path.rstrip("/")
+        tail = "/api/generate" if self.kind == "ollama" else "/chat/completions"
+        return prefix + tail
+
+    def _extract(self, j):
+        if self.kind == "ollama":
+            return j.get("response", "")
+        try:
+            return j["choices"][0]["message"]["content"]
+        except Exception:
+            return ""
+
+    # ── 长连接管理 ───────────────────────────────────────────
     def _conn(self):
-        """拿一条可用连接（懒建；断了靠 _drop_conn 重建）。"""
+        """拿一个可用连接（懒建 + 断线重建）。"""
         if self._hc is None:
             u = urllib.parse.urlsplit(self.base)
             if u.scheme == "https":
@@ -244,62 +315,15 @@ class LLMTranslator:
         self._hc = None
 
     def _post_once(self, body, hdr):
-        """单次 POST，用复用连接。异常直接抛给调用方。"""
+        """单次 POST；返回解析后的 JSON。异常直接抛给调用方。"""
         c = self._conn()
         c.request("POST", self._path(), body=body, headers=hdr)
         resp = c.getresponse()
-        # **必须把响应体读空**，否则连接算脏的，无法复用。
-        raw = resp.read()
+        raw = resp.read()                    # 必须读空，连接才能复用
         if resp.status != 200:
             raise RuntimeError(
-                "HTTP %d: %s" % (resp.status,
-                                 raw.decode("utf-8", "replace")[:150]))
+                f"HTTP {resp.status}: {raw.decode('utf-8', 'replace')[:150]}")
         return json.loads(raw.decode("utf-8", "replace"))
-
-    # ── 请求体 ───────────────────────────────────────────────
-    def _payload(self, text, target):
-        # **qwen-mt 只接受 user / assistant 角色，发 system 会 400。**
-        # 实测报错：Role must be in [user, assistant].
-        # 这是翻译专用模型的特性 —— 翻译指令本身就该写在 user 里，
-        # 它不需要（也不支持）system prompt。
-        # 我第一版统一发 system+user，于是 qwen-mt 全部返回空
-        # （异常被吞掉 → 空串），表面上"模式选对了但没译文"。
-        prompt = (f"Translate the following text into {target}. "
-                  f"Output ONLY the translation.\n\n{text}")
-        if self.kind == "ollama":
-            return {"model": self.model, "prompt": prompt, "stream": False,
-                    "options": {"temperature": self.temperature,
-                                "num_ctx": self.num_ctx,
-                                "stop": ["\n"]}}
-        msgs = [{"role": "user", "content": prompt}]
-        if not self.no_system:
-            msgs.insert(0, {"role": "system", "content": SYSTEM})
-        return {"model": self.model, "stream": False,
-                "temperature": self.temperature, "max_tokens": 220,
-                "messages": msgs}
-
-    def _path(self):
-        """请求路径（含 base 里的前缀，如 /compatible-mode/v1）。
-
-        连接复用要求主机与路径分开给 —— http.client 建连只要
-        (host, port)，路径在 request() 里给。
-        """
-        u = urllib.parse.urlsplit(self.base)
-        prefix = u.path.rstrip("/")
-        tail = "/api/generate" if self.kind == "ollama" else "/chat/completions"
-        return prefix + tail
-
-    def _url(self):
-        return (f"{self.base}/api/generate" if self.kind == "ollama"
-                else f"{self.base}/chat/completions")
-
-    def _extract(self, j):
-        if self.kind == "ollama":
-            return j.get("response", "")
-        try:
-            return j["choices"][0]["message"]["content"]
-        except Exception:
-            return ""
 
     # ── 主入口 ───────────────────────────────────────────────
     def __call__(self, text, target="Simplified Chinese"):
@@ -311,8 +335,6 @@ class LLMTranslator:
         if self.kind == "openai" and self.key:
             hdr["Authorization"] = f"Bearer {self.key}"
         t0 = time.time()
-        # 两次尝试：连接类失败很常见（服务端空闲断连、代理抽风）。
-        # 丢掉旧连接重建再试一次；两次都失败才算真失败。
         for attempt in (0, 1):
             try:
                 j = self._post_once(body, hdr)
@@ -320,6 +342,8 @@ class LLMTranslator:
                 self.t_last = time.time() - t0
                 return _clean(self._extract(j))
             except Exception:
+                # 连接类失败很常见（服务端空闲断连 / 代理抽风）：
+                # 丢掉旧连接重建，重试一次；再失败才算真失败。
                 self._drop_conn()
                 self._reconnects += 1
                 if attempt == 1:
@@ -331,10 +355,10 @@ class LLMTranslator:
             return "LLM=未配置"
         return (f"LLM={self.kind}:{self.model}　调用 {self.calls}"
                 f"　失败 {self.fails}　重连 {self._reconnects}"
-                f"　上次 {self.t_last:.2f}s")
+                f"　术语命中 {self.terms_used}　上次 {self.t_last:.2f}s")
 
 
-def from_env_or_args(base_url=None, model=None, kind=None):
+def from_env_or_args(base_url=None, model=None, kind=None, terms=None):
     """按命令行参数 / 环境变量 / 本机常见端点，尽力找一个可用的 LLM。
 
     优先级：
@@ -352,14 +376,14 @@ def from_env_or_args(base_url=None, model=None, kind=None):
     k = kind
 
     if base and mdl:
-        return LLMTranslator(base, mdl, key, k or "openai")
+        return LLMTranslator(base, mdl, key, k or "openai", terms=terms)
 
     # ③ 阿里云百炼 qwen-mt-flash（实测最快最准，优先）
     ds_key = os.environ.get("DASHSCOPE_API_KEY") or _read_dashscope_key()
     if ds_key:
         return LLMTranslator(DASHSCOPE_BASE,
                              mdl or DASHSCOPE_MODEL, ds_key, "openai",
-                             no_system=True)
+                             no_system=True, terms=terms)
 
     # ④ 本机 Ollama
     try:
@@ -369,7 +393,7 @@ def from_env_or_args(base_url=None, model=None, kind=None):
         names = [m.get("name", "") for m in tags.get("models", [])]
         if names:
             return LLMTranslator("http://127.0.0.1:11434", names[0],
-                                 None, "ollama")
+                                 None, "ollama", terms=terms)
     except Exception:
         pass
 
@@ -386,5 +410,6 @@ def from_env_or_args(base_url=None, model=None, kind=None):
             pass
     if key:
         return LLMTranslator("https://api.deepseek.com",
-                             mdl or "deepseek-chat", key, "openai")
+                             mdl or "deepseek-chat", key, "openai",
+                             terms=terms)
     return None

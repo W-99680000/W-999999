@@ -53,6 +53,7 @@ streaming_asr —— 流式识别（LocalAgreement-2），按同传论文的做�
 """
 from __future__ import annotations
 
+import os
 import re
 import threading
 import time
@@ -103,10 +104,28 @@ class StreamingTranscriber:
                 enable_cuda_dlls()
             except Exception:
                 pass
-        self.m = WhisperModel(model, device=device,
-                              compute_type=compute_type,
-                              cpu_threads=threads)
+        try:
+            self.m = WhisperModel(model, device=device,
+                                  compute_type=compute_type,
+                                  cpu_threads=threads)
+        except Exception:
+            # 与 BatchTranscriber 同款兜底：代理故障（实测 502）时
+            # huggingface hub 的可用性检查会把已缓存模型的加载也拖死。
+            # 切离线重试；常量必须一起改（import 时已读入，只改
+            # os.environ 不生效）。
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            try:
+                import huggingface_hub.constants as _hfc
+                _hfc.HF_HUB_OFFLINE = True
+            except Exception:
+                pass
+            self.m = WhisperModel(model, device=device,
+                                  compute_type=compute_type,
+                                  cpu_threads=threads)
         self.language = language
+        # 语言检测（每轮 transcribe 后更新，主程序读取做路由）
+        self.last_lang = None
+        self.last_lang_prob = 0.0
         self.update_interval = float(update_interval)
         # ── 自适应延迟（Whisper-Streaming 论文的第二个贡献） ────────
         # 论文（arXiv 2307.14743）用的是 "local agreement policy with
@@ -230,6 +249,12 @@ class StreamingTranscriber:
             vad_filter=self.vad_filter, condition_on_previous_text=False,
             temperature=0.0, word_timestamps=True)
         segs = list(segs)
+        # 语言检测结果留给主程序做路由/短句表切换。
+        # 原来根本没暴露 —— 主循环里 getattr(th, "last_lang", None)
+        # 永远是 None，流式的语言路由和短句表全是死代码。
+        self.last_lang = getattr(info, "language", None)
+        self.last_lang_prob = float(
+            getattr(info, "language_probability", 0.0) or 0.0)
         txt = " ".join(s.text.strip() for s in segs).strip()
         ws = []
         for s in segs:

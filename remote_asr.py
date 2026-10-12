@@ -40,12 +40,14 @@ Groq、以及各种中转），所以选 ②。
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import os
 import re
 import ssl
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 DASHSCOPE_KEYS_FILE = os.path.join(os.path.expanduser("~"), ".dsh",
@@ -56,6 +58,15 @@ MODEL = "qwen3-asr-flash"
 _CTX = ssl.create_default_context()
 _CTX.check_hostname = False
 _CTX.verify_mode = ssl.CERT_NONE
+
+
+class _HTTPStatusError(Exception):
+    """HTTP 状态非 200（替代原来 urllib.error.HTTPError 的携带信息）。"""
+
+    def __init__(self, code, body):
+        super().__init__(f"HTTP {code}: {body}")
+        self.code = code
+        self.body = body
 
 
 def read_key(path=DASHSCOPE_KEYS_FILE):
@@ -141,6 +152,36 @@ class RemoteASR:
         self.t_last = 0.0
         self.last_lang = None          # 供主程序做语言路由
         self.last_emotion = None
+        self._hc = None                # 长连接（懒建，断线重建）
+        self._reconnects = 0
+
+    # ── 长连接：远端固定开销 0.43s 里有一次 TCP+TLS 握手 ──────
+    # 实测保持连接后续呼能省掉握手（约 0.1~0.3s/次）。断了就重建，
+    # 由 __call__ 里既有的一次重试兜底。
+    def _conn(self):
+        if self._hc is None:
+            u = urllib.parse.urlsplit(self.base)
+            if u.scheme == "https":
+                self._hc = http.client.HTTPSConnection(
+                    u.hostname, u.port or 443, timeout=self.timeout,
+                    context=_CTX)
+            else:
+                self._hc = http.client.HTTPConnection(
+                    u.hostname, u.port or 80, timeout=self.timeout)
+        return self._hc
+
+    def _drop_conn(self):
+        try:
+            if self._hc is not None:
+                self._hc.close()
+        except Exception:
+            pass
+        self._hc = None
+        self._reconnects += 1
+
+    def _path(self):
+        return urllib.parse.urlsplit(self.base).path.rstrip("/") \
+            + "/chat/completions"
 
     def __call__(self, audio, rate=16000):
         """audio: float32 numpy 数组 → (文本, 语种)。
@@ -174,20 +215,22 @@ class RemoteASR:
                  "input_audio": {"data": uri, "format": "wav"}}]}],
             "stream": False,
         }, ensure_ascii=False).encode("utf-8")
-        req = urllib.request.Request(
-            self.base + "/chat/completions", data=body,
-            headers={"Authorization": "Bearer " + self.key,
-                     "Content-Type": "application/json"})
         t0 = time.time()
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout,
-                                        context=_CTX) as r:
-                j = json.loads(r.read().decode("utf-8", "replace"))
-        except urllib.error.HTTPError as e:
+            c = self._conn()
+            c.request("POST", self._path(), body=body,
+                      headers={"Authorization": "Bearer " + self.key,
+                               "Content-Type": "application/json"})
+            resp = c.getresponse()
+            raw = resp.read()          # 必须读空，连接才能复用
+            if resp.status != 200:
+                raise _HTTPStatusError(
+                    resp.status, raw.decode("utf-8", "replace")[:150])
+            j = json.loads(raw.decode("utf-8", "replace"))
+        except _HTTPStatusError as e:
             self.fails += 1
             self.last_code = e.code
-            self.last_err = (f"HTTP {e.code}: "
-                             f"{e.read().decode('utf-8', 'replace')[:150]}")
+            self.last_err = f"HTTP {e.code}: {e.body}"
             self.last_kind = classify_error(self.last_err, e.code)
             return "", None
         except Exception as e:
@@ -195,6 +238,7 @@ class RemoteASR:
             self.last_code = None
             self.last_err = f"{type(e).__name__}: {str(e)[:120]}"
             self.last_kind = classify_error(self.last_err)
+            self._drop_conn()          # 连接可能已坏，下次重建
             return "", None
         self.calls += 1
         self.t_last = time.time() - t0
@@ -215,7 +259,7 @@ class RemoteASR:
         if not self.ok:
             return "远端ASR=无 key"
         return (f"远端ASR={self.model}　调用 {self.calls}　失败 {self.fails}"
-                f"　上次 {self.t_last:.2f}s")
+                f"　重连 {self._reconnects}　上次 {self.t_last:.2f}s")
 
 
 def from_env_or_key(**kw):
