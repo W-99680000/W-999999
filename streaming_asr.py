@@ -53,6 +53,7 @@ streaming_asr —— 流式识别（LocalAgreement-2），按同传论文的做�
 """
 from __future__ import annotations
 
+import os
 import re
 import threading
 import time
@@ -103,9 +104,24 @@ class StreamingTranscriber:
                 enable_cuda_dlls()
             except Exception:
                 pass
-        self.m = WhisperModel(model, device=device,
-                              compute_type=compute_type,
-                              cpu_threads=threads)
+        try:
+            self.m = WhisperModel(model, device=device,
+                                  compute_type=compute_type,
+                                  cpu_threads=threads)
+        except Exception:
+            # 与 BatchTranscriber 同款兜底：代理故障（实测 502）时
+            # huggingface hub 的可用性检查会把已缓存模型的加载也拖死。
+            # 切离线重试；常量必须一起改（import 时已读入，只改
+            # os.environ 不生效）。
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            try:
+                import huggingface_hub.constants as _hfc
+                _hfc.HF_HUB_OFFLINE = True
+            except Exception:
+                pass
+            self.m = WhisperModel(model, device=device,
+                                  compute_type=compute_type,
+                                  cpu_threads=threads)
         self.language = language
         # 语言检测（每轮 transcribe 后更新，主程序读取做路由）
         self.last_lang = None

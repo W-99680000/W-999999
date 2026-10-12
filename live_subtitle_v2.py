@@ -708,7 +708,15 @@ class BatchTranscriber:
             # 的模型前也会先问 huggingface hub；代理故障（实测 502）时
             # 这一步直接抛，整机启动崩掉。网络类失败时用 HF_HUB_OFFLINE
             # 重试一次：缓存完整就照常加载，缓存不全才真报错。
+            # 注意：huggingface_hub 在 **import 时**就把 HF_HUB_OFFLINE
+            # 读进了 constants，只改 os.environ 不生效（实测重试仍 502
+            # 崩掉）——必须连常量一起改。
             os.environ["HF_HUB_OFFLINE"] = "1"
+            try:
+                import huggingface_hub.constants as _hfc
+                _hfc.HF_HUB_OFFLINE = True
+            except Exception:
+                pass
             self.m = WhisperModel(model, device=device,
                                   compute_type=compute_type,
                                   cpu_threads=threads)

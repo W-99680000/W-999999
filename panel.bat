@@ -16,6 +16,9 @@ if exist "%CAND1%" (
 
 set HF_HUB_DISABLE_SYMLINKS_WARNING=1
 set PYTHONIOENCODING=utf-8
+rem Same as start.bat: models are cached locally; a broken proxy (observed
+rem 502 Bad Gateway) must not kill startup via a hub connectivity check.
+set HF_HUB_OFFLINE=1
 
 echo Starting the control panel (separate window)...
 start "live-subtitle panel" "%PY%" control_panel.py
