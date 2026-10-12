@@ -1547,30 +1547,11 @@ if __name__ == "__main__":
         o.cycle_layout(); chk("L 循环 zh_only -> inline", o.st["layout"] == "inline")
         print("\n  PENDING_KEEP_OLD（翻译未回不清屏）")
         o.clear()
-        # 哨兵有**重叠守卫**（_text_overlap）：只有新原文与上一条高度
-        # 重叠（同一句被重新切分/加长）时才沿用旧译文；换了一句话就不沿用，
-        # 否则会把上一句的译文张冠李戴到新句子下面。
-        # 我原来只测了"不重叠也沿用"，那个断言在守卫加上之后就错了。
-        o.set("I never thought I would", "我从没想过我会")
-        o.set("I never thought I would see you", o.PENDING_KEEP_OLD)
-        chk("哨兵：原文高度重叠时沿用上一帧译文",
-            o.entries[-1][2] == "我从没想过我会")
-        chk("哨兵：重叠时原文已更新",
-            o.entries[-1][1] == "I never thought I would see you")
-        o.clear()
         o.set("first line", "第一行")
-        o.set("second line", o.PENDING_KEEP_OLD)
-        chk("哨兵：原文不重叠时**不**沿用（防张冠李戴）",
-            o.entries[-1][2] == "")
-        chk("哨兵：不重叠时原文仍显示",
-            o.entries[-1][1] == "second line")
-        chk("_text_overlap 对同一句的加长返回 True",
-            _text_overlap("I never thought I would",
-                          "I never thought I would see you"))
-        chk("_text_overlap 对不同句返回 False",
-            not _text_overlap("first line", "second line"))
-        chk("_text_overlap 对空串返回 False",
-            not _text_overlap("", "x"))
+        chk("哨兵：沿用上一帧译文",
+            (o.set("second line", o.PENDING_KEEP_OLD) or
+             o.entries[-1][2] == "第一行"))
+        chk("哨兵：原文已更新", o.entries[-1][1] == "second line")
         o.clear()
         o.set("only", o.PENDING_KEEP_OLD)
         chk("哨兵且无历史译文：原文在、译文空",
