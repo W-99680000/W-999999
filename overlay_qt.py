@@ -596,21 +596,114 @@ class QtOverlay:
             if self.entries[i][1] == self.IDLE_HINT:
                 self._drop(i)
 
-    def _layout(self):
-        from PyQt5.QtCore import Qt
+    # ── 多屏 bounds 与最小高度（第⑤项 A+B，参考 Nola windows.ts）──────
+
+    #: 定位模式：free 自由（用存的坐标）/ top 贴顶 / bottom 贴底
+    OVERLAY_MARGIN = 24          # 贴顶/贴底时留的边距
+
+    def _screen_for(self, x, y, w, h):
+        """找出这块矩形主要落在哪块屏上。
+
+        **不能用 primaryScreen()** —— 浮窗被拖到副屏后，主屏的坐标范围
+        里根本没有它，夹取就会把它拽回主屏（或者夹到屏外）。
+        没有交集时回退主屏（比如坐标全在屏外时）。
+        """
         from PyQt5.QtWidgets import QApplication
-        scr = QApplication.primaryScreen().availableGeometry()
-        w = min(int(self.st["width"]), scr.width() - 8)
-        h = self._content_height()
-        x = self.st.get("x")
-        y = self.st.get("y")
-        if x is None:
-            x = scr.left() + (scr.width() - w) // 2
-        if y is None:
-            y = scr.top() + scr.height() - h - 24      # 贴底部、留 24px
-        # 关键：贴底时窗口要向上长，不能顶着底部把内容挤出去
-        x = max(scr.left() + 4, min(int(x), scr.left() + scr.width() - w - 4))
-        y = max(scr.top() + 4, min(int(y), scr.top() + scr.height() - h - 4))
+        from PyQt5.QtCore import QRect
+        rect = QRect(int(x), int(y), int(w), int(h))
+        best, best_area = None, 0
+        for s in QApplication.screens():
+            inter = s.availableGeometry().intersected(rect)
+            area = max(0, inter.width()) * max(0, inter.height())
+            if area > best_area:
+                best, best_area = s, area
+        if best is None:
+            return QApplication.primaryScreen()
+        return best
+
+    def minimum_height(self):
+        """至少能显示一行的高度 —— **算出来的，不是猜的**。
+
+        公式（对应 Nola 的 overlayMinimumHeight）：
+            最高行高 × 可见轨道数 + 轨道间距 ×(n-1)
+            + 上下内边距 + 卡片内缩×2 + 余量
+
+        为什么要余量：窗口矩形的高度由 setGeometry 定，而布局用的**内容盒**
+        比它小（内边距/内缩吃掉一部分），+qt 的 sizeHint 是整数而计算值可能是
+        小数，差一点就会**丢掉最后一行**。所以留 2px。
+        """
+        from PyQt5.QtWidgets import QApplication
+        fs_zh = float(self.fs())                      # 译文字号（已按屏幕缩放）
+        fs_en = float(self.fs_original()) if self.st.get("show_original") \
+            else 0.0
+        lh = float(self.st.get("line_height", 1.15))
+        tracks = [fs_zh * lh]
+        if fs_en > 0:
+            tracks.append(fs_en * lh)
+        tracks = [h for h in tracks if h > 0]
+        if not tracks:
+            return 60
+        gap = float(self.st.get("gap_px", 10))
+        m = self.box.contentsMargins()
+        pad = float(m.top() + m.bottom())
+        slack = 2.0
+        need = max(tracks) * len(tracks) + gap * max(0, len(tracks) - 1) \
+            + pad + 2.0 * 6.0 + slack       # 6.0 = 卡片内缩（对应 Nola 的 inset）
+        # 屏幕比最小值还矮时，宁可少一行也别让窗口超出屏幕
+        scr = QApplication.primaryScreen()
+        if scr is not None:
+            need = min(need, float(scr.availableGeometry().height()))
+        return int(max(60, need))
+
+    def _compute_bounds(self, mode, scr_rect, cur_w, cur_h, cx, cy):
+        """把窗口夹到指定屏的工作区里，按模式定位。
+
+        返回 (x, y, w, h)。**每一步都夹**，所以任何输入都不会跑出屏幕 ——
+        这比"夹到主屏"稳，因为副屏的 left/top 可能是负数（主屏右侧的屏）。
+        """
+        w = min(int(cur_w), int(scr_rect.width()))
+        h = min(int(cur_h), int(scr_rect.height()))
+        centered_x = int(scr_rect.left() + (scr_rect.width() - w) / 2)
+        if mode == "top":
+            y = int(scr_rect.top() + self.OVERLAY_MARGIN)
+            return centered_x, y, w, h
+        if mode == "bottom":
+            y = int(scr_rect.top() + scr_rect.height() - h - self.OVERLAY_MARGIN)
+            return centered_x, y, w, h
+        # free：用存的坐标，但夹回本屏
+        x = centered_x if cx is None else int(cx)
+        y = int(scr_rect.top() + self.OVERLAY_MARGIN) if cy is None else int(cy)
+        x = max(int(scr_rect.left()),
+                min(x, int(scr_rect.left() + scr_rect.width() - w)))
+        y = max(int(scr_rect.top()),
+                min(y, int(scr_rect.top() + scr_rect.height() - h)))
+        return x, y, w, h
+
+    def _layout(self):
+        """算窗口位置。
+
+        **关键改动（第⑤项 A）**：不再是"夹到主屏"，而是
+          ① 先按存的坐标找出它**该在哪块屏**上
+          ② 再用**那块屏**的工作区夹取
+        这样副屏上的浮窗不会被拽回主屏，也不会因为屏幕布局变化而跑到屏外。
+        """
+        from PyQt5.QtWidgets import QApplication
+        if not QApplication.screens():
+            return
+        w = int(self.st["width"])
+        h = max(self._content_height(), self.minimum_height())
+        cx = self.st.get("x")
+        cy = self.st.get("y")
+        # 先粗定一个位置，用来判断"主要落在哪块屏"
+        probe = QApplication.primaryScreen().availableGeometry()
+        px = probe.left() + (probe.width() - w) // 2 if cx is None else int(cx)
+        py = probe.top() + probe.height() - h - self.OVERLAY_MARGIN \
+            if cy is None else int(cy)
+        scr = self._screen_for(px, py, w, h)
+        r = scr.availableGeometry()
+        # 贴底（未手动定位）用 bottom 模式，否则按存的坐标 free 模式
+        mode = "bottom" if (cx is None and cy is None) else "free"
+        x, y, w, h = self._compute_bounds(mode, r, w, h, cx, cy)
         self.geo = (x, y, w, h)
         self.w.setGeometry(x, y, w, h)
 
@@ -1225,6 +1318,53 @@ if __name__ == "__main__":
         chk("有字幕 -> kind=subtitle", _s2.get("kind") == "subtitle")
         chk("状态里带译文", _s2.get("zh") == "你好")
         chk("状态里带时间戳", float(_s2.get("ts", 0)) > 0)
+
+        # ── 第⑤项 A+B：多屏 bounds 与最小高度（参考 Nola windows.ts）──
+        # 回归：**不能再用 primaryScreen() 夹取** —— 浮窗拖到副屏后，
+        # 主屏的范围里没有它，会被拽回主屏或夹到屏外。
+        chk("有 _screen_for（按实际所在屏判断）", hasattr(o, "_screen_for"))
+        chk("有 _compute_bounds", hasattr(o, "_compute_bounds"))
+        chk("有 minimum_height", hasattr(o, "minimum_height"))
+        from PyQt5.QtWidgets import QApplication as _QA
+        _r = _QA.primaryScreen().availableGeometry()
+        # 屏外坐标必须被夹回屏内
+        for _cx, _cy, _lbl in ((99999, 99999, "远处"),
+                               (-5000, -5000, "负坐标")):
+            _x, _y, _w, _h = o._compute_bounds("free", _r, 1200, 200,
+                                               _cx, _cy)
+            chk("坐标%s被夹回屏内" % _lbl,
+                _r.left() <= _x <= _r.left() + _r.width() - _w
+                and _r.top() <= _y <= _r.top() + _r.height() - _h)
+        # 三种模式
+        _xt, _yt, _wt, _ht = o._compute_bounds("top", _r, 800, 200, None, None)
+        _xb, _yb, _wb, _hb = o._compute_bounds("bottom", _r, 800, 200,
+                                               None, None)
+        chk("top 模式贴顶（留边距）", _yt == _r.top() + o.OVERLAY_MARGIN)
+        chk("bottom 模式贴底（留边距）",
+            _yb == _r.top() + _r.height() - _hb - o.OVERLAY_MARGIN)
+        chk("top 与 bottom 不重合", _yt != _yb)
+        # 超大尺寸被夹到屏幕内
+        _x2, _y2, _w2, _h2 = o._compute_bounds("free", _r, 99999, 99999,
+                                               0, 0)
+        chk("超大尺寸被夹到工作区内",
+            _w2 <= _r.width() and _h2 <= _r.height())
+        # 最小高度公式：字号越大越高；显示原文比只显示译文高
+        _st0 = dict(o.st)
+        try:
+            o.st["font_size"] = 18
+            o.st["show_original"] = True
+            _m18 = o.minimum_height()
+            o.st["font_size"] = 48
+            _m48 = o.minimum_height()
+            chk("最小高度随字号增大（%d < %d）" % (_m18, _m48), _m48 > _m18)
+            o.st["show_original"] = False
+            _off = o.minimum_height()
+            chk("不显示原文时最小高度更低（%d < %d）" % (_off, _m48),
+                _off < _m48)
+            chk("最小高度有下限 60", _m18 >= 60)
+        finally:
+            o.st.clear()
+            o.st.update(_st0)
 
         chk("字幕留到下一句替换（hold_seconds 足够大）",
             o.st["hold_seconds"] >= 60.0)
