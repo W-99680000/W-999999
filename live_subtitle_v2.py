@@ -2097,6 +2097,71 @@ def selftest():
     chk("google-free 请求里带 sl=auto", "sl=auto" in _u)
     chk("不再出现 sl=vi（源语言由 Google 判）", "sl=vi" not in _u)
     chk("目标语言仍是 zh-CN", "tl=zh-CN" in _u)
+    def _nested_oom():
+        """外层无关键字、内层是 OOM 的嵌套异常。
+
+        用 __cause__ 而不是 raise X from Y：后者是语句，
+        不能当表达式传给 is_resource_failure。
+        """
+        _inner = RuntimeError("out of memory")
+        _outer = RuntimeError("wrapped")
+        _outer.__cause__ = _inner
+        return _outer
+
+    print("\n二之十、设备放置与显存预算")
+    # 参考 Nola-Translator 的 compute.py（GPL-3.0）。它处理的正是本机形态：
+    # 独显 + 核显、两个模型要同放。我原来只问"能不能用"，不问"放不放得下"。
+    try:
+        import device_placement as DP
+        from device_placement import Device
+
+        # ① 核显的共享显存不能算进预算
+        ig = Device("x", "AMD Radeon 780M", "vulkan", total_mb=16277,
+                    free_mb=15463, integrated=True)
+        chk("核显预算为 0（共享内存不算显存）", ig.budget_mb == 0.0)
+        dg = Device("y", "RTX 4070", "vulkan", total_mb=7948, free_mb=7180)
+        chk("独显预算 = 可用显存", dg.budget_mb == 7180)
+
+        # ② 放不下就不能选（要算预留）
+        cpu = Device("cpu", "CPU", "cpu", can_recognition=True,
+                     can_translation=True)
+        small = Device("g", "GPU", "cuda", total_mb=4000, free_mb=2000,
+                       can_recognition=True, can_translation=True)
+        a, b, why = DP.plan_placement([cpu, small], 1500, 1500,
+                                      reserved_mb=1024)
+        chk("需 3000MB+预留 1024 > 可用 2000 → 回退 CPU", a.id == "cpu")
+        a2, b2, _ = DP.plan_placement([cpu, small], 500, 400,
+                                      reserved_mb=1024)
+        chk("放得下时用 GPU", a2.id == "g")
+
+        # ③ 核显即使显存巨大也不会被选中
+        a3, b3, _ = DP.plan_placement([cpu, ig], 500, 400, reserved_mb=256)
+        chk("核显不被选来放模型", a3.id == "cpu")
+
+        # ④ 手动指定不可用设备 → 回退 CPU，但不悄悄换另一张 GPU
+        other = Device("g2", "GPU2", "cuda", total_mb=8000, free_mb=7000,
+                       can_recognition=True, can_translation=True)
+        a4, b4, why4 = DP.plan_placement([cpu, small, other], 9000, 100,
+                                        reserved_mb=256, recog_choice="g")
+        chk("指定的设备放不下 → 回退 CPU（不换另一张卡）", a4.id == "cpu")
+
+        # ⑤ 只对资源类错误重试
+        chk("OOM 算资源错误",
+            DP.is_resource_failure(RuntimeError("CUDA out of memory")))
+        chk("缺 DLL 算资源错误",
+            DP.is_resource_failure(
+                RuntimeError("Library cublas64_12.dll is not found")))
+        chk("权重损坏**不算**资源错误",
+            not DP.is_resource_failure(RuntimeError("model.bin is corrupt")))
+        chk("参数错误**不算**资源错误",
+            not DP.is_resource_failure(ValueError("invalid argument")))
+        chk("嵌套异常也能识别（看 __cause__）",
+            DP.is_resource_failure(_nested_oom()))
+        chk("release_failed_load 可调用",
+            DP.release_failed_load(RuntimeError("x")) is None)
+    except ImportError:
+        chk("device_placement 可导入", False)
+
     print("\n二之九、本地翻译的接口格式（HY-MT 模板）")
     # 回归：HY-MT 是翻译专用模型，**必须用它的 chat 模板**。
     # 裸提示词（不发 <|hy_User|> / <|hy_Assistant|> / 句首标记）时，
