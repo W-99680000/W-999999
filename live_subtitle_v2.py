@@ -2300,6 +2300,30 @@ def selftest():
         _outer.__cause__ = _inner
         return _outer
 
+    print("\n二之十二、import 不得有副作用（这条是踩出来的）")
+    # 回归：import get_models 曾经会**跑完整个 argos 安装流程** ——
+    # 模块级有 update_package_index()（联网）加安装循环。
+    # 而主程序 import 它只是为了拿一个模型尺寸，于是每次启动都在装模型。
+    # 现在执行逻辑收在 main()，import 必须零副作用。
+    try:
+        import ast as _ast
+        _src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "get_models.py"), encoding="utf-8").read()
+        _tree = _ast.parse(_src)
+        _top = []
+        for _n in _tree.body:
+            if isinstance(_n, _ast.Expr) and isinstance(_n.value, _ast.Call):
+                _f = _n.value.func
+                _nm = getattr(_f, "id", None) or getattr(_f, "attr", None)
+                _top.append(_nm or "?")
+        chk("get_models 模块级没有函数调用（%s）" % (_top or "无"),
+            not _top)
+        chk("get_models 有 __main__ 守卫", "if __name__" in _src)
+        chk("get_models 有 model_dir_mb",
+            hasattr(__import__("get_models"), "model_dir_mb"))
+    except Exception as _e:
+        chk("get_models 检查可跑（%s）" % type(_e).__name__, False)
+
     print("\n二之十一、设备偏好持久化与资源降级（第②③④项接线）")
     try:
         import device_pref as DPREF
