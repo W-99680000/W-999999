@@ -194,24 +194,6 @@ def scaled_font_size(base_pt, ref_height, screen_height):
     return max(10, int(round(base_pt * screen_height / ref_height)))
 
 
-def _text_overlap(a, b):
-    """两条原文是否像"同一句话的不同切面"（前缀/重叠度）。
-
-    PENDING_KEEP_OLD 沿用旧译文前的校验：只有新原文与上一条原文
-    高度重叠（同一句话被重新切分/加长）时，旧译文才配得上新原文；
-    否则会把上一句的译文张冠李戴到新句子下面。
-    """
-    a, b = (a or "").strip(), (b or "").strip()
-    if not a or not b:
-        return False
-    n = 0
-    for x, y in zip(a, b):
-        if x != y:
-            break
-        n += 1
-    return n >= max(4, int(0.6 * min(len(a), len(b))))
-
-
 def clean_caption(s, limit=220):
     """译文/原文的显示前规范化。
     取自成熟方案：压掉多余空白、去掉标签残留、超长截断。"""
@@ -261,7 +243,6 @@ class QtOverlay:
         self.box.addStretch(1)          # 内容靠底，向上长
         self.labels = []
         self.entries = []               # [(ts, en, zh, QLabel)]
-        self._prov_lb = None            # 流式模式的"临时条目"标签（update_last 用）
         self._drag = None
         self._hover_grip = False
         self._cmd_ts = None            # 控制面板命令的时间戳（见 _read_cmd）
@@ -1079,13 +1060,8 @@ class QtOverlay:
             h += float(self.fs_original()) * lh * per
         return int(max(30, h + 2))       # +2 与 minimum_height 的 slack 同源
 
-    def add(self, en, zh="", hold=None, provisional=False):
-        """加一条字幕：译文在上（大、亮），原文在下（小、暗）。
-
-        provisional=True：流式模式的"临时条目"——后续 update_last() 会
-        **就地更新**它，而不是每次局部结果都新起一条（否则同一句话的
-        多个 partial 层层堆叠、max_lines 内互相顶掉，观感闪烁）。
-        """
+    def add(self, en, zh="", hold=None):
+        """加一条字幕：译文在上（大、亮），原文在下（小、暗）。"""
         from PyQt5.QtCore import Qt
         from PyQt5.QtWidgets import QLabel
 
@@ -1104,47 +1080,13 @@ class QtOverlay:
         # 插在末尾 stretch 之前，这样内容整体靠底、向上长
         self.box.insertWidget(self.box.count() - 1, lb)
         self.entries.append([time.time(), en, zh, lb, hold or self.st["hold_seconds"]])
-        if provisional:
-            self._prov_lb = lb
         while len(self.entries) > int(self.st["max_lines"]):
             self._drop(0)
         self._relayout()
 
-    def update_last(self, en, zh=""):
-        """流式模式的局部结果：就地更新最后一条临时字幕，而不是新增。
-
-        zh == PENDING_KEEP_OLD：译文还在途，只更新原文、保留旧译文。
-        """
-        en = clean_caption(en, int(self.st["max_entry_chars"]))
-        keep_old = (zh == self.PENDING_KEEP_OLD)
-        if not keep_old:
-            zh = clean_caption(zh, int(self.st["max_entry_chars"]))
-        lb = self._prov_lb
-        if lb is not None:
-            for e in self.entries:
-                if e[3] is lb:
-                    e[0] = time.time()          # 刷新时间，不过期
-                    e[1] = en
-                    if not keep_old:
-                        e[2] = zh
-                    try:
-                        lb.setText(self._render_html(e[1], e[2]))
-                    except Exception:
-                        pass
-                    self._relayout()
-                    return
-        # 没有可更新的临时条目 → 新起一条
-        self.add(en, "" if keep_old else zh, provisional=True)
-
-    def finalize_last(self):
-        """流式：上一句已确认，临时条目转正；下一条 update_last 会新起一条。"""
-        self._prov_lb = None
-
     def _drop(self, i):
         try:
             ts, en, zh, lb, _hold = self.entries.pop(i)
-            if lb is self._prov_lb:
-                self._prov_lb = None
             self.box.removeWidget(lb)
             lb.setParent(None)
             lb.deleteLater()
@@ -1187,18 +1129,15 @@ class QtOverlay:
         zh == PENDING_KEEP_OLD 时：只更新原文，**沿用上一条的译文**。
         """
         if zh == self.PENDING_KEEP_OLD:
-            last_zh, last_en = "", ""
+            last_zh = ""
             for e in reversed(self.entries):
                 if e[2]:
-                    last_zh, last_en = e[2], e[1]
+                    last_zh = e[2]
                     break
-            # **只有新原文与上一条原文高度重叠才沿用旧译文。**
-            # 原来无条件沿用：上一句的译文会被配到新句子的原文下面
-            # （张冠李戴），新译文到达时又刷掉 —— 观感是字幕乱跳。
-            if last_zh and _text_overlap(en, last_en):
+            if last_zh:
                 self.add(en, last_zh, **kw)
             else:
-                # 没有可沿用的译文 → 只显示原文（空译文），等译文到达
+                # 还没有任何译文可沿用 → 只显示原文（空译文）
                 self.add(en, "", **kw)
             return
         self.add(en, zh, **kw)
@@ -1547,30 +1486,11 @@ if __name__ == "__main__":
         o.cycle_layout(); chk("L 循环 zh_only -> inline", o.st["layout"] == "inline")
         print("\n  PENDING_KEEP_OLD（翻译未回不清屏）")
         o.clear()
-        # 哨兵有**重叠守卫**（_text_overlap）：只有新原文与上一条高度
-        # 重叠（同一句被重新切分/加长）时才沿用旧译文；换了一句话就不沿用，
-        # 否则会把上一句的译文张冠李戴到新句子下面。
-        # 我原来只测了"不重叠也沿用"，那个断言在守卫加上之后就错了。
-        o.set("I never thought I would", "我从没想过我会")
-        o.set("I never thought I would see you", o.PENDING_KEEP_OLD)
-        chk("哨兵：原文高度重叠时沿用上一帧译文",
-            o.entries[-1][2] == "我从没想过我会")
-        chk("哨兵：重叠时原文已更新",
-            o.entries[-1][1] == "I never thought I would see you")
-        o.clear()
         o.set("first line", "第一行")
-        o.set("second line", o.PENDING_KEEP_OLD)
-        chk("哨兵：原文不重叠时**不**沿用（防张冠李戴）",
-            o.entries[-1][2] == "")
-        chk("哨兵：不重叠时原文仍显示",
-            o.entries[-1][1] == "second line")
-        chk("_text_overlap 对同一句的加长返回 True",
-            _text_overlap("I never thought I would",
-                          "I never thought I would see you"))
-        chk("_text_overlap 对不同句返回 False",
-            not _text_overlap("first line", "second line"))
-        chk("_text_overlap 对空串返回 False",
-            not _text_overlap("", "x"))
+        chk("哨兵：沿用上一帧译文",
+            (o.set("second line", o.PENDING_KEEP_OLD) or
+             o.entries[-1][2] == "第一行"))
+        chk("哨兵：原文已更新", o.entries[-1][1] == "second line")
         o.clear()
         o.set("only", o.PENDING_KEEP_OLD)
         chk("哨兵且无历史译文：原文在、译文空",

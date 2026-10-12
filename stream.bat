@@ -7,7 +7,7 @@ rem Streaming mode: LocalAgreement-2 policy, lower first-word latency,
 rem but subtitles may lag behind on long continuous speech.
 rem Keep this file ASCII-only (cmd.exe reads .bat in the system ANSI codepage).
 
-rem ── pick a python that actually has the packages ───────────────
+rem -- pick a python that actually has the packages ---------------
 rem Do NOT just use "where python": the python on PATH may lack
 rem faster_whisper / PyQt5 / pyaudiowpatch and the app dies at startup
 rem with ModuleNotFoundError (that regression already happened once).
@@ -43,8 +43,8 @@ if not defined PY (
 
 set HF_HUB_DISABLE_SYMLINKS_WARNING=1
 set PYTHONIOENCODING=utf-8
-rem Models are cached locally; skip hub network checks (broken proxy 502
-rem once caused GPU misdetection and a startup crash). See start.bat.
+rem Models are cached on disk. A broken proxy (seen as
+rem 502 Bad Gateway) must not stall model loading.
 set HF_HUB_OFFLINE=1
 
 echo Streaming mode: first-word latency ~1-2s,
@@ -52,11 +52,7 @@ echo but subtitles may lag behind on long continuous speech.
 echo python: %PY%
 echo.
 
-rem ── local translation (offline HY-MT via llama.cpp) ────────────
-rem Default model: medium 1.8B. For 7B: set HYMT_MODEL=F:\hh_si_pro\hh-translate-model\hh-translate-large.gguf
-if not defined HYMT_MODEL set "HYMT_MODEL=F:\hh_si_pro\hh-translate-model\hh-translate-medium.gguf"
-
-"%PY%" -u live_subtitle_v2.py --stream --stream-model small --mt-local --mt-local-model "%HYMT_MODEL%" %*
+"%PY%" -u live_subtitle_v2.py --stream %*
 
 echo.
 echo (stopped)

@@ -341,6 +341,36 @@ def main(src: str, dst: str) -> int:
         return 2
     print("  干净：没有 key 形状的字符串")
 
+    # -- gate: .bat must be pure ASCII -------------------------------
+    # cmd.exe parses the whole .bat BEFORE chcp takes effect and reads
+    # non-ASCII bytes in the system ANSI codepage. Garbled bytes split
+    # commands, so a double-click exits 1 with no output whatsoever.
+    # Measured: start.bat carried 471 non-ASCII bytes (Chinese comments
+    # and box-drawing characters) and would not open at all, while the
+    # pure-ASCII panel.bat worked. start.bat's own comment says to keep
+    # the file ASCII-only, which it then failed to do.
+    _bad_bat = []
+    for _root, _dirs, _files in os.walk(dst):
+        for _fn in _files:
+            if not _fn.lower().endswith(".bat"):
+                continue
+            _p = os.path.join(_root, _fn)
+            _b = open(_p, "rb").read()
+            _na = sum(1 for _c in _b if _c > 127)
+            if _na or _b[:3] == b"\xef\xbb\xbf":
+                _bad_bat.append((os.path.relpath(_p, dst), _na,
+                                 _b[:3] == b"\xef\xbb\xbf"))
+    if _bad_bat:
+        print()
+        print("  !! .bat is not pure ASCII - cmd.exe will garble it")
+        for _rel, _na, _bom in _bad_bat:
+            print("     %s  non-ASCII %d bytes%s"
+                  % (_rel, _na, "  + BOM" if _bom else ""))
+        print("     fix: English comments, replace box drawing with -, "
+              "save as ASCII")
+        return 2
+    print("  .bat all pure ASCII")
+
     # 自检：pyflakes + 残留路径
     print()
     print("=" * 70)

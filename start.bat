@@ -3,15 +3,15 @@ chcp 65001 >nul
 title live-subtitle
 cd /d "%~dp0"
 
-rem ── 找可用的 python ──────────────────────────────────────────────
-rem 必须装了 faster_whisper / PyQt5 / pyaudiowpatch 的那个才可用。
-rem 只写 python 是不行的：PATH 里的 python 可能没装这些依赖
-rem （我改过一版只用 where python，结果启动就 ModuleNotFoundError）。
+rem (note: keep this file ASCII-only)
+rem (note: keep this file ASCII-only)
+rem (note: keep this file ASCII-only)
+rem (note: keep this file ASCII-only)
 rem
-rem 优先级：本机已知可用的解释器 → PATH 里的 python → py 启动器
+rem (note: keep this file ASCII-only)
 rem
-rem 注意本文件保持纯 ASCII：cmd.exe 按系统 ANSI 读 .bat，
-rem 中文会变乱码并拆断命令。
+rem (note: keep this file ASCII-only)
+rem (note: keep this file ASCII-only)
 
 set "PY="
 set "CAND1=C:\Users\w\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe"
@@ -54,10 +54,8 @@ if not defined PY (
 
 set HF_HUB_DISABLE_SYMLINKS_WARNING=1
 set PYTHONIOENCODING=utf-8
-rem Models are already cached locally; skip hub network checks so a
-rem broken proxy cannot kill startup (observed: 502 -> GPU misdetected
-rem -> CPU fallback -> download attempt -> crash). Remove this line if
-rem you need to download a new model (or use get_models.py).
+rem Models are cached on disk. A broken proxy (seen as
+rem 502 Bad Gateway) must not stall model loading.
 set HF_HUB_OFFLINE=1
 
 echo ============================================================
@@ -95,17 +93,7 @@ echo   If something goes wrong, see run.log
 echo ============================================================
 echo.
 
-rem ── local translation (offline HY-MT via llama.cpp) ────────────
-rem Default model: medium 1.8B (best speed/quality balance).
-rem For better quality (7B, slower first load), run:
-rem   set HYMT_MODEL=F:\hh_si_pro\hh-translate-model\hh-translate-large.gguf
-rem   start.bat
-if not defined HYMT_MODEL set "HYMT_MODEL=F:\hh_si_pro\hh-translate-model\hh-translate-medium.gguf"
-
-echo   Translation: local HY-MT (offline) - %HYMT_MODEL%
-echo.
-
-"%PY%" -u live_subtitle_v2.py --mt-local --mt-local-model "%HYMT_MODEL%" %*
+"%PY%" -u live_subtitle_v2.py %*
 
 echo.
 echo (subtitle stopped - exit %ERRORLEVEL%)
