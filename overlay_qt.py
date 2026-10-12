@@ -140,6 +140,11 @@ def default_settings():
         # 这才是观看习惯。默认给 600 秒，等于"不过期"；
         # 想恢复旧行为把 hold_seconds 调小即可（范围 1~3600）。
         "hold_seconds": 600.0,
+        # **每条字幕最多显示几行**（不是"最多几条"，那是 max_lines）。
+        # 为什么需要：max_lines 管保留几条、max_entry_chars 管字数，
+        # 两者都管不住"一条长句折成 5 行" —— 实测 3 条 × 5 行把窗口
+        # 撑到 525px（近半屏），位置也从贴底被推到屏幕中部。
+        "max_lines_per_entry": 4,
         "show_original": True,
         # **默认上下两行：中文在上、原语在下**（操作者明确要的排法）。
         # 我之前默认 inline（左右两列）是为了省高度，但那是我的偏好 ——
@@ -558,12 +563,49 @@ class QtOverlay:
         return "".join(rows) or "&nbsp;"
 
     # ── 几何：贴底部，按内容向上长 ────────────────────────────
-    def _content_height(self):
-        """用当前所有条目的实际高度算窗口高度（不靠猜）。"""
+    def _content_height(self, cap=None):
+        """用当前所有条目的实际高度算窗口高度（不靠猜）。
+
+        **cap 是必须的。** 实测过一次失控：`max_lines=3` 是**条目数**，
+        而条目开了 wordWrap —— 一条 260 字符的字幕在 1200px 宽下折成
+        约 5 行，3 条目就是 15 行 ≈ 675px，被屏幕夹到 525px。
+        窗口占掉近半屏，位置也从贴底被推到屏幕中部。
+        所以除了按折行量，还要按"每条最多几行"封顶。
+        """
         h = self.box.contentsMargins().top() + self.box.contentsMargins().bottom()
         for e in self.entries:
             h += e[3].sizeHint().height() + self.box.spacing()
-        return max(60, h + 4)
+        h = max(60, h + 4)
+        if cap is not None:
+            h = min(h, int(cap))
+        return h
+
+    def content_height_cap(self):
+        """窗口高度上限：按每条最多 max_lines_per_entry 行算。
+
+        为什么需要上限而不是只靠 max_lines：
+            `max_lines` 限制的是**保留几条**，每条的字数由
+            `max_entry_chars` 限制，两者相乘才是真正的行数上限。
+            不封顶的话长句会把窗口撑到半个屏幕。
+        """
+        from PyQt5.QtWidgets import QApplication
+        per_entry = int(self.st.get("max_lines_per_entry", 4))
+        fs = float(self.fs())
+        fs_o = float(self.fs_original()) if self.st.get("show_original") \
+            else 0.0
+        lh = float(self.st.get("line_height", 1.15))
+        # 一个条目 = 译文行 + 原文行（原文按比例小）
+        one = fs * lh * per_entry + fs_o * lh * per_entry
+        n = int(self.st.get("max_lines", 3))
+        m = self.box.contentsMargins()
+        gap = float(self.st.get("gap_px", 10))
+        cap = (one * n + gap * max(0, n - 1)
+               + float(m.top() + m.bottom()) + 2.0 * 6.0 + 4.0)
+        scr = QApplication.primaryScreen()
+        if scr is not None:
+            # 最多占屏幕可用高度的 1/3 —— 字幕不该盖住半个画面
+            cap = min(cap, float(scr.availableGeometry().height()) / 3.0)
+        return int(max(120, cap))
 
     # ── 空状态提示 ───────────────────────────────────────────
     # 为什么需要：没有音频时浮窗是全透明的（bg_alpha=0），所以
@@ -691,7 +733,9 @@ class QtOverlay:
         if not QApplication.screens():
             return
         w = int(self.st["width"])
-        h = max(self._content_height(), self.minimum_height())
+        # 高度按"折行量"算，但**封顶** —— 否则长句把窗口撑到半个屏幕
+        h = max(self._content_height(cap=self.content_height_cap()),
+                self.minimum_height())
         cx = self.st.get("x")
         cy = self.st.get("y")
         # 先粗定一个位置，用来判断"主要落在哪块屏"
@@ -1002,6 +1046,20 @@ class QtOverlay:
         p.end()
 
     # ── 字幕条目管理 ─────────────────────────────────────────
+    def _entry_max_height(self):
+        """单条字幕的高度上限（像素）。
+
+        一个条目 = 译文若干行 + 原文若干行。行数由 max_lines_per_entry
+        限制；**不设上限的话长句会一直折行**，把窗口撑到半个屏幕
+        （实测 3 条 × 5 行 = 525px）。
+        """
+        per = int(self.st.get("max_lines_per_entry", 4))
+        lh = float(self.st.get("line_height", 1.15))
+        h = float(self.fs()) * lh * per
+        if self.st.get("show_original"):
+            h += float(self.fs_original()) * lh * per
+        return int(max(30, h + 2))       # +2 与 minimum_height 的 slack 同源
+
     def add(self, en, zh="", hold=None):
         """加一条字幕：译文在上（大、亮），原文在下（小、暗）。"""
         from PyQt5.QtCore import Qt
@@ -1014,6 +1072,11 @@ class QtOverlay:
         self.clear_idle_hint()      # 有真字幕了，提示该撤掉
         lb = self._make_label()
         lb.setText(self._render_html(en, zh))
+        # **单条高度上限**：长句折行不该把窗口撑大，超出部分在条目内裁掉。
+        try:
+            lb.setMaximumHeight(self._entry_max_height())
+        except Exception:
+            pass
         # 插在末尾 stretch 之前，这样内容整体靠底、向上长
         self.box.insertWidget(self.box.count() - 1, lb)
         self.entries.append([time.time(), en, zh, lb, hold or self.st["hold_seconds"]])
@@ -1324,6 +1387,30 @@ if __name__ == "__main__":
         # 主屏的范围里没有它，会被拽回主屏或夹到屏外。
         chk("有 _screen_for（按实际所在屏判断）", hasattr(o, "_screen_for"))
         chk("有 _compute_bounds", hasattr(o, "_compute_bounds"))
+        # 回归：长字幕**不能**把窗口撑到半个屏幕。
+        # 实测失控过一次：3 条 × 5 行 = 525px（占屏高 49%），
+        # 位置也从贴底被推到屏幕中部。
+        _cap = o.content_height_cap()
+        chk("窗口高度上限存在且不超过屏高 1/3（%dpx）" % _cap,
+            _cap <= o._screen_h() / 3 + 1)
+        chk("窗口高度上限有下限 120", _cap >= 120)
+        _eh = o._entry_max_height()
+        chk("单条高度上限存在（%dpx）" % _eh, _eh >= 30)
+        _st1 = dict(o.st)
+        try:
+            o.st["max_lines_per_entry"] = 2
+            _e2 = o._entry_max_height()
+            o.st["max_lines_per_entry"] = 8
+            _e8 = o._entry_max_height()
+            chk("单条上限随 max_lines_per_entry 增大（%d < %d）" % (_e2, _e8),
+                _e8 > _e2)
+            o.st["max_lines_per_entry"] = 20
+            chk("上限不会失控（<= 屏高 1/3 的 2 倍）",
+                o.content_height_cap() <= o._screen_h())
+        finally:
+            o.st.clear()
+            o.st.update(_st1)
+
         chk("有 minimum_height", hasattr(o, "minimum_height"))
         from PyQt5.QtWidgets import QApplication as _QA
         _r = _QA.primaryScreen().availableGeometry()

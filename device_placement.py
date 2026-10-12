@@ -275,10 +275,33 @@ def model_size_mb(path: str) -> float:
     return total / 2 ** 20
 
 
+def _any_plan_fits(devices, recog, trans, recog_mb, trans_mb,
+                   reserved_mb) -> bool:
+    """recog × trans 的候选组合里，有没有一组放得下。"""
+    by_id = {d.id: d for d in devices}
+    for a in recog:
+        for b in trans:
+            need: dict[str, float] = {}
+            if a.id != "cpu":
+                need[a.id] = need.get(a.id, 0.0) + recog_mb
+            if b.id != "cpu":
+                need[b.id] = need.get(b.id, 0.0) + trans_mb
+            ok = True
+            for did, want in need.items():
+                d = by_id.get(did)
+                if d is None or d.budget_mb <= 0 \
+                        or d.budget_mb < want + reserved_mb:
+                    ok = False
+                    break
+            if ok:
+                return True
+    return False
+
+
 def plan_placement(devices: list[Device], recog_mb: float, trans_mb: float,
                    reserved_mb: int = DEFAULT_RESERVED_MB,
                    recog_choice: str = "auto", trans_choice: str = "auto",
-                   allow_cpu_fallback: bool = True):
+                   allow_cpu_fallback: bool = True, strict: bool = False):
     """给识别和翻译各挑一台设备。
 
     返回 (识别设备, 翻译设备, 原因列表)。
@@ -307,8 +330,21 @@ def plan_placement(devices: list[Device], recog_mb: float, trans_mb: float,
             raise ValueError(f"{task} 指定设备不可用：{choice}")
         return [d for d in devices if ok(d)]
 
+    # 先按用户指定的设备试；**放不下就回退 auto 重新选**。
+    # 为什么不是直接退 CPU：用户选了 A 卡但 A 卡装不下，
+    # 合理的下一步是"在别的卡上放"，而不是"整条链路降级到 CPU"。
+    # strict=True 才保持旧的严格语义（放不下就退 CPU）。
     recog = pick(recog_choice, "recognition", recog_mb)
     trans = pick(trans_choice, "translation", trans_mb)
+    _explicit = (recog_choice != "auto" or trans_choice != "auto")
+    if _explicit and not strict:
+        _fits = _any_plan_fits(devices, recog, trans, recog_mb, trans_mb,
+                               reserved_mb)
+        if not _fits:
+            reasons.append(
+                "指定的设备放不下 → 改为自动选择（不是退 CPU）")
+            recog = [d for d in devices if d.can_recognition]
+            trans = [d for d in devices if d.can_translation]
 
     plans = []
     for a in recog:

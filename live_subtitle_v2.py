@@ -1532,8 +1532,15 @@ def run(args):
                 print(f"    · {_m}")
         except Exception as _e:
             print(f"  设备偏好读取失败: {type(_e).__name__} {_e}")
+        # **偏好必须"尽力兑现"，不能因为它锁死 GPU 路径。**
+        # 我第一版用 "__PREF__" 占位，结果：
+        #   它既不等于 "auto" 也不等于 "cuda" →
+        #   模型升级条件不成立（没升 medium）、
+        #   放置段的前置条件也不成立（**整段没执行**）→ 回退远端。
+        # 现在：偏好能解析成具体设备就记下，**解析不出来就什么都别记**
+        # （后续按 auto 走，也就是"选最好的可用设备"）。
         if _recog_want is None and _pref_rec and _pref_rec.get("id"):
-            _recog_want = "__PREF__"      # 先占位，盘点后再解析
+            _recog_want = "__PREF__"      # 占位，盘点后解析
         if _trans_want is None and _pref_tr and _pref_tr.get("id"):
             _trans_want = "__PREF__"
         if _recog_want is None:
@@ -1546,11 +1553,13 @@ def run(args):
         # 实际加载的是 medium(1500MB)，放置结论就错了。
         # （small 在 GPU 上准确度不足：越南语实测错词；medium 只慢 0.2s。）
         if args.model == "small" and not args.no_gpu_upgrade \
-                and _recog_want in ("auto", "cuda"):
+                and _recog_want in ("auto", "cuda", "__PREF__"):
             args.model = "medium"
             print("  模型先升到 medium，再按 medium 的尺寸做放置预算")
 
-        if _recog_want in ("auto", "cuda") or _trans_want in ("auto", "cuda"):
+        _want_any_gpu = (_recog_want in ("auto", "cuda", "__PREF__")
+                         or _trans_want in ("auto", "cuda", "__PREF__"))
+        if _want_any_gpu:
             try:
                 from gpu_setup import enable_cuda_dlls
                 enable_cuda_dlls()
@@ -1618,6 +1627,7 @@ def run(args):
                 _rid, _rn = _DPREF.resolve(_pref_rec, _devs)
                 for _m in _rn:
                     print(f"    · 识别偏好：{_m}")
+                # 解析不出来就当 auto —— 让放置逻辑自己选，而不是关掉 GPU
                 _recog_want = _rid or "auto"
             if _trans_want == "__PREF__":
                 _tid, _tn = _DPREF.resolve(_pref_tr, _devs)
