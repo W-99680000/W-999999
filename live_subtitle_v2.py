@@ -62,6 +62,17 @@ import time
 
 import numpy as np
 
+# 设备放置与资源失败判定（见 device_placement.py 的说明）
+try:
+    from device_placement import (
+        is_resource_failure as _is_resource_failure,
+        release_failed_load)
+except ImportError:              # 缺这个模块也不该让主程序崩
+    def _is_resource_failure(_e):
+        return False
+
+    def release_failed_load(_e):
+        return None
 HERE = os.path.dirname(os.path.abspath(__file__))
 TARGET_RATE = 16000
 SETTINGS = os.path.join(HERE, "overlay_settings.json")
@@ -636,6 +647,13 @@ class BatchTranscriber:
                 enable_cuda_dlls()
             except Exception:
                 pass
+        self._model_name = model
+        self._threads = threads
+        self._device = device
+        self._compute_type = compute_type
+        # 降级状态：资源类错误退 CPU 后置位，避免反复重建
+        self.fell_back_to_cpu = False
+        self.fallback_reason = ""
         self.m = WhisperModel(model, device=device, compute_type=compute_type,
                               cpu_threads=threads)
         self.max_batch = max_batch
@@ -746,10 +764,42 @@ class BatchTranscriber:
             return out
         cat = np.concatenate(segs)
         total = len(cat) / TARGET_RATE
-        segs_out, info = self.m.transcribe(
-            cat, language=lang, beam_size=5, vad_filter=True,
-            condition_on_previous_text=False, temperature=0.0,
-            word_timestamps=True)
+
+        def _infer(_m):
+            return _m.transcribe(
+                cat, language=lang, beam_size=5, vad_filter=True,
+                condition_on_previous_text=False, temperature=0.0,
+                word_timestamps=True)
+
+        try:
+            segs_out, info = _infer(self.m)
+        except Exception as _e:
+            # ── 资源类失败 → 退 CPU 重试一次（第④项接线）─────────
+            # 为什么只对资源类：OOM / 缺 cuBLAS / 设备丢失是**环境问题**，
+            # 换 CPU 就没了；而权重损坏、参数错误换哪儿都一样，
+            # 重试只会把真正的错误信息淹没。
+            # 为什么要 release_failed_load：失败的 traceback 帧还抓着
+            # 已分配的张量，不清掉直接重建会**二次 OOM**。
+            if self._device == "cpu" or not _is_resource_failure(_e):
+                raise
+            self.fallback_reason = f"{type(_e).__name__}: {str(_e)[:120]}"
+            print(f"  识别资源失败，回退 CPU：{self.fallback_reason}")
+            try:
+                release_failed_load(_e)
+            except Exception:
+                pass
+            del self.m
+            try:
+                import gc
+                gc.collect()
+            except Exception:
+                pass
+            self.m = WhisperModel(self._model_name, device="cpu",
+                                  compute_type="int8",
+                                  cpu_threads=self._threads)
+            self._device, self._compute_type = "cpu", "int8"
+            self.fell_back_to_cpu = True
+            segs_out, info = _infer(self.m)
         segs_out = list(segs_out)
         # ── 段级质量闸 ──────────────────────────────────────────
         # 用 whisper **自己算出的**三个信号判废，而不是我手搓的文本启发式。
@@ -1458,21 +1508,149 @@ def run(args):
         # 另外：本地才有 no_speech_prob / avg_logprob 这些**幻觉检测信号**，
         # 远端只返回一段文本，无法判废。
         _dev = getattr(args, "device", "auto")
+        _recog_want = getattr(args, "recog_device", None)
+        _trans_want = getattr(args, "trans_device", None)
+        # ── 设备偏好（第③项：stableId 持久化）──────────────────
+        # 命令行优先；命令行没给才看存下来的偏好。**存下来的是名字**，
+        # 因为 Vulkan/DirectML 的序号不稳定（Vulkan1 下次可能是 Vulkan0，
+        # 而它可能已经是另一张卡）。解析不出来就回退 auto，绝不用序号硬上。
+        _pref_rec = _pref_tr = None
+        try:
+            import device_pref as _DPREF
+            # load_preference() 返回 (识别记录, 翻译记录, 说明) 三元组 ——
+            # 我第一版把它当字典用了（.get），于是永远读不到已存的偏好，
+            # 而且第一次运行时对 None 调 .get 直接抛 AttributeError。
+            _pref_rec, _pref_tr, _pnotes = _DPREF.load_preference()
+            if _pref_rec or _pref_tr:
+                print(f"  设备偏好：识别 {_DPREF.describe_pref(_pref_rec)}"
+                      f"　翻译 {_DPREF.describe_pref(_pref_tr)}")
+            for _m in _pnotes:
+                print(f"    · {_m}")
+        except Exception as _e:
+            print(f"  设备偏好读取失败: {type(_e).__name__} {_e}")
+        if _recog_want is None and _pref_rec and _pref_rec.get("id"):
+            _recog_want = "__PREF__"      # 先占位，盘点后再解析
+        if _trans_want is None and _pref_tr and _pref_tr.get("id"):
+            _trans_want = "__PREF__"
+        if _recog_want is None:
+            _recog_want = _dev
+        if _trans_want is None:
+            _trans_want = _dev
         _use_gpu = False
-        if _dev in ("auto", "cuda"):
-            try:
-                from gpu_setup import enable_cuda_dlls, gpu_available
-                enable_cuda_dlls()
-                _use_gpu = gpu_available()
-            except Exception as e:
-                print(f"  GPU 探测失败: {type(e).__name__} {e}")
-                _use_gpu = False
-        if _use_gpu and args.model == "small" and not args.no_gpu_upgrade:
-            # small 在 GPU 上准确度明显不足（越南语实测错词），
-            # 而 medium 只慢 0.2s、显存多 1GB。自动升到 medium。
+        _dp = None
+        # **模型升级必须发生在放置之前** —— 否则预算按 small(500MB) 算，
+        # 实际加载的是 medium(1500MB)，放置结论就错了。
+        # （small 在 GPU 上准确度不足：越南语实测错词；medium 只慢 0.2s。）
+        if args.model == "small" and not args.no_gpu_upgrade \
+                and _recog_want in ("auto", "cuda"):
             args.model = "medium"
-            print("  模型自动升到 medium（small 在 GPU 上准确度不足，"
-                  "medium 只慢 0.2s）")
+            print("  模型先升到 medium，再按 medium 的尺寸做放置预算")
+
+        if _recog_want in ("auto", "cuda") or _trans_want in ("auto", "cuda"):
+            try:
+                from gpu_setup import enable_cuda_dlls
+                enable_cuda_dlls()
+            except Exception as e:
+                print(f"  CUDA 库加载失败: {type(e).__name__} {e}")
+            # ── 设备盘点 + 显存预算 + 放置（device_placement.py）────
+            # 这一段原来是 `gpu_available()` 一句话 —— 那只回答
+            # "能不能用 GPU"，不回答"放不放得下"。实测后果：
+            # whisper medium 1457MB + HY-MT 7B 4410MB = 5.9GB/8188MB，
+            # 装得下但只剩 1.8GB，之前没有任何检查。
+            try:
+                from device_placement import (plan_placement, probe_devices,
+                                              describe, model_size_mb)
+                _dp = (plan_placement, probe_devices, describe, model_size_mb)
+            except ImportError as e:
+                print(f"  device_placement 不可用: {e}")
+
+        if _dp is not None:
+            plan_placement, probe_devices, describe, model_size_mb = _dp
+            # 用 local_mt 的 find_binary 解析，而不是自己拼路径 ——
+            # 它知道 llama.cpp 可能在哪几个位置（实测：自己拼会 miss，
+            # 结果 llama.cpp 的显存信息全丢，设备无法按物理卡合并）
+            _llama_dir = None
+            try:
+                from local_mt import find_binary
+                _b = find_binary()
+                if _b:
+                    _llama_dir = os.path.dirname(_b)
+            except Exception:
+                pass
+            if not _llama_dir:
+                for _c in (os.environ.get("LLAMA_DIR"),
+                           os.path.join(os.path.dirname(
+                               os.path.abspath(__file__)), "llamacpp"),
+                           r"D:\NEW WORK\work\llamacpp"):
+                    if _c and os.path.isfile(
+                            os.path.join(_c, "llama-server.exe")):
+                        _llama_dir = _c
+                        break
+            _devs, _notes = probe_devices(_llama_dir)
+            # 识别模型尺寸：优先按名字找缓存目录，找不到用保守估计
+            _recog_mb = 0.0
+            try:
+                from gpu_setup import cuda_lib_dirs  # noqa: F401
+            except Exception:
+                pass
+            try:
+                from get_models import model_dir_mb  # 可能不存在
+                _recog_mb = model_dir_mb(args.model)
+            except Exception:
+                # whisper medium 的缓存约 1.5GB；按模型名给保守值
+                _recog_mb = {"tiny": 80, "base": 150, "small": 500,
+                             "medium": 1500, "large-v3": 3100}.get(
+                                 args.model, 1500)
+            _trans_mb = 0.0
+            try:
+                from local_mt import find_model
+                _mp = find_model()
+                if _mp:
+                    _trans_mb = model_size_mb(_mp)
+            except Exception:
+                pass
+            # 解析 __PREF__ 占位（此时才有设备表）
+            if _recog_want == "__PREF__":
+                _rid, _rn = _DPREF.resolve(_pref_rec, _devs)
+                for _m in _rn:
+                    print(f"    · 识别偏好：{_m}")
+                _recog_want = _rid or "auto"
+            if _trans_want == "__PREF__":
+                _tid, _tn = _DPREF.resolve(_pref_tr, _devs)
+                for _m in _tn:
+                    print(f"    · 翻译偏好：{_m}")
+                _trans_want = _tid or "auto"
+            _ra, _rb, _why = plan_placement(
+                _devs, _recog_mb, _trans_mb,
+                reserved_mb=getattr(args, "reserved_vram", 1024),
+                recog_choice=_recog_want if _recog_want != "auto" else "auto",
+                trans_choice=_trans_want if _trans_want != "auto" else "auto")
+            print(f"  设备盘点（识别需 {_recog_mb:.0f}MB，"
+                  f"翻译需 {_trans_mb:.0f}MB，预留 "
+                  f"{getattr(args, 'reserved_vram', 1024)}MB）：")
+            for _ln in describe(_devs).split("\n"):
+                print(f"    {_ln}")
+            print(f"  放置：识别 → {_ra.name[:40]}　翻译 → {_rb.name[:40]}")
+            for _w in dict.fromkeys(_why):        # 去重后打印
+                print(f"    · {_w}")
+            try:
+                _DPREF.save_preference(_ra.id, _rb.id, _devs)
+            except Exception:
+                pass
+            _use_gpu = (_ra.id != "cpu")
+            if _use_gpu and _ra.backend not in ("cuda", "rocm"):
+                # llama.cpp 报的 Vulkan 设备：识别走 ctranslate2，
+                # 只有 ctranslate2 也认这张卡时才真能用
+                print("    · 注意：该设备来自 llama.cpp，识别需 ctranslate2 "
+                      "也认它；下面会用 gpu_available() 实测确认")
+                try:
+                    from gpu_setup import gpu_available
+                    _use_gpu = gpu_available()
+                    if not _use_gpu:
+                        print("    · 实测前向失败 → 识别回退")
+                except Exception as e:
+                    print(f"    · 实测探测失败: {type(e).__name__} {e}")
+                    _use_gpu = False
         if _use_gpu:
             th = BatchTranscriber(args.model, args.threads,
                                   max_batch=args.max_batch,
@@ -2108,6 +2286,60 @@ def selftest():
         _outer.__cause__ = _inner
         return _outer
 
+    print("\n二之十一、设备偏好持久化与资源降级（第②③④项接线）")
+    try:
+        import device_pref as DPREF
+        from device_placement import Device
+
+        # ① stableId：稳定的按 id 找
+        stab = Device("cuda:UUID-1", "RTX 4070", "cuda", total_mb=8000,
+                      free_mb=7000, stable_id=True)
+        rid, _n = DPREF.resolve({"id": "cuda:UUID-1", "name": "RTX 4070",
+                                 "stable": True}, [stab])
+        chk("稳定 id 直接命中", rid == "cuda:UUID-1")
+
+        # ② 不稳定 id + 名字唯一 → 按名字找回（换序号也能用）
+        unst = Device("llama:Vulkan0", "RTX 4070", "vulkan", total_mb=8000,
+                      free_mb=7000, stable_id=False)
+        rid2, n2 = DPREF.resolve({"id": "llama:Vulkan1", "name": "RTX 4070",
+                                  "stable": False}, [unst])
+        chk("不稳定 id 按名字找回（Vulkan1→Vulkan0 仍可用）",
+            rid2 == "llama:Vulkan0")
+
+        # ③ 多个同名 → **拒绝**（分不清就是分不清）
+        a = Device("llama:Vulkan0", "RTX 4070", "vulkan", stable_id=False)
+        b = Device("cuda:0", "RTX 4070", "cuda", stable_id=False)
+        rid3, n3 = DPREF.resolve({"id": "llama:Vulkan9", "name": "RTX 4070",
+                                  "stable": False}, [a, b])
+        chk("同名多台 → 拒绝采用，回退自动", rid3 is None)
+        chk("拒绝时给出原因", any("分不清" in x for x in n3))
+
+        # ④ 不稳定 id 且名字也找不到 → 拒绝（**不能拿序号硬上**）
+        rid4, n4 = DPREF.resolve({"id": "llama:Vulkan1", "name": "查无此卡",
+                                  "stable": False}, [stab])
+        chk("不稳定 id 名字也匹配不到 → 拒绝", rid4 is None)
+        chk("拒绝原因提到序号可能已指向别的卡",
+            any("别的卡" in x for x in n4))
+
+        # ⑤ 稳定的 id 找不到 → 回退自动（不是硬上）
+        rid5, _ = DPREF.resolve({"id": "cuda:GONE", "name": "",
+                                 "stable": True}, [stab])
+        chk("稳定 id 消失 → 回退自动", rid5 is None)
+
+        # ⑥ 空偏好不报错
+        chk("空偏好返回 None", DPREF.resolve(None, [stab])[0] is None)
+        chk("describe_pref 能读", "RTX" in DPREF.describe_pref(
+            {"id": "x", "name": "RTX 4070", "stable": True}))
+
+        # ⑦ 降级路径：BatchTranscriber 有降级状态字段
+        bt = BatchTranscriber("tiny", 2)
+        chk("BatchTranscriber 记录降级状态",
+            hasattr(bt, "fell_back_to_cpu") and bt.fell_back_to_cpu is False)
+        chk("BatchTranscriber 记录原设备", getattr(bt, "_device", None))
+        del bt
+    except ImportError as e:
+        chk("device_pref 可导入（%s）" % e, False)
+
     print("\n二之十、设备放置与显存预算")
     # 参考 Nola-Translator 的 compute.py（GPL-3.0）。它处理的正是本机形态：
     # 独显 + 核显、两个模型要同放。我原来只问"能不能用"，不问"放不放得下"。
@@ -2454,6 +2686,14 @@ def build_parser():
     # 只占端到端约 4%，是顺手省一点，不是主要杠杆。
     ap.add_argument("--chunk-ms", type=float, default=10.0,
                     help="采集块长毫秒（越小延迟越低，默认 10）")
+    # 识别与翻译**分别**指定设备（device_placement.py 的放置决策）。
+    # 两个模型可以放不同卡；--device 保留为两者的兼容别名。
+    ap.add_argument("--recog-device", default=None,
+                    help="识别用哪台设备（默认跟随 --device）")
+    ap.add_argument("--trans-device", default=None,
+                    help="翻译用哪台设备（默认跟随 --device）")
+    ap.add_argument("--reserved-vram", type=int, default=1024,
+                    help="放置时预留的显存 MB（默认 1024）")
     ap.add_argument("--device", choices=["auto", "cpu", "cuda"],
                     default="auto",
                     help="识别设备：auto(默认，有 GPU 就用) / cpu / cuda")

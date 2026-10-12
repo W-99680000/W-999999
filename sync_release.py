@@ -27,7 +27,7 @@ import shutil
 import sys
 
 ROOT_FILES = ["live_subtitle_v2.py", "overlay_qt.py", "streaming_asr.py",
-              "streaming_asr2.py", "llm_translate.py", "remote_asr.py", "gpu_setup.py", "device_placement.py", "local_mt.py", "streaming_asr_remote.py", "control_panel.py",
+              "streaming_asr2.py", "llm_translate.py", "remote_asr.py", "gpu_setup.py", "device_placement.py", "device_pref.py", "local_mt.py", "streaming_asr_remote.py", "control_panel.py",
               "get_models.py", "get_vi_models.py", "README.md",
               "start.bat", "stream.bat", "panel.bat",
               "publish_github.py", "sync_release.py"]
@@ -103,6 +103,7 @@ overlay_qt.json
 overlay_settings.json
 control_cmd.json
 overlay_state.json
+device_pref.json
 *.log
 __pycache__/
 *.py[cod]

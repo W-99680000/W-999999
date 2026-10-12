@@ -11,6 +11,7 @@ overlay_qt.json
 overlay_settings.json
 control_cmd.json
 overlay_state.json
+device_pref.json
 *.log
 __pycache__/
 *.py[cod]
