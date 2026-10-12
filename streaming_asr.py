@@ -107,6 +107,9 @@ class StreamingTranscriber:
                               compute_type=compute_type,
                               cpu_threads=threads)
         self.language = language
+        # 语言检测（每轮 transcribe 后更新，主程序读取做路由）
+        self.last_lang = None
+        self.last_lang_prob = 0.0
         self.update_interval = float(update_interval)
         # ── 自适应延迟（Whisper-Streaming 论文的第二个贡献） ────────
         # 论文（arXiv 2307.14743）用的是 "local agreement policy with
@@ -230,6 +233,12 @@ class StreamingTranscriber:
             vad_filter=self.vad_filter, condition_on_previous_text=False,
             temperature=0.0, word_timestamps=True)
         segs = list(segs)
+        # 语言检测结果留给主程序做路由/短句表切换。
+        # 原来根本没暴露 —— 主循环里 getattr(th, "last_lang", None)
+        # 永远是 None，流式的语言路由和短句表全是死代码。
+        self.last_lang = getattr(info, "language", None)
+        self.last_lang_prob = float(
+            getattr(info, "language_probability", 0.0) or 0.0)
         txt = " ".join(s.text.strip() for s in segs).strip()
         ws = []
         for s in segs:
