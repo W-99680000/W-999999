@@ -794,6 +794,10 @@ class BatchTranscriber:
                 gc.collect()
             except Exception:
                 pass
+            # **必须在这里导入** —— WhisperModel 是在 __init__ 里导入的，
+            # 那个作用域到这个方法里不存在（pyflakes 抓到的真错误：
+            # 一旦真走到降级分支就会 NameError）。
+            from faster_whisper import WhisperModel
             self.m = WhisperModel(self._model_name, device="cpu",
                                   compute_type="int8",
                                   cpu_threads=self._threads)
