@@ -16,6 +16,17 @@ device_pref.json
 __pycache__/
 *.py[cod]
 
+# watch 路线的运行期产物与缓存
+# pre_cache 里的 srt/音频是看片缓存（体量大、含版权内容），
+# watch_*_state.json 是浮窗实时状态 —— 都只属于本机。
+pre_cache/
+url_cache/
+watch_overlay.json
+watch_overlay_state.json
+watch_cmd.json
+*.srt.tmp
+*.srt.meta.json
+
 # ── 凭据：绝不进仓库 ──────────────────────────────────────
 # key 实际存在 ~/.dsh/.dashscope（在仓库之外），这里再加一道，
 # 防止有人图省事把 key 放进项目目录然后被 add 进来。
@@ -38,3 +49,6 @@ apikey*
 .idea/
 .DS_Store
 Thumbs.db
+# bench 里的实验输出（运行产物，不进仓库；注意别用 *.txt ——
+# 那会把 requirements.txt 一起忽略掉）
+bench/_*.txt

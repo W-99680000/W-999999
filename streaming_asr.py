@@ -107,6 +107,10 @@ class StreamingTranscriber:
                               compute_type=compute_type,
                               cpu_threads=threads)
         self.language = language
+        # 最近一次转写的语言检测结果（主程序的语言锁定/翻译提示要用）。
+        # 原来没写回 —— 流式路线的"语言跟随"因此从未真正生效。
+        self.last_lang = None
+        self.last_lang_prob = 0.0
         self.update_interval = float(update_interval)
         # ── 自适应延迟（Whisper-Streaming 论文的第二个贡献） ────────
         # 论文（arXiv 2307.14743）用的是 "local agreement policy with
@@ -229,6 +233,14 @@ class StreamingTranscriber:
             audio, language=self.language, beam_size=5,
             vad_filter=self.vad_filter, condition_on_previous_text=False,
             temperature=0.0, word_timestamps=True)
+        # language=None（自动检测）时把结果写回，供主程序做语言锁定
+        # 和翻译源语言提示；检测成本只是一次编码器前向，与解码共享。
+        try:
+            self.last_lang = getattr(info, "language", None)
+            self.last_lang_prob = float(
+                getattr(info, "language_probability", 0) or 0)
+        except Exception:
+            pass
         segs = list(segs)
         txt = " ".join(s.text.strip() for s in segs).strip()
         ws = []

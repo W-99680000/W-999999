@@ -30,10 +30,26 @@ ROOT_FILES = ["live_subtitle_v2.py", "overlay_qt.py", "streaming_asr.py",
               "streaming_asr2.py", "llm_translate.py", "remote_asr.py", "gpu_setup.py", "device_placement.py", "device_pref.py", "local_mt.py", "streaming_asr_remote.py", "control_panel.py",
               "get_models.py", "get_vi_models.py", "README.md",
               "start.bat", "stream.bat", "panel.bat",
-              "publish_github.py", "sync_release.py"]
+              "publish_github.py", "sync_release.py",
+              # ── watch 路线（点播预翻译字幕）──────────────────
+              # 这条路线整个都在白名单外，同步一次就会被清空删掉 ——
+              # **必须逐个列出**，别指望通配。
+              "watch_player.py", "watch_overlay.py", "pretranslate.py",
+              "browser_history.py", "autopipe.py", "smtc_tracker.py",
+              "watch.bat", "cache.bat"]
 BENCH = ["bench_latency.py", "bench_localagree.py", "bench_fastest.py",
          "bench_realtime.py", "bench_depth.py", "bench_trend.py",
-         "bench_final.py"]
+         "bench_final.py",
+         # watch 路线的验证 / 诊断脚本（同样必须精确写全名）
+         "_verify_seek.py",        # 进度拖动对齐单测
+         "_verify_stitch.py",      # 跨块断句缝合单测
+         "_verify_pipeline.py",    # 块内识别→翻译流水线单测
+         "_verify_resolve.py",     # 网址反查两档渐进 + no_url 退避单测
+         "_diag_resolve.py",       # 反查/会话识别一键诊断
+         "_diag_watch.py", "_diag_smtc_self.py", "_diag_chunk_speed.py",
+         "_smoke_overlay.py", "_repro_stuck.py", "_verify_switch.py",
+         "_verify_hotreload.py", "_verify_incremental.py",
+         "_verify_rolling.py", "_cmp_chunk_full.py", "_prestore_vs_live.py"]
 TOOLS = ["test_pipeline.py", "test_borrowed.py", "test_drag2.py", "test_loopback3.py", "test_vietnamese.py",
          "test_mymemory.py", "test_google_free.py", "test_google_sustained.py",
          "compare_vi_paths.py", "compare_vi_models.py", "compare_vi3.py",

@@ -31,6 +31,7 @@ import json
 import os
 import re
 import ssl
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -193,7 +194,7 @@ class LLMTranslator:
     """
 
     def __init__(self, base_url, model, api_key=None, kind="openai",
-                 timeout=20.0, temperature=0.1, num_ctx=1024,
+                 timeout=8.0, temperature=0.1, num_ctx=1024,
                  no_system=False):
         self.base = (base_url or "").rstrip("/")
         self.model = model
@@ -214,34 +215,43 @@ class LLMTranslator:
         # 一次 TCP+TLS 握手**，而且没有重连。空闲一会儿后服务端会关掉
         # 空闲连接、代理链路上的空闲连接更容易被掐断；下一次请求失败
         # 就直接返回空 —— 那条字幕就没译文了，看着就是"自己断了一下"。
-        # 现在复用一条长连接，断了丢掉重建并**重试一次**。
-        self._hc = None              # http.client 连接（懒建）
-        self._reconnects = 0         # 诊断：重连过几次
+        # 现在复用长连接，断了丢掉重建并**重试一次**。
+        #
+        # **必须按线程分开：http.client 不是线程安全的。**
+        # 主程序的翻译池有 2 个 worker，两批翻译并发时共享同一条连接，
+        # 两个响应的字节会在同一条流上交错 —— 轻则 JSON 解析失败
+        # （被当成"翻译失败"返回空），重则读到另一半的响应体（错位）。
+        # threading.local 让每个线程各持一条连接：既安全又能真并行。
+        self._tls = threading.local()    # 每线程一条 http.client 连接（懒建）
+        self._reconnects = 0             # 诊断：重连过几次
 
     # -- 连接管理 --
     def _conn(self):
-        """拿一条可用连接（懒建；断了靠 _drop_conn 重建）。"""
-        if self._hc is None:
+        """拿一条本线程可用的连接（懒建；断了靠 _drop_conn 重建）。"""
+        c = getattr(self._tls, "hc", None)
+        if c is None:
             u = urllib.parse.urlsplit(self.base)
             if u.scheme == "https":
                 ctx = ssl.create_default_context()
                 ctx.check_hostname = False
                 ctx.verify_mode = ssl.CERT_NONE
-                self._hc = http.client.HTTPSConnection(
+                c = http.client.HTTPSConnection(
                     u.hostname, u.port or 443, timeout=self.timeout,
                     context=ctx)
             else:
-                self._hc = http.client.HTTPConnection(
+                c = http.client.HTTPConnection(
                     u.hostname, u.port or 80, timeout=self.timeout)
-        return self._hc
+            self._tls.hc = c
+        return c
 
     def _drop_conn(self):
+        c = getattr(self._tls, "hc", None)
         try:
-            if self._hc is not None:
-                self._hc.close()
+            if c is not None:
+                c.close()
         except Exception:
             pass
-        self._hc = None
+        self._tls.hc = None
 
     def _post_once(self, body, hdr):
         """单次 POST，用复用连接。异常直接抛给调用方。"""
@@ -257,14 +267,19 @@ class LLMTranslator:
         return json.loads(raw.decode("utf-8", "replace"))
 
     # ── 请求体 ───────────────────────────────────────────────
-    def _payload(self, text, target):
+    def _payload(self, text, target, source=None):
         # **qwen-mt 只接受 user / assistant 角色，发 system 会 400。**
         # 实测报错：Role must be in [user, assistant].
         # 这是翻译专用模型的特性 —— 翻译指令本身就该写在 user 里，
         # 它不需要（也不支持）system prompt。
         # 我第一版统一发 system+user，于是 qwen-mt 全部返回空
         # （异常被吞掉 → 空串），表面上"模式选对了但没译文"。
-        prompt = (f"Translate the following text into {target}. "
+        #
+        # source：上游 whisper 高置信检出时给的源语言全名（如 "Vietnamese"）。
+        # 短碎片（3~8 个词）靠模型自己判语种**会漂**（越南语被判成泰语/
+        # 粤语都实测见过），给一句来源提示就能消歧；没给就保持原样（auto）。
+        src_clause = f"{source} " if source else ""
+        prompt = (f"Translate the following {src_clause}text into {target}. "
                   f"Output ONLY the translation.\n\n{text}")
         if self.kind == "ollama":
             return {"model": self.model, "prompt": prompt, "stream": False,
@@ -302,10 +317,10 @@ class LLMTranslator:
             return ""
 
     # ── 主入口 ───────────────────────────────────────────────
-    def __call__(self, text, target="Simplified Chinese"):
+    def __call__(self, text, target="Simplified Chinese", source=None):
         if not self.ok or not (text or "").strip():
             return ""
-        body = json.dumps(self._payload(text, target),
+        body = json.dumps(self._payload(text, target, source),
                           ensure_ascii=False).encode("utf-8")
         hdr = {"Content-Type": "application/json"}
         if self.kind == "openai" and self.key:
@@ -325,6 +340,18 @@ class LLMTranslator:
                 if attempt == 1:
                     self.fails += 1
                     return ""
+
+    def warmup(self):
+        """后台预热：建 TLS 连接 + 触发服务端模型装载。
+
+        第一句真实翻译原来要付"TCP+TLS 握手 + 模型冷启动"两份钱
+        （实测首句比稳态慢 0.5~1.5s），用户在视频开头最容易注意到。
+        启动时在后台线程调一次，观众看到的第一句就是热价。
+        """
+        try:
+            self("hello", target="Simplified Chinese")
+        except Exception:
+            pass
 
     def status(self):
         if not self.ok:

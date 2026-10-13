@@ -1001,6 +1001,16 @@ class LanguageLock:
 
 
 # ── 翻译：四层（短句表 → 缓存 → 直连 → 中继/在线）───────────────
+# whisper 语言码 → 英文全名（给 LLM 提示词用，比语言码更好懂）
+_LANG_NAMES = {
+    "en": "English", "vi": "Vietnamese", "ja": "Japanese", "ko": "Korean",
+    "zh": "Chinese", "ru": "Russian", "fr": "French", "de": "German",
+    "es": "Spanish", "pt": "Portuguese", "it": "Italian", "nl": "Dutch",
+    "pl": "Polish", "uk": "Ukrainian", "tr": "Turkish", "ar": "Arabic",
+    "th": "Thai", "id": "Indonesian", "ms": "Malay", "hi": "Hindi",
+}
+
+
 class LruTtlCache:
     """带容量上限与过期时间的翻译缓存。
 
@@ -1073,9 +1083,27 @@ class Translator:
         self.llm_fails = 0
         self._gf_fails = 0
         self.last_ok = ""           # 上一句成功译文（失败时保持不刷屏）
+        # 上游 whisper 高置信检出的源语言码（如 "vi"）。主循环每批更新。
+        # 用途：① LLM 提示词消歧（短碎片自动判语种会漂）
+        #       ② auto 模式下按它兜底命中短句表（见 __call__）
+        self.src_hint = None
         self._setup()
 
     def _setup(self):
+        # **src=="auto" 时完全跳过 argos。**
+        # argos 没有 "auto" 这个语言码，整个分支注定一无所获，但
+        # import argostranslate + get_installed_languages() 要扫包注册表
+        # （秒级），原来每次构建 auto 译器都白付 —— 而 auto 恰恰是
+        # 默认路由（--prefer-offline 没开时**永远**是 auto）。
+        # 这一刀砍掉后，auto 译器的构建成本 ≈ 两次字典赋值。
+        if self.src != "auto":
+            try:
+                self._setup_argos()
+            except Exception:
+                pass
+        self._setup_backends()
+
+    def _setup_argos(self):
         try:
             import argostranslate.translate as T
             langs = {l.code: l for l in T.get_installed_languages()}
@@ -1109,6 +1137,8 @@ class Translator:
                             self.mode = "none"
         except Exception:
             pass
+
+    def _setup_backends(self):
         # ⑤ **免 key 的 Google 端点**（实测可用）
         # 对比实测（真实越南新闻句）：
         #   argos 中继  : "tình quảng ninh đưa ra xét sử bị cáo doãn chung dũng"
@@ -1192,9 +1222,19 @@ class Translator:
         d = (self.dst or "").lower()
         if d.startswith("zh"):
             return "Simplified Chinese"
-        return {"en": "English", "ja": "Japanese", "ko": "Korean",
-                "ru": "Russian", "vi": "Vietnamese",
-                "fr": "French", "de": "German", "es": "Spanish"}.get(d, d)
+        return _LANG_NAMES.get(d, d)
+
+    def _source_name(self):
+        """给 LLM 用的源语言全名；没有高置信判定时返回 None（= auto）。
+
+        只在提示词里加一句"Vietnamese"这种来源提示，不改变任何路由。
+        短碎片（3~8 词）靠模型自己判语种会漂，实测越南语被判成泰语/
+        粤语都见过；whisper 置信 ≥0.85 时才给（主循环负责更新 src_hint）。
+        """
+        h = (self.src_hint or "").lower()
+        if not h or h == "auto":
+            return None
+        return _LANG_NAMES.get(h)
 
     def __call__(self, text, target=None):
         """target 参数是为了和 llm_translate.translate_batch 的接口对齐。
@@ -1213,9 +1253,17 @@ class Translator:
         # \w 在 Unicode 模式下包含越南语字母，所以声调符号不会丢
         key = re.sub(r"[^\w\s'.?!]", "", text.lower(), flags=re.UNICODE).strip()
         key = re.sub(r"\s+", " ", key)
-        if key in self.book:                      # ① 短句表
+        # ① 短句表：先查本译器的（按构造时的 src），auto 译器是空表，
+        # 再按**当前高置信检出的语言**兜底查 —— 否则 auto 模式下
+        # PHRASEBOOK 永远命中不了（原来 en/vi 两表白写了大半）。
+        book = self.book
+        if key in book:
             self.hits_book += 1
-            return self.book[key]
+            return book[key]
+        _hb = PHRASEBOOK.get((self.src_hint or "").lower())
+        if _hb and key in _hb:
+            self.hits_book += 1
+            return _hb[key]
         hit = self.cache.get(key)                 # ② 会话缓存（LRU+TTL）
         if hit is not None:
             self.hits_cache += 1
@@ -1247,7 +1295,9 @@ class Translator:
                     self.local_fails = getattr(self, "local_fails", 0) + 1
             if not out and self.llm is not None:
                 # 本地失败 → 退回远端（有 key 的话），别让字幕断
-                out = clean_translation(self.llm(text, target=self._target_name()))
+                out = clean_translation(self.llm(
+                    text, target=self._target_name(),
+                    source=self._source_name()))
         elif self.mode == "llm":                   # ⑥ LLM（质量最好）
             # **有 LLM 就一律用它，不做任何长度分流。**
             #
@@ -1263,8 +1313,9 @@ class Translator:
             #   现在：**LLM 可用 → 全部走 LLM**；只有 LLM 缺失或返回空
             #     才用免 key 端点兜底。少一条分支就少一类 bug。
             if self.llm is not None:
-                out = clean_translation(
-                    self.llm(text, target=self._target_name()))
+                out = clean_translation(self.llm(
+                    text, target=self._target_name(),
+                    source=self._source_name()))
                 if not out:
                     self.llm_fails += 1
             if not out:
@@ -1478,6 +1529,48 @@ def run(args):
     # UnboundLocalError: _tr_key）。
     _tr_cache = {}
     _tr_key = [None]
+    # ── 译器切换的加速机制 ─────────────────────────────────────
+    # 原来的两个问题（实测就是"切语言卡几秒"的来源）：
+    #   ① _tr_cache **写了从不读**：切回一个见过的语言照样全量重建
+    #      （argos 扫包注册表 + 预热推理 + 网络探测，全堵主循环）。
+    #   ② 未命中时同步 Translator(...) 构建，构建期间音频积压、
+    #      字幕冻结。
+    # 现在：命中缓存 → 换个引用，零成本；
+    #       未命中   → 后台线程构建，**旧译器继续服务**（auto 路由下
+    #       源语言本来就是远端自己判，旧译器撑几秒不会出垃圾），
+    #       构建完进缓存，下一批主循环换引用生效。
+    _tr_building = set()                       # 正在后台构建的键
+    _tr_pool = _concurrent.ThreadPoolExecutor(max_workers=1)
+
+    def _switch_translator(want_key, reason=""):
+        """把译器切到 want_key（None="auto"）。立即换或后台建。"""
+        nonlocal tr
+        if want_key == _tr_key[0]:
+            return
+        hit = _tr_cache.get(want_key)
+        if hit is not None:
+            tr = hit
+            _tr_key[0] = want_key
+            print(f"  → 译器切到 {want_key or 'auto'}（{tr.mode}；"
+                  f"缓存命中，零等待{reason}）")
+            return
+        if want_key in _tr_building:
+            return                            # 在建了，继续用旧的
+        _tr_building.add(want_key)
+
+        def _build(_k=want_key):
+            try:
+                _nt = Translator(_k or "auto", args.dst)
+                _tr_cache[_k] = _nt
+                print(f"  → 译器 {_k or 'auto'} 后台构建完成"
+                      f"（{_nt.mode}），下一批生效")
+            except Exception as _e:
+                print(f"  译器 {_k or 'auto'} 构建失败: "
+                      f"{type(_e).__name__} {_e}")
+            finally:
+                _tr_building.discard(_k)
+        _tr_pool.submit(_build)
+        # 构建期间不换：旧译器继续干活，字幕不冻
     # **初始译器用 auto，不要用 args.src。**
     # args.src 默认 "en"，会立刻选中 argos（en→zh）。但第一批的语言检测
     # 结果还没出来，万一不是英语就把非英语喂给了 en→zh 模型 → 垃圾。
@@ -1505,9 +1598,25 @@ def run(args):
                 LOCAL_MT.append(_lm)
         except Exception as _e:
             print(f"  本地翻译加载失败: {type(_e).__name__} {_e}")
-    tr = Translator("auto", args.dst)
-    _tr_key[0] = None if not args.lang else args.lang
+    tr = Translator(args.lang or "auto", args.dst)
+    _tr_key[0] = args.lang if args.lang else None
+    _tr_cache[_tr_key[0]] = tr               # 初始译器也进缓存
     print(f"翻译: {tr.mode}　短句表 {len(tr.book)} 条")
+    # ── 后台预热：第一句翻译不付冷启动的钱 ─────────────────────
+    # LLM：建 TLS 长连接 + 触发服务端模型装载（首句实测慢 0.5~1.5s）。
+    # 本地 HY-MT：llama-server 刚起，第一次推理要装载计算图，也预热。
+    def _prewarm():
+        try:
+            if tr.llm is not None:
+                tr.llm.warmup()
+        except Exception:
+            pass
+        try:
+            for _lm in LOCAL_MT:
+                _lm("hello")
+        except Exception:
+            pass
+    _tr_pool.submit(_prewarm)
     # **翻译器要跟着实际语言走。** 原来用 args.src（默认 "en"）初始化，
     # 看越南语时越南语被塞进 en→zh 模型 —— 这是"缺中文翻译"的真原因。
     lang_lock = LanguageLock(min_votes=3)
@@ -1536,9 +1645,14 @@ def run(args):
             print("  ！无 GPU，流式跑 CPU —— 模型降回 base，"
                   "否则 0.5s 更新间隔跟不上、字幕会持续落后")
             args.stream_model = "base"
+        # **流式原来把源语言钉死在 args.src（默认 "en"）—— 看越南语时
+        # whisper 被强制按英语解码，整段输出变成英文幻觉，且语言跟随
+        # 永远不触发（th.last_lang 没人写）。与分块路线对齐：
+        # 默认自动检测（None），要固定语言用 --lang + --no-detect。
+        _st_lang = None if args.detect else (args.lang or None)
         th = StreamingTranscriber(
             model=args.stream_model, threads=args.threads,
-            language=args.src, update_interval=args.stream_interval,
+            language=_st_lang, update_interval=args.stream_interval,
             tail_seconds=args.stream_tail, max_buffer=args.stream_maxbuf,
             device=_st_dev, compute_type=_st_ct)
         print(f"转写: 流式 {args.stream_model}（LocalAgreement-2）"
@@ -1906,6 +2020,10 @@ def run(args):
                 batch = done_q.get(timeout=timeout)
         except Exception:
             return False
+        # 已被 HOL 超时跳过的批：直接丢弃。原来会留在 _order 里
+        # 永远显示不出来（_next_show 已经越过去），是个缓慢的泄漏。
+        if batch[0] < _next_show[0]:
+            return True
         _order[batch[0]] = (batch[1], batch[2])
         return True
 
@@ -2000,12 +2118,15 @@ def run(args):
                     locked = lang_lock.observe(
                         getattr(th, "last_lang", None),
                         getattr(th, "last_lang_prob", 0.0))
-                    if locked and locked != tr.src:
-                        try:
-                            tr = Translator(locked, args.dst)
-                            print(f"  ★ 源语言切到 {locked} → 翻译模式 {tr.mode}")
-                        except Exception:
-                            pass
+                    # 缓存命中零成本切；未命中后台构建、旧译器继续服务
+                    if locked and locked != _tr_key[0]:
+                        _switch_translator(locked, reason="；语言锁定")
+                    # 源语言提示：锁定语言优先，其次本批高置信检测
+                    _lp = getattr(th, "last_lang_prob", 0.0) or 0.0
+                    _hint = locked or (getattr(th, "last_lang", None)
+                                       if _lp >= 0.85 else None)
+                    if _hint != tr.src_hint:
+                        tr.src_hint = _hint
                     stable, partial = th.state()
                     src_txt = stable or partial
                     # 复读幻觉过滤：whisper 在静音/低能量上会复读同一串
@@ -2053,6 +2174,10 @@ def run(args):
         finally:
             try:
                 _stream_pool.shutdown(wait=False)
+            except Exception:
+                pass
+            try:
+                _tr_pool.shutdown(wait=False)
             except Exception:
                 pass
             try:
@@ -2138,18 +2263,17 @@ def run(args):
             want = _pick_offline_source(th.last_lang, th.last_lang_prob,
                                          allow_offline=args.prefer_offline)
             cur_src = "en" if want else None
-            if cur_src != _tr_key[0]:
-                try:
-                    tr = Translator(cur_src or "auto", args.dst)
-                    _tr_key[0] = cur_src
-                    _tr_cache[cur_src] = tr
-                    print(f"  → 译器切到 {cur_src or 'auto'}"
-                          f"（{tr.mode}；本批检测 "
-                          f"{th.last_lang}/{th.last_lang_prob:.2f}）")
-                except Exception as e:
-                    print(f"  翻译器切换失败: {type(e).__name__} {e}")
-            else:
-                tr = _tr_cache.get(_tr_key[0], tr)
+            # 命中缓存零等待；未命中后台构建，旧译器继续服务（不冻字幕）
+            _switch_translator(
+                cur_src,
+                reason=f"；本批检测 {th.last_lang}/{th.last_lang_prob:.2f}")
+            tr = _tr_cache.get(_tr_key[0], tr)
+            # 源语言提示：高置信才给（低了宁可 auto，不给错误暗示）
+            _hint = (th.last_lang
+                     if (th.last_lang and th.last_lang_prob >= 0.85)
+                     else None)
+            if _hint != tr.src_hint:
+                tr.src_hint = _hint
             # **强制指定语言是错的默认。** 实测：越南新闻被强制按 en 识别时，
             # whisper 不是"听错"，而是**把越南语直接意译成英文**（还译错），
             # 于是后面按 en→zh 翻译全崩。用户实际遇到的就是这个。
@@ -2295,6 +2419,10 @@ def run(args):
         except Exception:
             pass
         _th_pool.shutdown(wait=False)
+        try:
+            _tr_pool.shutdown(wait=False)
+        except Exception:
+            pass
         # 关掉本地翻译的 llama-server 子进程（否则会残留）
         for _lm in LOCAL_MT:
             try:
