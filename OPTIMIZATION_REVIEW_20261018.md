@@ -394,3 +394,33 @@ ative_preload.py，在 Qt 之前 ctypes 预载 c10.dll。
 | watch.bat --no-pretranslate 10s 实测 | 标题零漂移，只切换 1 次 |
 | pretranslate.py <B站已缓存 URL> | 缓存命中 0.5s 返回 |
 | python tools/doctor.py | PASS，系统 Python 全依赖齐（av 19.0.1 / winsdk / yt-dlp） |
+
+---
+
+## 16. 追加：watch 实时兜底（2026-10-18 下午，用户反馈"差远了"）
+
+用户 15:25 实跑证据（watch.log / watch_overlay_state.json）：
+当时在播的 B 站视频**没有缓存**、时长 52 分钟，watch 的 --auto 走了
+"自动预翻译"路线（估算 8.4 分钟）。这 30 秒里浮窗只有
+"下载音频 / 识别模型 large-v3 / 分块流水…" 状态文字，用户关掉了它。
+对比"原来那版"（实时路线）：字幕几秒就出来了 —— 所以观感"差远了"。
+
+修法（watch_player.py）：**没缓存时立即上实时字幕兜底**，预翻译在后台继续：
+
+| 场景 | 行为 |
+|---|---|
+| 已在跑实时引擎（如同时开着 start.bat） | 直接镜像 live.srt，不重复起进程 |
+| 没有实时引擎 | 起 live_subtitle_v2.py --no-overlay --remote-asr --srt work/watch_live.srt（远端 ASR，不占显存） |
+| 实时字幕展示 | 浮窗滚动显示最新一行（**原文=第一行、译文=第二行**，与 pre_cache srt 行序相反，已单独写 parse_live_srt 并加测试） |
+| 缓存覆盖到当前播放位置 | 自动停掉兜底、ov.clear() 后切回精确位置同步 |
+| watch 被硬杀 | 兜底引擎通过 BABEL_WATCH_PARENT 发现父进程没了，自己退出（不留第二个字幕窗口/占远端额度） |
+| 想关掉 | --no-live-fallback |
+
+### 验证
+
+| 项 | 结果 |
+|---|---|
+| ench/_verify_hysteresis.py | 19 通过 / 0 失败（含 live.srt 行序、缓存匹配 13/13） |
+| 镜像外部 live.srt | 不重复起进程；浮窗 en=原文、zh=译文正确；日志只 1 行 |
+| 自起兜底引擎 + 播放测试音频 | watch_live.srt 产出，浮窗数秒内出字幕、顺序正确 |
+| watch 硬杀后的孤儿进程 | 4 秒内自行退出，无残留 |

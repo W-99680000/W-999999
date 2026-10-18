@@ -146,6 +146,33 @@ def no_url_backoff(tried, nt, now=None, max_tries=AUTO_NOURL_MAX_TRIES,
     return retry, tr
 
 
+
+def parse_live_srt(path):
+    """读实时引擎写的 live.srt 的最后一条 -> (原文, 译文)。
+
+    **行序和 pre_cache 的预翻译 srt 相反**：live.srt 第一行是原文、
+    第二行是译文（见 live_subtitle_v2.SrtWriter._write）；pre_cache 才是
+    第一行中文、第二行原文。混用会把两种语言叠反（实测浮窗变成
+    "英文原文=中文译文"）。
+    """
+    try:
+        txt = open(path, encoding="utf-8-sig", errors="replace").read()
+    except OSError:
+        return None
+    blocks = [b for b in re.split(r"\r?\n\s*\r?\n", txt) if b.strip()]
+    if not blocks:
+        return None
+    lines = [ln.strip() for ln in blocks[-1].strip().splitlines() if ln.strip()]
+    body = lines[2:] if len(lines) >= 3 else lines
+    if not body:
+        return None
+    src = body[0]
+    zh = body[1] if len(body) > 1 else src
+    if not (src or zh):
+        return None
+    return (src or zh, zh or src)
+
+
 def _file_sig(path):
     """文件的"内容签名"（mtime + 大小），用来判断 srt 有没有增长。
 
@@ -423,6 +450,8 @@ def main():
                     help="常驻模式：任何在播视频，pre_cache 里有字幕就自动跟上")
     ap.add_argument("--no-pretranslate", action="store_true",
                     help="常驻模式下只匹配已有缓存，不自动反查网址并预翻译")
+    ap.add_argument("--no-live-fallback", action="store_true",
+                    help="没缓存时不要实时字幕兜底（只等预翻译）")
     args = ap.parse_args()
 
     if args.auto:
@@ -731,6 +760,116 @@ def _auto_main(args):
     # 自动预翻译的尝试记录：ntitle -> {"n": 次数, "ts": 上次时间}
     tried = {}
 
+    # ── 实时兜底：缓存还没出来时，先用实时字幕顶上 ──────────────
+    # 为什么加：预翻译 52 分钟片要 8 分钟左右，这段时间浮窗只有状态文字，
+    # 跟原来的实时版体验差太远（用户原话："没有解读缓存之后的实时性反应"）。
+    # 做法：没缓存就拉一个实时引擎子进程（--no-overlay --remote-asr，
+    # 走远端识别、不占显存），浮窗把它的最新一行滚上去；缓存覆盖到当前
+    # 播放位置后自动停掉兜底、切回精确同步。
+    live = {"proc": None, "own": False, "srt": None, "txt": None,
+            "sig": None, "cue_last": None, "failed": False, "mode": None}
+    _work = os.path.join(HERE, "work")
+    os.makedirs(_work, exist_ok=True)
+    live_srt_own = os.path.join(_work, "watch_live.srt")
+    live_log = os.path.join(_work, "watch_live.log")
+
+    def _live_external_fresh(max_age=6.0):
+        ext = os.path.join(HERE, "live.srt")
+        try:
+            return (os.path.isfile(ext)
+                    and time.time() - os.path.getmtime(ext) < max_age), ext
+        except OSError:
+            return False, ext
+
+    def _live_start():
+        if getattr(args, "no_live_fallback", False) or live["failed"]:
+            return
+        if live.get("mode") == "mirror":
+            # 已经在镜像别的实时引擎：只要它的 live.srt 还新鲜就别重复判断/
+            # 重复写日志；超过 45s 没更新（引擎关了）再自己拉一个
+            if _live_external_fresh(45.0)[0]:
+                return
+            live["mode"] = None
+        if live["proc"] is not None:
+            return
+        # 45s 而不是 6s：判定"有没有别的实时引擎在跑"要看更长的窗口 ——
+        # 视频暂停时字幕文件几十秒不更新，但引擎还活着；6s 会误判成
+        # "没有引擎"再拉一个，白占一份远端 ASR 份额。
+        fresh, ext = _live_external_fresh(45.0)
+        if fresh:
+            # 已经有实时引擎在跑（比如用户同时开着 start.bat）：
+            # 只镜像它的 live.srt —— 不重复拉进程、不抢麦克风/音频
+            live.update(own=False, srt=ext, mode="mirror")
+            _log("[live] 检测到已在运行的实时引擎 → 直接镜像 live.srt")
+            return
+        try:
+            _env = dict(os.environ)
+            # 父进程（watch）被硬杀时子进程收不到 finally：让实时引擎
+            # 自己盯着父进程，父进程一没就退出，避免留下第二个字幕窗口。
+            _env["BABEL_WATCH_PARENT"] = str(os.getpid())
+            p = subprocess.Popen(
+                [sys.executable, "-u",
+                 os.path.join(HERE, "live_subtitle_v2.py"),
+                 "--no-overlay", "--srt", live_srt_own, "--remote-asr"],
+                cwd=HERE, env=_env,
+                stdout=open(live_log, "ab"), stderr=subprocess.STDOUT,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            live.update(proc=p, own=True, srt=live_srt_own, failed=False, mode="own")
+            _log("[live] 已启动实时兜底引擎（远端识别，不占显存）")
+        except Exception as e:
+            live["failed"] = True
+            _log(f"[live] 实时兜底启动失败: {type(e).__name__}: {e}")
+
+    def _live_stop(reason=""):
+        p = live.get("proc")
+        if p is not None:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+            live["proc"] = None
+            live["own"] = False
+            if reason:
+                _log(f"[live] 停止实时兜底：{reason}")
+        live.update(txt=None, sig=None, cue_last=None, mode=None)
+
+    def _live_latest():
+        """实时引擎 srt 的最后一条：(原文, 译文)；文件不新鲜返回 None。"""
+        srt = live.get("srt")
+        if not srt:
+            fresh, ext = _live_external_fresh()
+            if not fresh:
+                return None
+            srt = ext
+        try:
+            mt = os.path.getmtime(srt)
+            sz = os.path.getsize(srt)
+        except OSError:
+            return None
+        if time.time() - mt > 6.0 or sz == 0:
+            return None
+        sig = (mt, sz)
+        if sig != live["sig"]:
+            live["sig"] = sig
+            live["cue_last"] = parse_live_srt(srt)
+        return live.get("cue_last")
+
+    def _live_show():
+        """把实时兜底的最新一行滚上浮窗（不等缓存）。"""
+        txt = _live_latest()
+        if not txt:
+            # 实时引擎暂时没新输出：标记为无，好让下面的"进度状态"重新接管提示
+            live["txt"] = None
+            return False
+        if txt == live["txt"]:
+            return False
+        live["txt"] = txt
+        if cur["status"] or cur.get("status_lb"):
+            cur["status"] = None
+            _drop_status()
+        ov.set(txt[0], txt[1])
+        return True
+
     # ── 浮窗状态：没字幕可显示时，直接告诉用户卡在哪一环 ──
     def _drop_status():
         """撤掉上一条状态提示。
@@ -828,6 +967,7 @@ def _auto_main(args):
                         if ev["state"] == "done":
                             _log(f"自动预翻译完成: "
                                  f"{os.path.basename(ev['srt'])}")
+                            _live_stop("预翻译完成，切精确同步")
                     elif ev["state"] == "failed":
                         _log(f"自动预翻译失败: {ev.get('msg')}")
                         if ev["ntitle"] == cur["title"]:
@@ -863,6 +1003,7 @@ def _auto_main(args):
                         _status("已连上媒体会话，正在读取标题…")
                     else:
                         _status("等待视频播放…（播放任意视频即自动出字幕）")
+                    _live_show()      # 标题暂时读不到时，兜底字幕照常滚
                     return
             # 会话换了片子 → 清掉旧的，按新标题重新匹配缓存
             elif _norm_title(title) != cur["title"]:
@@ -871,6 +1012,7 @@ def _auto_main(args):
                            warned_pos=False, pos_logged=False,
                            status_lb=None)
                 _jump.reset()          # 换片子：位置基准作废，防误判为拖动
+                _live_stop("换片")     # 旧的实时兜底跟的是上一部片，停掉
                 # 切视频 = 旧的预翻译任务全部作废。**必须真杀子进程**：
                 # 每个任务占 3~6GB 显存，不杀就连新任务一起拖死 ——
                 # 这正是"切个视频浮窗就停了"的根因。
@@ -899,10 +1041,12 @@ def _auto_main(args):
                          f"{_cached_names(args.dst)}")
                     nt = cur["title"]
                     if autocache is None:
-                        _status(f"在播：{title[:24]}　无缓存字幕")
+                        _live_start()
+                        _status(f"在播：{title[:24]}　无缓存 → 实时字幕兜底中…")
                     else:
                         st = autocache.state_of(nt)
                         if st and st["state"] == "running":
+                            _live_start()
                             _status("自动预翻译中… "
                                     f"{st.get('msg') or ''}")
                         elif st and st["state"] == "done" and st.get("srt"):
@@ -919,8 +1063,9 @@ def _auto_main(args):
                                 autocache.ensure_async(
                                     title, args.dst,
                                     dur_provider=tracker.duration)
-                                _status("无缓存 → 正在自动预翻译"
-                                        "（首次稍慢，就绪后自动上字幕）…")
+                                _live_start()   # 实时字幕先顶上，不等缓存
+                                _status("无缓存 → 实时字幕先顶上"
+                                        " + 后台预翻译建缓存…")
                             else:
                                 msg = (st or {}).get("msg") or "无缓存字幕"
                                 _status(f"在播：{title[:22]}　{msg}")
@@ -928,7 +1073,8 @@ def _auto_main(args):
             #    关键是那个 mm:ss 计时器：它每秒都在变 —— 变了浮窗就刷新，
             #    用户一眼能看出"活着，在干活"。光有静态文字分不清是在跑
             #    还是卡死了（下载/模型加载阶段可能几十秒没有新进度行）。
-            if not cur["cues"] and autocache is not None and cur["title"]:
+            if not cur["cues"] and not live.get("txt") \
+                    and autocache is not None and cur["title"]:
                 st = autocache.state_of(cur["title"])
                 if st and st["state"] == "running" \
                         and time.time() - cur.get("status_ts", 0.0) >= 1.0:
@@ -956,6 +1102,9 @@ def _auto_main(args):
                     else:
                         cur["sig"] = sig
             if not cur["cues"]:
+                # 缓存还没出来：实时兜底的字幕先滚上屏（有就显示）
+                _live_start()
+                _live_show()
                 return
             pos = tracker.position()
             # 进度拖动检测：跳变命中 → 清残留旧条目、强制按新位置重画。
@@ -986,7 +1135,15 @@ def _auto_main(args):
                 _log(f"位置已对齐: pos={pos:.2f}s，开始同步")
             i = bisect.bisect_right(cur["starts"], pos) - 1
             if i >= 0 and pos <= cur["cues"][i][1] + 0.35:
+                if live.get("proc") is not None or live.get("txt"):
+                    ov.clear()          # 撤掉实时兜底的滚动条目，切精确同步
+                    cur["idx"] = -2
+                    _live_stop("缓存已覆盖当前位置")
                 _show(i)
+            elif cur["cues"] and pos > cur["cues"][-1][1] + 0.5:
+                # 缓存只翻到前面，当前位置还没覆盖 → 实时兜底顶上
+                _live_start()
+                _live_show()
             else:
                 _show(None)
         except Exception as e:
@@ -1001,6 +1158,7 @@ def _auto_main(args):
     try:
         ov.app.exec_()
     finally:
+        _live_stop("watch 退出")
         tracker.close()
         if autocache is not None:
             autocache.close()

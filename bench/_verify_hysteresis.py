@@ -213,5 +213,28 @@ else:
     chk("无关标题不误配",
         W._find_cached_srt("完全不存在的视频标题XYZ", "zh") is None)
 
+print("== ⑧ 实时 SRT 行序（第一行原文、第二行译文）==")
+import tempfile
+import watch_player as W
+_fd, _p = tempfile.mkstemp(suffix=".srt")
+os.close(_fd)
+try:
+    with open(_p, "w", encoding="utf-8") as _f:
+        _f.write("1\n00:00:00,000 --> 00:00:06,000\n"
+                 "Hello world\n你好世界\n")
+    _src, _zh = W.parse_live_srt(_p)
+    chk("live.srt 原文取第一行", _src == "Hello world")
+    chk("live.srt 译文取第二行", _zh == "你好世界")
+    # 只有一行时原文=译文，不能丢字幕
+    with open(_p, "w", encoding="utf-8") as _f:
+        _f.write("1\n00:00:00,000 --> 00:00:06,000\n只有原文\n")
+    _src2, _zh2 = W.parse_live_srt(_p)
+    chk("只有一行时原文垫到译文", _src2 == "只有原文" and _zh2 == "只有原文")
+finally:
+    try:
+        os.unlink(_p)
+    except OSError:
+        pass
+
 print(f"\n合计 {_ok} 通过 / {_fail} 失败")
 sys.exit(1 if _fail else 0)
