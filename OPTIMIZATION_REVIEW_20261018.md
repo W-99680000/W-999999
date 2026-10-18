@@ -879,3 +879,46 @@ watch 报到 ready
   一直显示（截图发现）→ 加 `[hidden]{display:none!important}`；未运行时
   首页预览不再展示旧 live.srt 文案。
 - 旧界面体检/回归不动：check_admin_html 28/0、wiring 20/0。
+
+
+---
+
+## 28. 三个问题修复：经典后台缩水 / 停止被看门狗拉起 / 黑色命令行窗口（2026-10-18）
+
+### 28.1 经典后台"很多功能消失"
+
+原因：上一轮给经典后台（index.html）加了「总览 → 首页」并默认落地首页，
+还隐藏了工具栏；打开 `/admin` 先看到的是两个大按钮，看起来像功能没了。
+
+修复：移除经典后台的「总览/首页」导航，默认落地改回「翻译字幕工作台」
+（`setView("loopback")`）。实测 `/admin`：导航 7 项（直播/视频/记录/模型/
+仓库/浮窗/设置）、工具栏可见、翻译链路卡片在、无 JS 报错。
+
+### 28.2 启动后"停止失败"
+
+原因：引擎优雅停止的退出码是 **1**，看门狗把它当崩溃，停止后立刻自动重启
+（实测 stop 返回"已停止(exit 1)"，3 秒后新 pid 又在跑）—— 用户看到的就是
+"点了停止没反应"。
+
+修复：`Engine.intentional_stop` 标志。管理端 stop 先置 True，看门狗见到
+就直接跳过；下一次 start 清掉。实测：停止后 8 秒 `running=false`，不再复活。
+
+### 28.3 启动后跟着黑色命令行窗口
+
+原因：serve 用 `python.exe`（控制台子系统）拉起引擎；即使加了
+CREATE_NO_WINDOW，仍会分配 conhost（用户看到黑窗/命令提示符）。
+
+修复：同目录存在 `pythonw.exe` 时改用它启动引擎/watch（GUI 子系统，
+从根上不分配控制台）；日志仍走 PIPE，停止仍走 engine_stop.flag 哨兵。
+实测：管理端拉起的是 `pythonw.exe`，进程**没有 conhost 子进程**；
+watch 模式同样无子进程/无 conhost。
+
+### 28.4 验证
+
+| 项 | 结果 |
+|---|---|
+| `tools/test_engine_stop.py`（新） | **8/0**：pythonw、无 conhost、停止成功、8s 不被重启 |
+| `/admin` 渲染（Edge） | 7 项导航、默认工作台、toolbar 可见、0 JS 错误 |
+| 新界面 `/` | check_console_html 15/0（无回归） |
+| 旧后台静态 | check_admin_html 28/0 |
+| 临时服务 start/stop | start→pythonw，stop→running=false 且不复活 |

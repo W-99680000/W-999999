@@ -246,6 +246,9 @@ def _watchdog_loop() -> None:
         try:
             if not _admin_cfg().get("watchdog", True):
                 continue
+            if ENGINE.intentional_stop:
+                # 用户主动停止：不重启；直到下一次 start() 清标志
+                continue
             if ENGINE.alive():
                 crash.clear()
                 gave_up = False
@@ -358,6 +361,10 @@ class Engine:
         self.argv: list[str] = []
         self.python = ""
         self.python_reason = ""
+        # 主动停止（管理端点停止/重启）—— 看门狗见到这个标志不再自动拉起，
+        # 否则引擎优雅退出码是 1，会被误判为"崩溃"而立刻重启，用户看到
+        # 的现象就是"点停止没反应/停止失败"。
+        self.intentional_stop = False
         self._reader: threading.Thread | None = None
 
     # ── 内部 ────────────────────────────────────────────────────
@@ -469,6 +476,14 @@ class Engine:
             return False, f"未知模式 {mode!r}"
         py = self._pick_python()
         exe = py.get("exe") or sys.executable
+        # 子进程用 pythonw.exe（GUI 子系统）拉起：管理端本身通常无控制台，
+        # 但 python.exe 是控制台程序，即使 CREATE_NO_WINDOW 也可能出现
+        # "python / 黑色命令提示符"窗口。pythonw 从根上不分配控制台。
+        launch_exe = exe
+        if os.name == "nt":
+            _pw = os.path.join(os.path.dirname(exe), "pythonw.exe")
+            if os.path.isfile(_pw):
+                launch_exe = _pw
         # **视频翻译（cache）走 watch 模块**：常驻监听 SMTC 播放器，
         # 自动匹配 pre_cache / 反查网址预翻译，浮窗按播放位置显示。
         # 直播翻译（loopback）才走 live_subtitle_v2。
@@ -480,7 +495,7 @@ class Engine:
             return False, f"找不到 {script}"
         # `-u` 必须给：否则子进程输出走块缓冲，管理端看到的日志
         # 会成片延迟 —— 而"卡住了"和"还没输出"看起来一样。
-        cmd = [exe, "-X", "utf8", "-u", script]
+        cmd = [launch_exe, "-X", "utf8", "-u", script]
         if mode == "cache":
             cmd.append("--auto")
         # 注册表默认值已经由 live_subtitle_v2._apply_registry 灌进去了，
@@ -501,6 +516,7 @@ class Engine:
             self.argv = cmd
             self.python = exe
             self.python_reason = py.get("reason", "")
+            self.intentional_stop = False
         self._push(f"$ {' '.join(cmd)}")
         self._push(f"· 解释器：{exe}")
         self._push(f"· 选择理由：{self.python_reason}")
@@ -538,6 +554,8 @@ class Engine:
             p = self.proc
             if not p or p.poll() is not None:
                 return False, "没有在跑"
+            # 先标记主动停止：看门狗随后看到进程退出不能再拉起
+            self.intentional_stop = True
         if not hard:
             try:
                 os.makedirs(os.path.dirname(STOP_FILE), exist_ok=True)
