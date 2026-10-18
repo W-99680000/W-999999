@@ -211,6 +211,11 @@
   .muted{color:var(--dim2)}
   .spacer{flex:1}
   .advframe{width:100%;height:calc(100vh - 130px);border:1px solid var(--line);border-radius:16px;background:#0b1220;display:block}
+  .subtabs{display:flex;gap:8px;margin:0 0 12px}
+  .subtab{height:34px;padding:0 16px;border-radius:10px;border:1px solid var(--line);
+    background:rgba(255,255,255,.04);color:var(--dim);font-size:13px;font-weight:600;cursor:pointer}
+  .subtab.active{background:rgba(79,140,255,.16);border-color:rgba(79,140,255,.45);color:var(--txt)}
+  .modelframe{height:calc(100vh - 176px)}
   .keyinput{width:100%;height:40px;padding:0 12px;border-radius:11px;border:1px solid var(--line);background:rgba(255,255,255,.05);color:var(--txt);outline:none;margin-top:10px;font-size:13px}
   .keyinput:focus{border-color:rgba(79,140,255,.55);background:rgba(79,140,255,.07)}
   .toast{
@@ -246,38 +251,18 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.2" y="4.4" width="17.6" height="15.2" rx="2.6"/><path d="M8.2 4.4v15.2M15.8 4.4v15.2M3.2 12h17.6"/></svg>
         <span>视频翻译</span>
       </button>
+      <button class="nav-item" data-page="models">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3.2 7.4 3.9v9.8L12 20.8 4.6 16.9V7.1z"/><path d="m4.6 7.1 7.4 3.9 7.4-3.9M12 11v9.8"/></svg>
+        <span>模型</span>
+      </button>
+      <button class="nav-item" data-page="records">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.2" y="4.4" width="17.6" height="15.2" rx="2.6"/><path d="M3.2 9.6h17.6M3.2 14.6h17.6M9 9.6v10"/></svg>
+        <span>同传记录</span>
+      </button>
       <button class="nav-item" data-page="overlay">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="11" rx="2.4"/><path d="M7 20h10M12 16v4"/></svg>
         <span>浮窗</span>
       </button>
-      <div class="nav-group">
-        <div class="nav-label">高级</div>
-        <button class="nav-item" data-page="models">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3.2 7.4 3.9v9.8L12 20.8 4.6 16.9V7.1z"/><path d="m4.6 7.1 7.4 3.9 7.4-3.9M12 11v9.8"/></svg>
-          <span>模型管理</span>
-        </button>
-        <button class="nav-item" data-page="repo">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.2" y="6.2" width="17.6" height="11.6" rx="2.4"/><path d="M7.4 6.2V3.6M12 6.2V3.6M16.6 6.2V3.6"/></svg>
-          <span>模型仓库</span>
-        </button>
-        <button class="nav-item" data-page="records">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.2" y="4.4" width="17.6" height="15.2" rx="2.6"/><path d="M3.2 9.6h17.6M3.2 14.6h17.6M9 9.6v10"/></svg>
-          <span>同传记录</span>
-        </button>
-        <button class="nav-item" data-page="ovadv">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="11" rx="2.4"/><path d="M7 20h10M12 16v4"/></svg>
-          <span>浮窗高级</span>
-        </button>
-        <button class="nav-item" data-page="cfgadv">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 0 0-.13-1.3l2-1.5-2-3.4-2.3.9a7 7 0 0 0-2.2-1.3L14 3h-4l-.37 2.4a7 7 0 0 0-2.2 1.3l-2.3-.9-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .45.05.88.13 1.3l-2 1.5 2 3.4 2.3-.9a7 7 0 0 0 2.2 1.3L10 21h4l.37-2.4a7 7 0 0 0 2.2-1.3l2.3.9 2-3.4-2-1.5c.08-.42.13-.85.13-1.3z"/></svg>
-          <span>高级设置</span>
-        </button>
-        <button class="nav-item" data-page="keys">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8.5" cy="15.5" r="3.5"/><path d="m11 13 8-8M16 5l2 2M18 3l3 3"/></svg>
-          <span>接口密钥</span>
-        </button>
-      </div>
-      <div class="nav-group" hidden>
       <button class="nav-item" data-page="settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 0 0-.13-1.3l2-1.5-2-3.4-2.3.9a7 7 0 0 0-2.2-1.3L14 3h-4l-.37 2.4a7 7 0 0 0-2.2 1.3l-2.3-.9-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .45.05.88.13 1.3l-2 1.5 2 3.4 2.3-.9a7 7 0 0 0 2.2 1.3L10 21h4l.37-2.4a7 7 0 0 0 2.2-1.3l2.3.9 2-3.4-2-1.5c.08-.42.13-.85.13-1.3z"/></svg>
         <span>设置</span>
@@ -440,15 +425,17 @@
           <button class="btn" data-ov-action="toggle">临时隐藏/显示</button>
         </div>
         <div class="hint">浮窗控制同时写入直播与视频翻译两套命令；只有正在运行的浮窗会响应。</div>
+        <div class="row mt16"><button class="btn" type="button" data-goto="ovadv">完整浮窗参数 →</button></div>
       </div>
     </section>
 
-    <!-- 高级页：内嵌经典后台对应视图（保证功能 100% 一致） -->
+    <!-- 模型：模型管理 / 模型仓库 两个子页，不再单独占侧栏 -->
     <section class="page" id="page-models">
-      <iframe class="advframe" data-adv="models" title="模型管理"></iframe>
-    </section>
-    <section class="page" id="page-repo">
-      <iframe class="advframe" data-adv="repo" title="模型仓库"></iframe>
+      <div class="subtabs" id="modelTabs">
+        <button class="subtab active" data-mtab="models" type="button">模型管理</button>
+        <button class="subtab" data-mtab="repo" type="button">模型仓库</button>
+      </div>
+      <iframe class="advframe modelframe" data-adv="models" title="模型管理"></iframe>
     </section>
     <section class="page" id="page-records">
       <iframe class="advframe" data-adv="records" title="同传记录"></iframe>
@@ -503,7 +490,9 @@
         <div class="switch"><div class="text"><b>后台预热</b><p>打开后台时提前加载引擎，首次启动更快。</p></div><div class="toggle" data-cfg="prewarm"></div></div>
         <div class="switch"><div class="text"><b>引擎看门狗</b><p>引擎意外退出时自动重启（5 分钟最多 3 次）。</p></div><div class="toggle" data-cfg="watchdog"></div></div>
         <div class="row mt16">
-          <a class="link" href="/admin" target="_blank">打开经典后台（模型 / 缓存 / 高级参数）</a>
+          <button class="btn" type="button" data-goto="keys">接口密钥</button>
+          <button class="btn" type="button" data-goto="cfgadv">高级设置</button>
+          <a class="link" href="/admin" target="_blank">完整后台</a>
         </div>
       </div>
       <div class="card mt16">
@@ -522,7 +511,7 @@
   var $ = function(s){ return document.querySelector(s); };
   var $$ = function(s){ return Array.prototype.slice.call(document.querySelectorAll(s)); };
   var App = { page:"home", engine:null, ovLive:null, ovWatch:null, live:[], cfg:{}, busy:false };
-  var PAGE_TITLE = { home:"工作台", live:"直播翻译", video:"视频翻译", overlay:"浮窗控制", models:"模型管理", repo:"模型仓库", records:"同传记录", ovadv:"浮窗高级", cfgadv:"高级设置", keys:"接口密钥", settings:"设置" };
+  var PAGE_TITLE = { home:"工作台", live:"直播翻译", video:"视频翻译", overlay:"浮窗控制", models:"模型", records:"同传记录", ovadv:"浮窗高级", cfgadv:"高级设置", keys:"接口密钥", settings:"设置" };
 
   function toast(msg){
     var el = $("#toast"); el.textContent = msg; el.classList.add("show");
@@ -567,6 +556,19 @@
   }
   $$(".nav-item").forEach(function(b){
     b.addEventListener("click", function(){ go(b.getAttribute("data-page")); });
+  });
+  // 模型页两个子标签：共用同一个 iframe，只换经典后台视图
+  $$("#modelTabs [data-mtab]").forEach(function(b){
+    b.addEventListener("click", function(){
+      $$("#modelTabs [data-mtab]").forEach(function(x){ x.classList.remove("active"); });
+      b.classList.add("active");
+      var fr = document.querySelector("#page-models .advframe");
+      if (fr) fr.setAttribute("src", "/admin?embed=1&view=" + b.getAttribute("data-mtab"));
+    });
+  });
+  // 隐藏页入口（接口密钥/高级设置/完整浮窗参数）
+  $$("[data-goto]").forEach(function(b){
+    b.addEventListener("click", function(){ go(b.getAttribute("data-goto")); });
   });
 
   /* ── 引擎 ── */

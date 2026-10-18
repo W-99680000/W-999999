@@ -49,14 +49,14 @@ def main() -> int:
                 "/api/admin-config"):
         chk(f"调用 {api}", api in s, api)
     chk("经典后台入口 /admin", 'href="/admin"' in s)
-    for page, label in (("models", "模型管理"), ("repo", "模型仓库"),
-                        ("records", "同传记录"), ("ovadv", "浮窗高级"),
-                        ("cfgadv", "高级设置")):
-        chk(f"高级页 {label}（{page}）", f'data-page="{page}"' in s, page)
+    chk("模型页含管理/仓库子标签",
+        'data-mtab="models"' in s and 'data-mtab="repo"' in s)
+    chk("完整浮窗参数入口", 'data-goto="ovadv"' in s)
+    chk("接口密钥入口", 'data-goto="keys"' in s
+        and 'id="keyDashInput"' in s and 'id="keyHfInput"' in s)
+    chk("高级设置入口", 'data-goto="cfgadv"' in s)
     chk("高级页内嵌经典后台（embed=1&view=）",
         "embed=1&view=" in s and 'class="advframe"' in s)
-    chk("接口密钥页", 'data-page="keys"' in s and 'id="keyDashInput"' in s
-        and 'id="keyHfInput"' in s)
     _no_src = not re.search(r'src="https?://', s)
     _links = re.findall(r'href="(https?://[^"]+)"', s)
     _ok_links = all(("bailian.console.aliyun.com" in u
