@@ -15,8 +15,12 @@ rem ============================================================
 set "PY="
 set "CAND1=C:\Users\w\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe"
 
+rem Interpreter probe: find_spec (milliseconds) instead of importing
+rem faster_whisper+PyQt5 (seconds per candidate, worse cold).
+set "PROBE=import importlib.util as u,sys;sys.exit(0 if all(u.find_spec(m) for m in ('faster_whisper','PyQt5')) else 1)"
+
 if not exist "%CAND1%" goto findpy
-"%CAND1%" -c "import faster_whisper,PyQt5" >nul 2>nul
+"%CAND1%" -c "%PROBE%" >nul 2>nul
 if errorlevel 1 goto findpy
 set "PY=%CAND1%"
 goto pyset
@@ -24,7 +28,7 @@ goto pyset
 :findpy
 for /f "delims=" %%P in ('where python 2^>nul') do (
   if not defined PY (
-    "%%P" -c "import faster_whisper,PyQt5" >nul 2>nul
+    "%%P" -c "%PROBE%" >nul 2>nul
     if not errorlevel 1 set "PY=%%P"
   )
 )

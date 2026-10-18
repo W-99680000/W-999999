@@ -52,3 +52,12 @@ Thumbs.db
 # bench 里的实验输出（运行产物，不进仓库；注意别用 *.txt ——
 # 那会把 requirements.txt 一起忽略掉）
 bench/_*.txt
+
+# 模型注册表的**导出快照**：由 model_registry.py export 生成，
+# 内容随时可从 model_registry.json + 实况探测重算，不进仓库。
+# 注意 model_registry.json **要进仓库** —— 那是数据源，是配置本身。
+model_registry_web.json
+work/
+
+# ����ʱ�����ļ����������� .bak �ȣ������ֿ⣩
+*.bak

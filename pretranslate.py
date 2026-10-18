@@ -578,13 +578,15 @@ def make_translator(dst, src_hint=None, mt_local=False, terms=None):
 
 
 def translate_cues(tr, cues, dst, batch_size=6, index_base=0, done=None,
-                   on_batch=None, tag=""):
+                   on_batch=None, tag="", head_cues=None):
     """整句批量翻译。done 是**全局索引 → 译文** 的字典（跨块复用）。
 
     index_base ：本批 cue 在全局里的起始下标。译文按全局索引存放，
                  所以重跑时已译过的部分自动跳过（断点续跑）。
     on_batch   ：每译完一批回调一次。分块流水用它**立刻落盘** ——
                  这正是"先翻译一部分就显示"的关键：不等整片译完。
+    head_cues  ：本切片**之前**的全局 cue（上下文来源）。调用方传的
+                 是切片（cues[base:]），没有它第一批永远拿不到跨块上下文。
     """
     from llm_translate import translate_batch
     done = done if done is not None else {}
@@ -595,10 +597,21 @@ def translate_cues(tr, cues, dst, batch_size=6, index_base=0, done=None,
         todo = [(j, c) for j, c in enumerate(grp, i)
                 if not done.get(index_base + j)]
         if todo:
+            # 上下文：本批之前最近的 2 条**已译定**的原文。要跨切片取——
+            # head_cues（全局前段）+ 本切片已走部分，done 是全局索引。
+            all_prev = (head_cues or []) + cues[:i]
+            base0 = index_base - len(head_cues or [])   # all_prev[0] 的全局索引
+            ctx = []
+            for j in range(len(all_prev) - 1, -1, -1):
+                if done.get(base0 + j):
+                    ctx.append(all_prev[j].text)
+                    if len(ctx) >= 2:
+                        break
+            ctx.reverse()
             zh_list = translate_batch(
                 tr, [c.text for _j, c in todo],
                 target="Simplified Chinese" if dst.startswith("zh") else dst,
-                max_items=max(2, batch_size))
+                max_items=max(2, batch_size) + len(ctx), context=ctx)
             for (j, c), zh in zip(todo, zh_list):
                 done[index_base + j] = (zh or "").strip()
             if on_batch:
@@ -780,7 +793,8 @@ def process(src, args):
         _min_duration_fixup(_c)          # 幂等，中间态也没有一闪而过的短条
         write_srt(_p, _c, _d)
 
-    for k, (a, b) in enumerate(cuts, 1):
+    try:
+      for k, (a, b) in enumerate(cuts, 1):
         tag = f"({k}/{len(cuts)})"
         t_blk = time.time()
         t_tr_total = 0.0
@@ -804,7 +818,8 @@ def process(src, args):
             translate_cues(tr, cues[base:], args.to,
                            batch_size=args.mt_batch,
                            index_base=base, done=done,
-                           on_batch=_flush, tag=tag)
+                           on_batch=_flush, tag=tag,
+                           head_cues=cues[:base])
             t_tr_total += time.time() - t_tr0
             _flush()
 
@@ -847,6 +862,34 @@ def process(src, args):
         print(f"  已出字幕到 {b/60:.1f} 分钟（{len(cues)} 条）"
               f"　本块 {time.time()-t_blk:.0f}s"
               f"（识别 {t_rec:.0f}s + 翻译 {t_tr_total:.0f}s）")
+        # 长片跑到后半段显存碎片化会 OOM —— 每 8 块主动清一次缓存，
+        # 有 torch 才做，没有（纯 CPU 环境）静默跳过
+        if k % 8 == 0:
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+    except (Exception, KeyboardInterrupt) as e:
+        # 崩溃现场保护：进度其实都在 srt 里（每批落盘），这里补一条
+        # progress 元信息，让下次启动一眼看到"上次跑到哪、为什么断"。
+        _save_meta(srt_path, {**want,
+                              "src_hint": (tr.src_hint if tr else None),
+                              "cues": len(cues),
+                              "translated": sum(1 for v in done.values() if v),
+                              "complete": False,
+                              "covered_sec": (cues[-1].end if cues else 0.0),
+                              "crashed": type(e).__name__,
+                              "time": time.strftime("%Y-%m-%d %H:%M:%S")})
+        if isinstance(e, KeyboardInterrupt):
+            print(f"\n  已中断：进度保留到 "
+                  f"{(cues[-1].end/60 if cues else 0):.1f} 分钟，"
+                  f"重跑同一命令自动续上")
+            return srt_path if cues else None
+        print(f"  ！第 {k} 块附近出错（{type(e).__name__}: {e}）——"
+              f"进度已保留，重跑同一命令自动续上")
+        raise
 
     if not cues:
         print("  ！没有识别出任何语音，srt 不生成")
@@ -899,11 +942,54 @@ def build_parser():
     ap.add_argument("--terms", action="append", default=[],
                     help="术语：'源词=译法' 或术语表文件（仅 --mt-local 生效）")
     ap.add_argument("--force", action="store_true", help="忽略缓存重跑")
+    ap.add_argument("--no-registry", action="store_true",
+                    help="不用 model_registry.json 里的默认模型，"
+                         "回到本文件里写死的默认值")
+    ap.add_argument("--print-models", action="store_true",
+                    help="打印注册表给本模式解析出的模型后退出")
+    _apply_registry(ap, "cache")
     return ap
+
+
+def _apply_registry(ap, mode):
+    """把注册表里**缓存模式**的默认模型/参数灌进 argparse。
+
+    与 live_subtitle_v2._apply_registry 同一套做法（两个模块必须一致，
+    否则两边口径会再次漂移）。三层保护：
+      ① import 失败 → 静默跳过，走原硬编码默认（默认值完全没变）
+      ② `--no-registry` → 完全跳过
+      ③ 只灌**该模式确实有**的参数名（model_registry.MODE_ARGS），
+         多一个都不塞 —— 静默忽略是"设了没生效"的来源
+
+    缓存模式与实时模式的关键差别在这一层就体现出来：
+    实时要低延迟（--mt-batch 2、max_batch 2.0），
+    缓存要高准确（--model large-v3、--mt-batch 8）。
+    """
+    if "--no-registry" in sys.argv[1:]:
+        return
+    try:
+        import model_registry as R
+        kw = R.cli_args(mode)
+        known = {a.dest for a in ap._actions}
+        kw = {k: v for k, v in kw.items() if k in known}
+        if kw:
+            ap.set_defaults(**kw)
+    except Exception:
+        pass
 
 
 def main():
     args = build_parser().parse_args()
+    if args.print_models:
+        # 排障入口：证明注册表真的生效了
+        import model_registry as R
+        r = R.resolve("cache")
+        print(f"模式 {r['label']}（来源 asr={r['asr_source']} mt={r['mt_source']}）")
+        print(f"  识别 --model  = {args.model}")
+        print(f"  合并 --mt-batch = {args.mt_batch}")
+        for line in R.registry_pending_defaults():
+            print("  · 仍是硬编码:", line)
+        return 0
     os.makedirs(PRE_DIR, exist_ok=True)
     os.makedirs(URL_DIR, exist_ok=True)
     outs = []

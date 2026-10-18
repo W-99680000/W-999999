@@ -53,6 +53,7 @@ import json
 import os
 import queue
 import re
+import signal as _signal
 import ssl        # **必须在这里导入**：_google_free_ok() 里用到它，
                   # 而那个函数把所有异常都吞了，缺 import 时表现为
                   # "端点探测永远失败"（我自己踩过：表现为 False，查了很久）
@@ -1520,7 +1521,40 @@ class SrtWriter:
 
 
 
+def _install_kill_switch(cmd_file=None):
+    """装上"被管理端叫停"的开关。返回 `stop`（threading.Event）。
+
+    为什么需要：链路现在可以由后台管理端（babel_admin/serve.py）在
+    **另一个进程**里启动。管理端点"停止"时只能：
+        ① Windows 没有真 SIGTERM，`terminate()` ≈ TerminateProcess ——
+           进程被硬杀，**PyQt 浮窗会留在屏幕上变成残影**（那正是
+           "关掉了还在闪"这类bug的来源）
+        ② 送 CTRL_BREAK_EVENT（需要进程组）→ Python 抛 KeyboardInterrupt
+        ③ 落一个哨兵文件，主循环自己看到就退
+
+    这里把 ②③ 都装上（③ 是兜底：主线程若卡在某个长调用里，信号
+    不一定投递得进来）。两条路都只做一件事：`stop.set()`，让主循环
+    走正常退出流程 —— 关浮窗、收线程、写日志。
+    """
+    stop = threading.Event()
+
+    def _bye(signum, _frame):
+        print(f"\n收到停止信号 ({signum})，正在退出…")
+        stop.set()
+
+    for sig in ("SIGINT", "SIGBREAK", "SIGTERM"):
+        try:
+            s = getattr(_signal, sig, None)
+            if s is not None:
+                _signal.signal(s, _bye)
+        except Exception:
+            pass
+    return stop
+
+
 def run(args):
+    import startup_stats as SS
+    SS.mark("启动")
     print("=" * 64)
     print("live-subtitle v2")
     print("=" * 64)
@@ -1658,6 +1692,7 @@ def run(args):
         print(f"转写: 流式 {args.stream_model}（LocalAgreement-2）"
               f"　更新间隔 {args.stream_interval}s　tail {args.stream_tail}s"
               f"　上限 {args.stream_maxbuf}s　设备 {_st_dev}/{_st_ct}")
+        SS.mark("转写器")
         print("      优点：首字延迟 ≈ 一次更新耗时（1–2s），不用等整句")
         print("      代价：CPU 上长时间连续说话时缓冲会积压到上限，字幕会落后")
     else:
@@ -1830,9 +1865,12 @@ def run(args):
                       "也认它；下面会用 gpu_available() 实测确认")
                 try:
                     from gpu_setup import gpu_available
-                    _use_gpu = gpu_available()
+                    _t0 = time.time()
+                    _use_gpu = gpu_available(verbose=True)
+                    print(f"    · gpu_available() = {_use_gpu}"
+                          f"（耗时 {time.time() - _t0:.1f}s）")
                     if not _use_gpu:
-                        print("    · 实测前向失败 → 识别回退")
+                        print("    · 实测前向失败/超时 → 识别回退")
                 except Exception as e:
                     print(f"    · 实测探测失败: {type(e).__name__} {e}")
                     _use_gpu = False
@@ -1907,10 +1945,12 @@ def run(args):
                 # 并没有换来延迟。所以这里不动段长，只把**翻译合并上限**
                 # 调大（默认 6.0 → 8.0），让译文攒得更完整。
         print(f"转写: 分块 {args.model}　批量≤{args.max_batch}s / 等≤{args.max_wait}s")
+        SS.mark("转写器")
         print("      优点：字幕与音频同步、不积压")
         print("      代价：要等整段说完（首字延迟 = 段长 + 1.5s）")
     cap = LoopbackCapture(chunk_ms=getattr(args, "chunk_ms", 10.0)).start()
     print(f"采集: [{cap.dev['index']}] {cap.dev['name'][:44]}")
+    SS.mark("音频采集")
     print("控制：**拖动字幕本身**移动（整块都能拖，点一下不会动）")
     print("      滑轮字号　Shift+滑轮条数　Alt+滑轮宽度　Ctrl+滑轮透明度")
     print("      方向键微调　L 排布　J 对齐　M 调整模式　T 深浅底")
@@ -1930,12 +1970,19 @@ def run(args):
         ov.flash("live-subtitle ready — listening…", 3.0)
         print(f"浮窗位置: {ov.geo[0]},{ov.geo[1]}  尺寸 {ov.geo[2]}x{ov.geo[3]}  "
               f"flags=0x{int(ov.w.windowFlags()):08X}")
+        SS.mark("浮窗就绪")
+        SS.flush_ready({"mode": getattr(args, "mode", "")})
         try:
             from PyQt5.QtCore import QTimer
             QTimer.singleShot(3200, ov.idle_hint)
         except Exception:
             ov.idle_hint()
-    stop = threading.Event()
+    # 被管理端（babel_admin/serve.py）叫停的开关。
+    # 放在**建浮窗/采集之前**：这样"刚启动就被点停止"也不会留下半截进程。
+    stop = _install_kill_switch()
+    if ov is None:
+        SS.mark("无浮窗模式")
+        SS.flush_ready({"mode": getattr(args, "mode", "")})
 
     # **Qt 的 GUI 操作必须在主线程。**
     # 上一版我用后台线程调 processEvents()，Qt 浮窗不渲染。
@@ -3136,12 +3183,64 @@ def build_parser():
                     help="不写字幕文件，只用浮窗")
     ap.add_argument("--reset-ui", action="store_true",
                     help="清掉保存的浮窗位置/字号/透明度，回到默认")
+    ap.add_argument("--no-registry", action="store_true",
+                    help="不用 model_registry.json 里的默认模型，"
+                         "回到本文件里写死的默认值")
+    ap.add_argument("--print-models", action="store_true",
+                    help="打印注册表给本模式解析出的模型与参数后退出")
+    _apply_registry(ap, "loopback")
     return ap
+
+
+def _apply_registry(ap, mode):
+    """把注册表里**本模式**的默认模型/参数灌进 argparse。
+
+    为什么放在 build_parser() 里而不是 run() 里：模型的默认值必须在
+    `parse_args()` 之前就位，否则命令行没显式给 --model 时会拿到
+    本文件里那个写死的 "small"，注册表就形同虚设。
+
+    三层保护，保证**不改既有行为**：
+      ① 注册表模块 import 失败（被删/坏了）→ 静默跳过，走原硬编码默认
+      ② `--no-registry` → 完全跳过
+      ③ 只灌**该模式确实声明了**的参数名（model_registry.MODE_ARGS）+
+         再按 `_actions` 过滤一遍；多出来的键一个都不塞 —— 塞进去
+         argparse 会静默忽略，那正是"设了没生效"的来源
+
+    注意优先级：`set_defaults()` 只改**默认值**，命令行显式传参照样覆盖它。
+
+    还有一条**刻意不做**的事：注册表里的 mt/翻译模型不在这里灌 ——
+    实时模块选译器是 `Translator` 自己按源语言路由的（argos / Google /
+    qwen-mt），没有"指定译器"的命令行开关。假装灌一个不存在的开关
+    比不灌更糟，所以那部分留在注册表里给界面显示、不做假接线。
+    """
+    if "--no-registry" in sys.argv[1:]:
+        return
+    try:
+        import model_registry as R
+        kw = R.cli_args(mode)
+        known = {a.dest for a in ap._actions}
+        kw = {k: v for k, v in kw.items() if k in known}
+        if kw:
+            ap.set_defaults(**kw)
+    except Exception:
+        pass
 
 
 def main():
     ap = build_parser()
     a = ap.parse_args()
+    if a.print_models:
+        # 排障入口：**证明**注册表真的生效了（以及实际拿到的是什么值）
+        import model_registry as R
+        r = R.resolve("loopback")
+        print(f"模式 {r['label']}（来源 asr={r['asr_source']} mt={r['mt_source']}）")
+        print(f"  识别 --model        = {a.model}")
+        print(f"  流式 --stream-model = {a.stream_model}")
+        print(f"  合并 --mt-batch     = {a.mt_batch}（等待 {a.mt_batch_wait}s）")
+        print(f"  批次 --max-batch    = {a.max_batch}s / --max-wait {a.max_wait}s")
+        for line in R.registry_pending_defaults():
+            print("  · 仍是硬编码:", line)
+        return 0
     if a.reset_ui:
         try:
             os.remove(SETTINGS)

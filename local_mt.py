@@ -69,6 +69,15 @@ MODEL_CANDIDATES = [
     os.path.join(HERE, "models", "hh-translate-base.gguf"),
 ]
 
+# 项目 models/ 目录里的所有 gguf 也算候选（model_manager 下载到这里）
+try:
+    import glob as _glob
+    for _p in sorted(_glob.glob(os.path.join(HERE, "models", "*.gguf"))):
+        if _p not in MODEL_CANDIDATES:
+            MODEL_CANDIDATES.append(_p)
+except Exception:
+    pass
+
 # ── 两代模型用**不同的 token 体系**，模板必须按模型选 ────────────
 # 这是实测踩出来的：我以为 HY-MT 家族只有一个模板，把 1.8B 的标记发给 7B，
 # 结果 7B 看起来"更差"（空输出、中英混杂、复读）。实际是**发错了 token**。

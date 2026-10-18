@@ -159,18 +159,27 @@ BATCH_PROMPT = (
 
 
 def translate_batch(translator, texts, target="Simplified Chinese",
-                    max_items=6):
+                    max_items=6, context=None):
     """一次调用翻译多段；返回与 texts **等长**的列表。
 
     失败（段数对不上/异常）就退回**逐条翻译** —— 宁可慢，不能错位。
     调用方按 zip 取用，所以返回长度必须严格等于输入长度。
+
+    context：本批之前的若干条**原文**句子（按时间顺序）。
+    为什么有效：qwen-mt 是指令免疫的纯翻译引擎，"参考上下文"这类
+    提示它根本不执行、还会当成正文译出来。所以上下文只能**混进待译
+    正文里当前缀**——引擎翻译整个批次时自然获得指代/省略/语气的
+    上下文（"それ"译成"那个"还是"它"全看前文），译完我们把前缀
+    对应的部分**切掉**只留本批。段数校验按 len(context)+len(items)
+    来，对不上照常退回逐条，零风险。
     """
     items = [("" if x is None else str(x)) for x in texts]
     if not items:
         return []
     if len(items) == 1 or max_items < 2 or len(items) > max_items:
         return [translator(x, target=target) if x else "" for x in items]
-    body = (" " + BATCH_SEP + " ").join(items)
+    ctx = [str(x) for x in (context or []) if x]
+    body = (" " + BATCH_SEP + " ").join(ctx + items)
     prompt = BATCH_PROMPT.format(sep=BATCH_SEP, target=target, body=body)
     try:
         raw = translator(prompt, target=target)
@@ -179,8 +188,10 @@ def translate_batch(translator, texts, target="Simplified Chinese",
     if raw and BATCH_SEP in raw:
         parts = [p.strip() for p in raw.split(BATCH_SEP)]
         parts = [p for p in parts if p]
-        if len(parts) == len(items):
-            return parts
+        if len(parts) == len(ctx) + len(items):
+            return parts[len(ctx):]      # 切掉上下文前缀，只留本批
+        # 引擎偶尔会把上下文并进第一句——段数对不上时如果只差 ctx 的量，
+        # 直接按无上下文重试一次太贵，退回逐条即可（下面统一处理）
     # 退回逐条（并留下痕迹，便于诊断为什么合并失败）
     translator.batch_fallbacks = getattr(translator, "batch_fallbacks", 0) + 1
     return [translator(x, target=target) if x else "" for x in items]

@@ -80,12 +80,15 @@ def probe_duration(url):
 
 
 def run_pretranslate(src, dst="zh", on_progress=None, on_target=None,
-                     extra_args=None):
+                     extra_args=None, on_proc=None):
     """同步跑 pretranslate.py。成功返回 srt 路径，失败返回 None。
 
     on_progress(text)：每条可读的进度行回调一次（`下载音频` / `cue：`
                        / `识别` …）。
     on_target(path)  ：一拿到目标输出路径就回调（用来提前显示进度）。
+    on_proc(proc)    ：子进程句柄一创建就回调（上层存起来用于取消 ——
+                       用户切视频后旧任务必须能杀掉，否则两个 whisper
+                       抢一张卡，全卡死）。
     """
     env = dict(os.environ, PYTHONIOENCODING="utf-8", HF_HUB_OFFLINE="1")
     cmd = [_py_exe(), "-u", os.path.join(HERE, "pretranslate.py"),
@@ -99,6 +102,11 @@ def run_pretranslate(src, dst="zh", on_progress=None, on_target=None,
         if on_progress:
             on_progress(f"启动预翻译失败：{type(e).__name__} {e}")
         return None
+    if on_proc:
+        try:
+            on_proc(proc)
+        except Exception:
+            pass
 
     target = None
     tail = []
@@ -120,7 +128,8 @@ def run_pretranslate(src, dst="zh", on_progress=None, on_target=None,
             if on_progress and re.search(
                     r"下载音频|识别模型|模型加载|字幕 cue|断点|缓存命中"
                     r"|完成：|音频时长|解码音频|识别.*?\d+%|翻译.*?\d+/"
-                    r"|未译出|已出字幕到|分块流水", line):
+                    r"|未译出|已出字幕到|分块流水"
+                    r"|\[download\].*?\d+%|下载.*?\d+%", line):
                 on_progress(line)
     proc.wait()
 
@@ -204,6 +213,32 @@ class AutoCache:
         th.start()
         return nt
 
+    # ── 取消 ──
+    def cancel_except(self, nt_keep):
+        """杀掉 nt_keep 之外所有还在跑的任务（含其子进程）。
+
+        为什么必须杀子进程而不只是标记：预翻译子进程一起来就占 3~6GB
+        显存。用户切了视频，旧任务不杀，新任务再拉一个 whisper ——
+        8GB 卡上两个实例互抢，新的 OOM、旧的也在白跑，浮窗看着就是
+        "切了个视频全停了"。返回杀掉的任务数（记日志用）。
+        """
+        killed = 0
+        with self._lock:
+            victims = [(nt, j.get("proc")) for nt, j in self._jobs.items()
+                       if nt != nt_keep and j.get("state") == "running"]
+            for nt, _p in victims:
+                self._jobs[nt]["cancel"] = True
+        for nt, p in victims:
+            if p is not None:
+                try:
+                    p.kill()                    # 显存立刻释放
+                except Exception:
+                    pass
+            killed += 1
+            self._emit(nt, "cancelled", msg="已切换视频，旧任务取消")
+            self.log(f"[autopipe] 取消旧任务（子进程已杀）: {nt[:40]}")
+        return killed
+
     def _emit(self, nt, state, **kw):
         with self._lock:
             j = self._jobs.get(nt) or {}
@@ -246,15 +281,27 @@ class AutoCache:
                 except Exception:
                     expect = None
 
-            # ① 反查网址
+            # ① 反查网址：CDP 标签（最强，不依赖历史落盘）→ 浏览器历史
             if not url:
-                self._set_running(nt, "在历史里查网址…", "resolve")
+                self._set_running(nt, "在标签页/历史里查网址…", "resolve")
                 cands = []
                 try:
-                    from browser_history import search_all
-                    cands = search_all(title)
+                    from foreground import cdp_find_by_title
+                    tab = cdp_find_by_title(title)
+                    if tab:
+                        cands = [{"url": tab["url"], "title": tab["title"],
+                                  "score": 0.99, "ts": time.time(),
+                                  "cdp": True}]
+                        self.log(f"[autopipe] {title!r} CDP 直中当前标签: "
+                                 f"{tab['url'][:56]}")
                 except Exception as e:
-                    self.log(f"[autopipe] 历史反查异常: {e}")
+                    self.log(f"[autopipe] CDP 反查异常: {e}")
+                if not cands:
+                    try:
+                        from browser_history import search_all
+                        cands = search_all(title)
+                    except Exception as e:
+                        self.log(f"[autopipe] 历史反查异常: {e}")
                 if not cands:
                     # 浏览器历史写入有几秒延迟（视频刚打开时历史还没
                     # 落盘）—— 等一拍重读一次再认输，这是 no_url 最多
@@ -265,9 +312,20 @@ class AutoCache:
                                       "resolve")
                     time.sleep(2.5)
                     try:
-                        cands = search_all(title)
-                    except Exception as e:
-                        self.log(f"[autopipe] 历史反查异常: {e}")
+                        from foreground import cdp_find_by_title
+                        tab = cdp_find_by_title(title)
+                        if tab:
+                            cands = [{"url": tab["url"],
+                                      "title": tab["title"],
+                                      "score": 0.99, "ts": time.time(),
+                                      "cdp": True}]
+                    except Exception:
+                        pass
+                    if not cands:
+                        try:
+                            cands = search_all(title)
+                        except Exception as e:
+                            self.log(f"[autopipe] 历史反查异常: {e}")
                 if not cands:
                     self._emit(nt, "no_url", msg="没找到对应的视频网址",
                                url=None)
@@ -300,8 +358,30 @@ class AutoCache:
                                  "title": title, "msg": last["line"][:44],
                                  "srt": target["p"], "url": url})
 
+            def _on_proc(p):
+                with self._lock:
+                    j = self._jobs.get(nt)
+                    if j is not None:
+                        j["proc"] = p
+                # 若句柄到手前已被取消（手快连切两个视频），立刻杀
+                with self._lock:
+                    cancel_now = bool((self._jobs.get(nt) or {})
+                                      .get("cancel"))
+                if cancel_now:
+                    try:
+                        p.kill()
+                    except Exception:
+                        pass
+
             srt = run_pretranslate(url, dst, on_progress=prog,
-                                   on_target=lambda p: target.__setitem__("p", p))
+                                   on_target=lambda p: target.__setitem__("p", p),
+                                   on_proc=_on_proc)
+            with self._lock:
+                was_cancelled = bool((self._jobs.get(nt) or {})
+                                     .get("cancel"))
+            if was_cancelled:
+                self.log(f"[autopipe] 任务已取消，结果丢弃: {nt[:40]}")
+                return
             if srt:
                 self._emit(nt, "done", srt=srt, msg="字幕已就绪", url=url)
                 self.log(f"[autopipe] 完成: {os.path.basename(srt)}")

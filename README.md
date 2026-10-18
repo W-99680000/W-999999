@@ -690,6 +690,133 @@ python gpu_setup.py                        GPU 状态与可用性
 | **纯翻译引擎不执行指令** | "请按编号输出"被 qwen-mt 当成正文，只译第一行（1/4） | 用**结构分隔符**，不要用指令式提示 |
 | **优化被自己的后处理杀死** | 合并翻译的分隔符 `\|\|\|` 被 `clean_translation` 的白名单删掉 → 静默退回逐条、无报错 | 分隔符必须**能活过后处理**（用纯字母），并加断言 |
 | **"用了没定义"的参数** | `args.prefer_offline` 有调用点、没 `add_argument` → 程序**启动即崩**，看起来像"不显示字幕" | 自检里加通用检查：每个 `args.X` 必须有定义 |
+| **探测把启动挂死** | `gpu_available()` 里 `WhisperModel("tiny")` 的联网请求没有超时，本机 huggingface 不通 → **永久卡住**；而它是在建浮窗之前调的，现象是"启动后什么都没有、也没报错" | 探测加**死线**（线程 + join 超时）、离线优先、联网重试死线更短；并且把这一步的耗时打进日志 |
+| **两个 Python 抢活** | 本机两个 3.12：PATH 里那个装了依赖但**没 nvidia cuBLAS**，另一个有 → 用错了 GPU 就用不上，还会拖慢启动 | 由 `babel_admin/dlls.py` **按"能不能加载 cublas64_12.dll"**挑解释器，判据写进代码而不只在 .bat |
+| **日志区一直是空的** | 子进程输出用 `readline()` 读 → 没有换行就一直等；界面看着像"点了没反应" | 按字节读、遇 `\r`/`\n` 切行（进度条只用回车刷新） |
+| **"关掉了浮窗还在"** | Windows 没有真 SIGTERM，`terminate()` ≈ 硬杀；而 `SIGBREAK` 用 `getattr(signal,…)` **取不到**（报 `Unsupported signal: 21`） | 显式从 signal 模块取 SIGBREAK 送 CTRL_BREAK，走正常退出；超时才硬杀 |
+
+---
+
+## 模型注册表与后台管理端
+
+**模型选择只有一处真相**：`model_registry.json`。
+两个翻译模块（**实时回环系统** / **视频缓存**）都从它取默认值，
+后台界面改的也是它 —— 不存在"界面一套、程序一套"。
+
+**管理端同时托管翻译链路**：界面上的「启动翻译链路」按钮会拉起
+`live_subtitle_v2.py` 子进程 —— **浮窗是原生窗口，只有链路跑起来才有**。
+以前管理端只是一个配置页面，界面上没有任何启动入口，所以"打开后台
+管理系统"看到的是一片空，而且不报错（最难查的那种）。
+
+```
+双击  admin.bat           后台管理端（http://127.0.0.1:8770）
+                          → 点「启动翻译链路」→ 屏幕底部出现置顶浮窗
+
+python model_registry.py show        # 两个模式各自解析出的模型与参数
+python model_registry.py probe       # 本机实况：哪些模型真的可用
+python model_registry.py pending     # 还没接管的硬编码默认值清单
+python model_registry.py check       # 注册表自检（41 项 + IO 回归 3 项）
+
+python live_subtitle_v2.py --print-models    # 实时模块实际拿到的模型
+python live_subtitle_v2.py --no-registry     # 绕过注册表（回旧默认值）
+python pretranslate.py --print-models a.mp4  # 缓存模块实际拿到的模型
+
+python babel_admin/dlls.py              # 挑"真能跑 GPU"的那个 Python（见下）
+python tools/check_registry_wiring.py   # 注册表 ↔ 命令行参数 接线校验（20 项）
+python tools/check_admin_html.py        # 界面 HTML 体检：配平/零外链/JS 语法（27 项）
+python tools/test_admin_api.py          # 管理端 API 回归（34 项）
+python tools/test_engine_control.py     # **链路启停**：真起进程、真看浮窗（20 项）
+python tools/e2e_admin_browser.py       # **真浏览器**端到端（37 项，含断网退化）
+```
+
+### 用哪个 Python 起链路（这一步决定 GPU 能不能用）
+
+本机有**两个 Python 3.12**，依赖装得互补 —— 选错的那个会让 GPU 用不了：
+
+| 解释器 | 模块 | `cublas64_12.dll` | 结果 |
+|---|---|---|---|
+| `~\.dsh\dsh-runtimes\...\python.exe` | 齐 | **有**（98MB） | `gpu_available()` 5.9s → True |
+| `...\Programs\Python\Python312\python.exe` | 齐 | **没有** | 报 `Library cublas64_12.dll is not found`，退回 CPU/远端 |
+
+所以这个选择由**代码**做（`babel_admin/dlls.py`），而不是只写在 .bat 里 ——
+管理端是从界面按钮起进程的，那条路径根本不经过 .bat。判据是
+"**哪个 python 真能加载 CUDA 库**"，不是"哪个 python 存在"。
+
+### 验证清单（都是可重跑的，不是"我试过了"）
+
+| 脚本 | 回答什么问题 | 项数 |
+|---|---|---|
+| `model_registry.py check` | 注册表结构、模式覆盖规则、兜底、显存口径 | 41 + 3 |
+| `tools/check_registry_wiring.py` | 注册表给的键在 argparse 里真的存在吗、类型相容吗 | 20 |
+| `tools/check_admin_html.py` | 界面标签配平、零外链、JS 语法 | 27 |
+| `tools/test_admin_api.py` | 界面改模型 → 落盘 → 模块读到的就是它 | 34 |
+| `tools/test_engine_control.py` | 界面点启动 → 浮窗真的出现；点停止 → 不残留 | 20（`--quick` 9） |
+| `tools/e2e_admin_browser.py` | 真浏览器里渲染出来的到底是不是注册表的数据 | 37 |
+
+`e2e_admin_browser.py` 是这套里最值钱的一个：前面几个都在"代码/文本"
+层面断言，而**界面是 JS 渲染的** —— 文件里写着模型名不代表页面上显示了。
+它用本机 Edge 无头打开真服务，导出渲染后的 DOM 再断言，并且测了
+"服务挂掉时页面必须退化到内置数据并明显标出数据源"（白屏是最常见的
+交付事故，且最难提前发现）。
+
+`test_engine_control.py` 则回答用户真正会问的那个问题 ——
+"我点了启动，浮窗到底出来没有"。它会真起子进程、真等浮窗、真停掉，
+并断言**进程没有残留**（残留 = 浮窗关不掉）。
+
+### 两个模式怎么共用一套模型选择
+
+`modes` 里**只存与 defaults 的差异**，`null` 表示跟随默认：
+
+```json
+"defaults": { "asr": "local:faster-whisper-medium", "mt": "remote:qwen-mt-flash" },
+"modes": {
+  "loopback": { "asr": null,                     "mt": null },   // 都跟随默认
+  "cache":    { "asr": "local:faster-whisper-large-v3", "mt": null }
+}
+```
+
+于是：
+
+| 改哪里 | 实时回环系统 | 视频缓存 |
+|---|---|---|
+| 改 `defaults.asr` | **跟着变** | 不变（自己覆盖了 large-v3） |
+| 改 `modes.cache.asr` | 不变 | 只这里变 |
+| 界面点"两个都用" | 变 | 变（同时写 defaults） |
+
+如果两个模式各存一份**完整快照**，改 defaults 就谁也带不动 ——
+注册表会退化成又一份散落配置，这正是它要解决的问题。
+
+### 每个模型的代价（注册表里逐条记着）
+
+| 识别模型 | 上卡显存 | 每 4 秒段 | 准确度 | 备注 |
+|---|---|---|---|---|
+| faster-whisper medium | 1612MB | 0.603s | good | 实时默认 |
+| faster-whisper large-v3 | 3123MB | 0.846s | best | 缓存默认 |
+| faster-whisper small | 602MB | 0.405s | fair | 越南语实测错词 |
+| qwen3-asr-flash（远端） | 0 | 0.90s | ok | 无 GPU 时回退 |
+
+显存那列是**权重 + 解码开销**，不是文件大小：2.9GB 的权重上卡后占
+3123MB，多出来的是 KV cache 与激活。差别决定 device_placement 判
+"放得下"还是"加载失败"。我第一版按"权重的一半"估解码开销，medium
+估成 2077MB（实测 1615MB）—— 高估会让翻译模块白白退回 CPU，
+所以这几个数是**用实测反推**的，不是拍的。
+
+### 界面怎么读数据
+
+`babel_admin/serve.py` 是个只监听 `127.0.0.1`、只用标准库的本地服务：
+
+```
+GET  /api/models    模型快照（含实况可用性 + 归属哪两个模块）
+GET  /api/state     两个模式当前解析结果
+POST /api/select    改一个字段（白名单字段 + 模型 id 必须存在）
+POST /api/set-mode  改一个模式的绑定
+```
+
+三条硬约束，都是为了"选了必须生效"：
+
+1. **写白名单**：只认 `PATCHABLE` 里那几个字段，不是通用配置写入器。
+2. **id 必须存在**：错别字返回 400 并列出可选值，不静默落盘。
+3. **不可用的模型默认拒绝**：本机跑不起来的模型不许一键切过去（`force=true` 可强改）。
 
 ---
 

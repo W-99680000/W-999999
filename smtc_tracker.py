@@ -56,6 +56,7 @@ class SmtcTracker:
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._pos = None            # (上报位置秒, 上报时刻 datetime)
+        self._rate = 1.0            # 播放倍速（1.5x/2x 追剧时外推必须乘它）
         self._playing = False
         self._title = ""
         self._source = ""
@@ -67,6 +68,11 @@ class SmtcTracker:
         self._seek_n = 0            # 检测到的进度拖动次数（每次跳变 +1）
         self._seek_at = 0.0         # 最近一次 seek 的 monotonic 时刻
         self._pos_seen = {}         # id(会话) -> 上次看到的 position，判"在动"
+        # 迟滞切换：挑战者要连续 _SWITCH_HOLD 拍击败现任才换会话 ——
+        # 标签页闪烁/广告弹窗抢 SMTC 时字幕不会来回跳
+        self._challenger = None
+        self._chall_streak = 0
+        self._SWITCH_HOLD = 4       # 150ms 轮询下 ≈ 0.6s 确认窗口
 
     # ── 生命周期 ──
     def start(self):
@@ -87,6 +93,10 @@ class SmtcTracker:
         （夸克浏览器实测）只在 seek/暂停时才刷新时间线，所以必须以
         **上报时刻**为基准推算，不能以我们轮询的时刻为基准 —— 否则
         每次轮询都把推算窗口清零，位置永远卡在原地。
+
+        倍速：外推必须乘 playback_rate —— 1.5x/2x 倍速看视频时按 1.0x
+        推算，字幕每分钟能漂出几十秒。Chrome/Edge 会经 SMTC 上报倍速；
+        读不到（老系统 / 播放器不报）就按 1.0 处理。
         """
         with self._lock:
             if self._pos is None:
@@ -96,7 +106,7 @@ class SmtcTracker:
                 now = datetime.now(timezone.utc)
                 if ts.tzinfo is None:
                     ts = ts.replace(tzinfo=timezone.utc)
-                return max(0.0, pos + (now - ts).total_seconds())
+                return max(0.0, pos + (now - ts).total_seconds() * self._rate)
             return pos
 
     def playing(self):
@@ -235,15 +245,32 @@ class SmtcTracker:
             cands.append((s, aumid, playing, is_browser, advancing))
         if not cands:
             return None
-        # 优先级：标题命中 > 时间线在前进 > 浏览器且播放中 > 播放中 >
-        # 浏览器 > 第一个
+        # 前台窗口信号：用户正在看哪个网页，前台就是哪个 ——
+        # 多开网页时这是"翻译哪一个"的最直接判据。
+        fg_title = ""
+        try:
+            from foreground import foreground_is_browser, title_matches_window
+            fg_ok, fg_title = foreground_is_browser()
+            if not fg_ok:
+                fg_title = ""
+        except Exception:
+            pass
+        # 优先级：显式 title_hint > 前台窗口命中 > 时间线在前进 >
+        # 浏览器且播放中 > 播放中 > 浏览器 > 第一个
         def score(c):
             s, aumid, playing, is_browser, advancing = c
             sc = 0
+            t = getattr(self, "_titles", {}).get(id(s), "")
             if self.title_hint:
-                t = getattr(self, "_titles", {}).get(id(s), "")
                 if t and (self.title_hint in t or t in self.title_hint):
                     sc += 100
+            if fg_title and t:
+                try:
+                    from foreground import title_matches_window as _tm
+                    if _tm(t, fg_title):
+                        sc += 50
+                except Exception:
+                    pass
             if advancing:
                 sc += 20
             if playing:
@@ -287,6 +314,14 @@ class SmtcTracker:
         except Exception:
             pass
 
+    def _switch_to(self, s):
+        """实际切换锁定的会话：清锚点、清挑战者状态。"""
+        self._session = s
+        self._challenger = None
+        self._chall_streak = 0
+        with self._lock:
+            self._anchor = None              # 换会话 = 换片子，旧锚点作废
+
     async def _tick(self, mgr):
         sessions = mgr.get_sessions()
         # 记住每个会话的标题（供 _pick 匹配；空标题会定时重试）
@@ -295,12 +330,29 @@ class SmtcTracker:
         s = self._pick(sessions)
         if s is None:
             self._set(None, None, False, "", "", alive=False)
+            self._session = None
+            self._challenger = None
+            self._chall_streak = 0
             return
         if s is not self._session:
-            self._session = s
-            with self._lock:
-                self._anchor = None          # 换会话 = 换片子，旧锚点作废
-            await self._remember_title(s)
+            # 迟滞切换：现任会话消失了立即换；现任还在，挑战者要连续
+            # _SWITCH_HOLD 拍都赢才换 —— 防止广告/弹窗抢一下 SMTC
+            # 就把字幕带跑，也防止两个标签页分数交替领先时来回跳。
+            current_gone = self._session is None or not any(
+                x is self._session for x in sessions)
+            if current_gone:
+                self._switch_to(s)
+            elif s is self._challenger:
+                self._chall_streak += 1
+                if self._chall_streak >= self._SWITCH_HOLD:
+                    self._switch_to(s)
+            else:
+                self._challenger = s
+                self._chall_streak = 1
+            s = self._session               # 本拍仍跟现任
+        else:
+            self._challenger = None
+            self._chall_streak = 0
         title = getattr(self, "_titles", {}).get(id(s), "")
         try:
             aumid = s.source_app_user_model_id or ""

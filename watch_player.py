@@ -870,6 +870,22 @@ def _auto_main(args):
                            warned_pos=False, pos_logged=False,
                            status_lb=None)
                 _jump.reset()          # 换片子：位置基准作废，防误判为拖动
+                # 切视频 = 旧的预翻译任务全部作废。**必须真杀子进程**：
+                # 每个任务占 3~6GB 显存，不杀就连新任务一起拖死 ——
+                # 这正是"切个视频浮窗就停了"的根因。
+                if autocache is not None:
+                    try:
+                        n_kill = autocache.cancel_except(cur["title"])
+                        if n_kill:
+                            _log(f"已取消 {n_kill} 个旧预翻译任务"
+                                 f"（显存释放）")
+                    except Exception as e:
+                        _log(f"取消旧任务异常: {e}")
+                # 同一标题的失败计数放 5 分钟自动清零：上次失败可能是
+                # 被旧任务抢显存挤爆的，不该永久拉黑这部片
+                tr_stale = tried.get(cur["title"])
+                if tr_stale and time.time() - tr_stale["ts"] > 300:
+                    tried.pop(cur["title"], None)
                 # 记下来源进程（AUMID）：多会话选错时（比如跟到了
                 # 音乐标签页）这一行能直接指出是选错了哪一个会话
                 _log(f"检测到会话: {title!r} playing={tracker.playing()}"
@@ -907,15 +923,22 @@ def _auto_main(args):
                             else:
                                 msg = (st or {}).get("msg") or "无缓存字幕"
                                 _status(f"在播：{title[:22]}　{msg}")
-            # ① 字幕还没出来时，把自动预翻译的进度**持续**显示出来
-            #    （原来只在换片那一刻显示一次，之后就停在原地不动了）
-            #    节流 1.5s：进度行（识别 46% / 翻译 12/40）来得非常密，
-            #    每次都 clear+flash 会让浮窗闪个不停。
+            # ① 字幕还没出来时，把自动预翻译的进度**持续**显示出来。
+            #    关键是那个 mm:ss 计时器：它每秒都在变 —— 变了浮窗就刷新，
+            #    用户一眼能看出"活着，在干活"。光有静态文字分不清是在跑
+            #    还是卡死了（下载/模型加载阶段可能几十秒没有新进度行）。
             if not cur["cues"] and autocache is not None and cur["title"]:
                 st = autocache.state_of(cur["title"])
                 if st and st["state"] == "running" \
-                        and time.time() - cur.get("status_ts", 0.0) >= 1.5:
-                    _status("自动预翻译中… " + (st.get("msg") or ""))
+                        and time.time() - cur.get("status_ts", 0.0) >= 1.0:
+                    el = max(0, int(time.time()
+                                    - st.get("t0", time.time())))
+                    stage_cn = {"resolve": "反查网址",
+                                "translate": "预翻译"}.get(
+                                    st.get("stage") or "", "处理")
+                    _status(f"{stage_cn}中 "
+                            f"{el // 60:02d}:{el % 60:02d}"
+                            f"｜{st.get('msg') or ''}")
             # ② srt 增量热重载：预翻译是**分块流水**地往里写的，文件一变
             #    就重读 —— 新译好的段落立刻可看，不必等整片跑完。
             #    这就是点播版对"先翻译一部分就显示"的落地。

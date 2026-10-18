@@ -16,22 +16,27 @@ rem (note: keep this file ASCII-only)
 set "PY="
 set "CAND1=C:\Users\w\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe"
 
+rem Interpreter probe: find_spec only checks presence (milliseconds).
+rem The old check imported faster_whisper+PyQt5 per candidate = seconds
+rem each, several seconds cold - that was a big chunk of "slow startup".
+set "PROBE=import importlib.util as u,sys;sys.exit(0 if all(u.find_spec(m) for m in ('faster_whisper','PyQt5','pyaudiowpatch')) else 1)"
+
 if exist "%CAND1%" (
-  "%CAND1%" -c "import faster_whisper,PyQt5,pyaudiowpatch" >nul 2>nul
+  "%CAND1%" -c "%PROBE%" >nul 2>nul
   if not errorlevel 1 set "PY=%CAND1%"
 )
 
 if not defined PY (
   for /f "delims=" %%P in ('where python 2^>nul') do (
     if not defined PY (
-      "%%P" -c "import faster_whisper,PyQt5,pyaudiowpatch" >nul 2>nul
+      "%%P" -c "%PROBE%" >nul 2>nul
       if not errorlevel 1 set "PY=%%P"
     )
   )
 )
 
 if not defined PY (
-  py -c "import faster_whisper,PyQt5,pyaudiowpatch" >nul 2>nul
+  py -c "%PROBE%" >nul 2>nul
   if not errorlevel 1 set "PY=py"
 )
 

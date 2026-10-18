@@ -36,6 +36,7 @@ ROOT_FILES = ["live_subtitle_v2.py", "overlay_qt.py", "streaming_asr.py",
               # **必须逐个列出**，别指望通配。
               "watch_player.py", "watch_overlay.py", "pretranslate.py",
               "browser_history.py", "autopipe.py", "smtc_tracker.py",
+              "foreground.py",
               "watch.bat", "cache.bat"]
 BENCH = ["bench_latency.py", "bench_localagree.py", "bench_fastest.py",
          "bench_realtime.py", "bench_depth.py", "bench_trend.py",
@@ -45,6 +46,8 @@ BENCH = ["bench_latency.py", "bench_localagree.py", "bench_fastest.py",
          "_verify_stitch.py",      # 跨块断句缝合单测
          "_verify_pipeline.py",    # 块内识别→翻译流水线单测
          "_verify_resolve.py",     # 网址反查两档渐进 + no_url 退避单测
+         "_verify_context.py",     # 翻译上下文前缀切片单测
+         "_verify_hysteresis.py",  # 会话迟滞切换 + 前台匹配单测
          "_diag_resolve.py",       # 反查/会话识别一键诊断
          "_diag_watch.py", "_diag_smtc_self.py", "_diag_chunk_speed.py",
          "_smoke_overlay.py", "_repro_stuck.py", "_verify_switch.py",

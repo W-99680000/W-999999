@@ -40,6 +40,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 
 _CUDA_DIRS: list = []
 
@@ -112,11 +113,71 @@ def nvidia_smi_info():
         return None
 
 
-def gpu_available():
+def _probe_once(compute_type="float16"):
+    """真跑一次极短前向，确认 DLL 真能找到。抛异常=不可用。"""
+    from faster_whisper import WhisperModel
+    import numpy as np
+    m = WhisperModel("tiny", device="cuda", compute_type=compute_type)
+    segs, _ = m.transcribe(np.zeros(16000, dtype=np.float32),
+                           beam_size=1, vad_filter=False,
+                           condition_on_previous_text=False)
+    list(segs)
+    del m
+
+
+def _probe_offline_ready():
+    """把"别问 hub"这件事**在 import 之前**钉死。
+
+    为什么必须在 import 前：`huggingface_hub.constants` 在**导入时**就把
+    HF_HUB_OFFLINE 读进模块常量，之后再 os.environ 改它**不生效**。
+    gpu_setup 的旧代码只在第一次探测失败后才设它 —— 于是第一次那个
+    联网请求该挂多久还是挂多久。
+    """
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+    os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+
+
+def _run_with_deadline(fn, timeout=25.0):
+    """跑 fn()，超过 timeout 就放弃（**探测不许把整个程序挂住**）。
+
+    返回值 (ok, err)。卡住时 ok=None（未知），不是 False ——
+    "探不出来"和"探出来是坏的"结论不同，不该混成同一个。
+    """
+    box: list = []
+
+    def _worker():
+        try:
+            fn()
+            box.append((True, ""))
+        except BaseException as e:                # noqa: BLE001
+            box.append((False, f"{type(e).__name__}: {e}"))
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    t.join(timeout)
+    if not box:
+        return None, f"探测超过 {timeout:.0f} 秒未返回（判定为卡死，跳过）"
+    return box[0][0], box[0][1]
+
+
+def gpu_available(timeout=25.0, online_timeout=8.0, verbose=False):
     """GPU 是否**真的可用于推理**（不只是存在）。
 
     注意：这里必须真的跑一次前向，不能只看设备列表 ——
     缺 cuBLAS 时设备在、模型能构造，只有前向才报错。
+
+    **但探测本身绝不能把启动挂住**（2026-08 实测踩到）：本机
+    huggingface.co 连不通（代理 502 那类），`WhisperModel("tiny")` 的
+    联网请求没有超时，于是 `gpu_available()` **永久卡住** ——
+    而它是在建浮窗之前调的，所以现象是"启动后什么都没有、也没有报错"，
+    操作者完全看不出卡在哪。见 README「踩过的坑」。
+
+    现在的顺序，**总耗时上限 ≈ timeout + online_timeout**：
+      ① 先按**离线**探一次（模型已在缓存里就该走这条）
+      ② 离线不成再试一次联网（网络请求可能没有超时，所以死线更短：
+         8 秒。拔网线/代理挂掉时不该等 25 秒才发现连不上）
+      ③ 两次都失败/超时 → False，并打印原因
     """
     info = nvidia_smi_info()
     if info is None:
@@ -129,32 +190,33 @@ def gpu_available():
             return False
     except Exception:
         return False
-    # 真跑一次极短前向，确认 DLL 真能找到
-    from faster_whisper import WhisperModel
-    import numpy as np
 
-    def _probe():
-        m = WhisperModel("tiny", device="cuda", compute_type="float16")
-        segs, _ = m.transcribe(np.zeros(16000, dtype=np.float32),
-                               beam_size=1, vad_filter=False,
-                               condition_on_previous_text=False)
-        list(segs)
-        del m
-
+    prev = {k: os.environ.get(k) for k in ("HF_HUB_OFFLINE",)}
+    _probe_offline_ready()                       # 必须在 import 之前
     try:
-        _probe()
-        return True
-    except Exception:
-        # **区分"GPU 坏"和"网络坏"。** 实测踩到：huggingface_hub 加载
-        # 缓存模型前会先问 hub（代理 502 时直接抛），于是一台 GPU 完全
-        # 正常的机器被判成"GPU 不可用"，连锁回退 CPU + 联网下载 → 崩。
-        # 网络类失败时用 HF_HUB_OFFLINE 重试：tiny 已缓存的话照样能探。
-        try:
-            os.environ["HF_HUB_OFFLINE"] = "1"
-            _probe()
+        ok, err = _run_with_deadline(_probe_once, timeout)
+        if ok:
             return True
-        except Exception:
-            return False
+        if verbose and err:
+            print(f"    · 离线探测未通过：{err[:160]}")
+        # 离线不成 → 放行联网再试（仍带死线）。有些机器没缓存 tiny，
+        # 但能正常联网，这种不该被误判成 GPU 坏。
+        if prev.get("HF_HUB_OFFLINE") is None:
+            os.environ.pop("HF_HUB_OFFLINE", None)
+        os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "5")
+        os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "5")
+        ok2, err2 = _run_with_deadline(_probe_once, online_timeout)
+        if ok2:
+            return True
+        if verbose:
+            print(f"    · 联网探测未通过：{(err2 or err)[:160]}")
+        return False
+    finally:
+        for k, v in prev.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 def describe():

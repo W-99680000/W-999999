@@ -1,0 +1,344 @@
+{
+  "schema": 1,
+  "updated": "2026-08-13",
+  "means": {
+    "asr": "语音识别（听写）：把音频变成原文",
+    "mt": "机器翻译：把原文变成译文",
+    "router": "译器选路：源语言 → 用哪个译器",
+    "modes": "两个翻译模块。只存与 defaults 的差异（null = 跟随默认）",
+    "vram_mb": "显存预算（MB）。本地模型取实测值；远端/离线为 0",
+    "available": "此刻是否真的可用（按本机实况探测，不是愿望）"
+  },
+  "defaults": {
+    "asr": "local:faster-whisper-medium",
+    "mt": "remote:qwen-mt-flash",
+    "router": {
+      "allow_offline": false
+    }
+  },
+  "modes": {
+    "loopback": {
+      "label": "实时回环系统",
+      "goal": "低延迟：音频播出来才存在，等不起",
+      "asr": null,
+      "asr_stream": null,
+      "mt": null,
+      "params": {
+        "max_batch": 2.0,
+        "max_wait": 1.2,
+        "mt_batch": 2,
+        "mt_batch_wait": 0.35,
+        "mt_cap": 2.0,
+        "min_seg": 0.5,
+        "max_seg": 4.0,
+        "vad_silence": 0.45,
+        "remote_asr": true
+      }
+    },
+    "cache": {
+      "label": "视频缓存",
+      "goal": "高准确：整片先识别后翻译，首句零延迟",
+      "asr": "local:faster-whisper-large-v3",
+      "asr_stream": null,
+      "mt": null,
+      "params": {
+        "mt_batch": 8,
+        "force": false
+      }
+    }
+  },
+  "asr": [
+    {
+      "id": "local:faster-whisper-large-v3",
+      "name": "faster-whisper large-v3",
+      "vendor": "Systran / ctranslate2",
+      "source": "local",
+      "kind": "faster-whisper",
+      "size_key": "large-v3",
+      "langs": [
+        "*"
+      ],
+      "vram_mb": 3127,
+      "latency": "0.846s / 4s段",
+      "accuracy": "best",
+      "cost": "0",
+      "note": "缓存模式默认；30 秒上下文 + 词级时间戳"
+    },
+    {
+      "id": "local:faster-whisper-medium",
+      "name": "faster-whisper medium",
+      "vendor": "Systran / ctranslate2",
+      "source": "local",
+      "kind": "faster-whisper",
+      "size_key": "medium",
+      "langs": [
+        "*"
+      ],
+      "vram_mb": 1615,
+      "latency": "0.603s / 4s段",
+      "accuracy": "good",
+      "cost": "0",
+      "note": "实时默认；GPU 上 small 会自动升到这里（只慢 0.2s 但修掉可辨识错词）"
+    },
+    {
+      "id": "local:faster-whisper-small",
+      "name": "faster-whisper small",
+      "vendor": "Systran / ctranslate2",
+      "source": "local",
+      "kind": "faster-whisper",
+      "size_key": "small",
+      "langs": [
+        "*"
+      ],
+      "vram_mb": 605,
+      "latency": "0.405s / 4s段",
+      "accuracy": "fair",
+      "cost": "0",
+      "note": "准确度不足（越南语实测前半后半都错），只在显存不够时用"
+    },
+    {
+      "id": "local:faster-whisper-base",
+      "name": "faster-whisper base",
+      "vendor": "Systran / ctranslate2",
+      "source": "local",
+      "kind": "faster-whisper",
+      "size_key": "base",
+      "langs": [
+        "*"
+      ],
+      "vram_mb": 300,
+      "latency": "0.25s / 4s段",
+      "accuracy": "poor",
+      "cost": "0",
+      "note": "流式模式的默认；只适合看个大概"
+    },
+    {
+      "id": "local:faster-whisper-tiny",
+      "name": "faster-whisper tiny",
+      "vendor": "Systran / ctranslate2",
+      "source": "local",
+      "kind": "faster-whisper",
+      "size_key": "tiny",
+      "langs": [
+        "*"
+      ],
+      "vram_mb": 180,
+      "latency": "0.15s / 4s段",
+      "accuracy": "poor",
+      "cost": "0",
+      "note": "冒烟测试用，别拿它看正片"
+    },
+    {
+      "id": "remote:qwen3-asr-flash",
+      "name": "qwen3-asr-flash",
+      "vendor": "阿里云百炼",
+      "source": "remote",
+      "kind": "openai-compatible",
+      "size_key": null,
+      "langs": [
+        "*"
+      ],
+      "vram_mb": 0,
+      "latency": "0.90s / 4s段",
+      "accuracy": "ok",
+      "cost": "≈0.79元/小时",
+      "note": "无 GPU 时的回退；API 不还原大小写，词错比本地多"
+    }
+  ],
+  "mt": [
+    {
+      "id": "remote:qwen-mt-flash",
+      "name": "qwen-mt-flash",
+      "vendor": "阿里云百炼",
+      "source": "remote",
+      "kind": "llm",
+      "langs": [
+        "*"
+      ],
+      "vram_mb": 0,
+      "latency": "0.36s/段",
+      "quality": "best",
+      "cost": "≈0.3元/小时",
+      "note": "默认译器。纯翻译引擎、指令免疫；固定开销约 0.57s/次，所以合并批次能摊薄"
+    },
+    {
+      "id": "remote:qwen-mt-lite",
+      "name": "qwen-mt-lite",
+      "vendor": "阿里云百炼",
+      "source": "remote",
+      "kind": "llm",
+      "langs": [
+        "*"
+      ],
+      "vram_mb": 0,
+      "latency": "0.33s/段",
+      "quality": "ok",
+      "cost": "更低",
+      "note": "比 flash 略快，语言略生硬"
+    },
+    {
+      "id": "remote:qwen-mt-plus",
+      "name": "qwen-mt-plus",
+      "vendor": "阿里云百炼",
+      "source": "remote",
+      "kind": "llm",
+      "langs": [
+        "*"
+      ],
+      "vram_mb": 0,
+      "latency": "0.34s/段",
+      "quality": "unstable",
+      "cost": "更高",
+      "note": "实测不稳定（专名会错），别当默认"
+    },
+    {
+      "id": "local:hh-translate-base",
+      "name": "HY-MT 1.8B (GGUF)",
+      "vendor": "腾讯混元 / llama.cpp",
+      "source": "local",
+      "kind": "llama-server",
+      "langs": [
+        "*"
+      ],
+      "vram_mb": 1081,
+      "latency": "0.49s/段",
+      "quality": "good",
+      "cost": "0",
+      "note": "完全离线。1.8B 一代用 hy_ 系列 token；模型路径取 local_mt.MODEL_CANDIDATES"
+    },
+    {
+      "id": "local:hh-translate-small",
+      "name": "HY-MT small (GGUF)",
+      "vendor": "腾讯混元 / llama.cpp",
+      "source": "local",
+      "kind": "llama-server",
+      "langs": [
+        "*"
+      ],
+      "vram_mb": 1407,
+      "latency": "≈0.45s/段",
+      "quality": "ok",
+      "cost": "0",
+      "note": "体积反而比 base 大，按实测显存给值，别按名字猜"
+    },
+    {
+      "id": "local:hh-translate-medium",
+      "name": "HY-MT medium (GGUF)",
+      "vendor": "腾讯混元 / llama.cpp",
+      "source": "local",
+      "kind": "llama-server",
+      "langs": [
+        "*"
+      ],
+      "vram_mb": 1820,
+      "latency": "≈0.6s/段",
+      "quality": "good",
+      "cost": "0",
+      "note": "中间档，本地翻译质量/显存的折中"
+    },
+    {
+      "id": "local:hh-translate-large",
+      "name": "HY-MT 7B (GGUF)",
+      "vendor": "腾讯混元 / llama.cpp",
+      "source": "local",
+      "kind": "llama-server",
+      "langs": [
+        "*"
+      ],
+      "vram_mb": 4410,
+      "latency": "≈1.0s/段",
+      "quality": "good",
+      "cost": "0",
+      "note": "7B 一代用 startoftext/extra_N token —— 发错 token 会表现成'模型更差'"
+    },
+    {
+      "id": "offline:argos-en-zh",
+      "name": "argos en→zh (1.9)",
+      "vendor": "argostranslate",
+      "source": "offline",
+      "kind": "argos",
+      "langs": [
+        "en→zh"
+      ],
+      "vram_mb": 0,
+      "latency": "0.40s/段",
+      "quality": "fair",
+      "cost": "0",
+      "note": "纯离线。只有 en→zh 等少数对：**没有 ja→zh**，所以日文必须走远端"
+    },
+    {
+      "id": "offline:google-free",
+      "name": "Google 免 key 端点",
+      "vendor": "clients5.google.com",
+      "source": "offline",
+      "kind": "http",
+      "langs": [
+        "*"
+      ],
+      "vram_mb": 0,
+      "latency": "0.3~0.6s/段",
+      "quality": "fair",
+      "cost": "0（非官方）",
+      "note": "端点变体差异极大，必须用 client=dict-chrome-ex 并探一次缓存"
+    },
+    {
+      "id": "offline:mymemory",
+      "name": "MyMemory",
+      "vendor": "mymemory.translated.net",
+      "source": "offline",
+      "kind": "http",
+      "langs": [
+        "*"
+      ],
+      "vram_mb": 0,
+      "latency": "0.5~1.2s/段",
+      "quality": "fair",
+      "cost": "免费额度",
+      "note": "argos 没有的语言对（如 vi→zh）的兜底"
+    },
+    {
+      "id": "relay:vi-en-zh",
+      "name": "argos 中继 vi→en→zh",
+      "vendor": "argostranslate ×2",
+      "source": "offline",
+      "kind": "relay",
+      "langs": [
+        "vi→zh"
+      ],
+      "vram_mb": 0,
+      "latency": "0.8s/段（两次）",
+      "quality": "poor",
+      "cost": "0",
+      "note": "实测会崩（源文本自身错时下游难救），只作离线演示"
+    }
+  ],
+  "router": {
+    "offline_sources": {
+      "en": {
+        "mt": "offline:argos-en-zh",
+        "note": "直连包存在，最快"
+      },
+      "ja": {
+        "mt": "remote:qwen-mt-flash",
+        "note": "argos 无 ja→zh 包"
+      },
+      "ko": {
+        "mt": "remote:qwen-mt-flash",
+        "note": "argos 无 ko→zh 包"
+      },
+      "vi": {
+        "mt": "remote:qwen-mt-flash",
+        "fallback": [
+          "offline:google-free",
+          "offline:mymemory"
+        ],
+        "note": "argos 无 vi→zh；中继质量差"
+      }
+    },
+    "rules": [
+      "默认不吃离线：实测同一批句子上 qwen-mt 每项都优于 argos，代价只有 0.25s",
+      "只有 --prefer-offline 才让英文走 argos，且源语言置信度要 >= 0.85",
+      "argos 对没有模型的语言对会返回 CompositeTranslation 而不报错 —— 必须显式查包"
+    ]
+  }
+}

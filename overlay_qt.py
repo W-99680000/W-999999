@@ -236,7 +236,14 @@ class QtOverlay:
             try:
                 self.st.update(self._validate(json.load(open(SETTINGS, encoding="utf-8"))))
             except Exception:
-                pass
+                # 设置文件损坏（写一半断电/硬杀）：回滚到上次的好副本，
+                # 而不是默默吃默认值（用户调好半天的样式不能丢）。
+                bak = SETTINGS + ".bak"
+                try:
+                    self.st.update(self._validate(json.load(open(bak, encoding="utf-8"))))
+                    print("  设置文件损坏，已从 .bak 恢复", flush=True)
+                except Exception:
+                    pass
         self.st.update({k: v for k, v in kw.items() if v is not None})
 
         self.app = QApplication.instance() or QApplication(sys.argv)
@@ -415,8 +422,18 @@ class QtOverlay:
             s = dict(self.st)
             # 带上时间戳，面板据此判断"主程序有新状态"
             s["_app_ts"] = time.time()
-            json.dump(s, open(SETTINGS, "w", encoding="utf-8"),
-                      ensure_ascii=False, indent=2)
+            # 原子写入 + 保留上次好副本：
+            # 直接 json.dump 写原文件，写到一半进程被硬杀 = 文件截断 =
+            # 下次启动设置全丢。tmp+replace 保证任何时刻磁盘上都是完整的。
+            tmp = SETTINGS + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(s, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, SETTINGS)
+            try:
+                import shutil as _sh
+                _sh.copyfile(SETTINGS, SETTINGS + ".bak")
+            except Exception:
+                pass
         except Exception:
             pass
 
