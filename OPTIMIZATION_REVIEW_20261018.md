@@ -1134,3 +1134,10 @@ watch 模式同样无子进程/无 conhost。
 | SRT 文件 | 当前视频重排 347→655 条（.bak 备份） |
 | 布局测试 | tools/test_subtitle_layout.py 8/0 |
 | 回归 | check_admin_html 29/0、check_console_html 22/0、model_search 10/0 |
+
+
+### 33.4 浮窗整体呈现（补）
+
+- 中文视频原文≈译文时不再 stacked 重复显示（相似度≥0.82 只留译文）。
+- watch 浮窗 recenter 回底部居中，max_lines 设为 1，只显示当前一条；
+  当前视频显示短 cue、单行贴底（桌面截图 20:42）。

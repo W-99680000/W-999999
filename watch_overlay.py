@@ -540,6 +540,16 @@ class QtOverlay:
             ta = "center"
         show_en = bool(en) and self.st.get("show_original", True) \
             and layout != "zh_only"
+        # 中文视频：whisper 的源文和 qwen-mt 的译文几乎一样，stacked 会
+        # 把同一句话上下显示两遍（用户看到的就是“整体很乱”）。相似度
+        # 高于 0.82 时只显示译文；外语视频仍保留双语。
+        if show_en and zh and en:
+            import difflib
+            import re as _re
+            _a = _re.sub(r"[\s，。！？、；：,.!?;:…—\-]", "", zh)
+            _b = _re.sub(r"[\s，。！？、；：,.!?;:…—\-]", "", en)
+            if _a and _b and difflib.SequenceMatcher(None, _a, _b).ratio() >= 0.82:
+                show_en = False
 
         def zh_div(extra=""):
             return (f'<span style="color:{self.st["text_color"]}; '
