@@ -1179,3 +1179,43 @@ watch 模式同样无子进程/无 conhost。
 
 check_admin_html 新增 3 项（按引擎模式初始化 / 只提交 dirty 槽位 /
 应用后切目标模式），当前 **32/0**。
+
+
+---
+
+## 35. 模型热切换按成熟方案重做（2026-10-18）
+
+### 35.1 参考的成熟产品
+
+- **LM Studio**：模型选择不是“改内存里的表单”，而是 `.model("key")`
+  按需加载 / 返回已加载实例；显式 `.load()` / `.unload()`，服务端始终知道
+  当前加载的是谁（[LM Studio docs](https://lmstudio.ai/docs/typescript/manage-models/loading)）。
+- **Ollama**：模型在请求时加载，`GET /api/ps` 返回“当前真正在内存里的
+  模型”，界面以服务端 `ps` 结果为准，客户端不维护一套会漂移的“当前模型”。
+  （[Ollama /api/ps](https://docs.ollama.com/api/ps)）
+- 结论：**选择模型 = 让服务端进入该配置**；界面只读服务端状态；
+  不要“先选、再找个隐藏的应用按钮、切页就丢”。
+
+### 35.2 按这个思路改的四个点
+
+1. **选模型即保存**：卡片/工具栏选择后 900ms 防抖自动 `POST /api/set-mode`
+   到**当前模式**；引擎在跑该模式就自动重启生效。不会再“动几下回原设置”。
+2. **只提交实际改动的槽位**：只改 MT 不会再拿另一个模式的 ASR 覆盖目标
+   模式的 ASR（之前 cache 的 large-v3 被串成 medium 的根因）。
+3. **设为默认 = 默认 + 两个模式**：`model_manager.set_default()` 同时写
+   defaults 和 `modes.*.<slot>`，并在仓库 UI 里刷新模型管理 + 重启引擎；
+   不再出现“点了设为默认，模型管理完全没变化”（显式模式绑定压住 defaults）。
+4. **服务端为唯一事实**：应用/设默认后 `refreshModelData()` 重新 GET
+   `/api/models` 并重绘；页面加载按 `/api/engine` 的当前模式显示；
+   刷新/切页后以注册表为准。
+
+### 35.3 验证
+
+| 步骤 | 结果 |
+|---|---|
+| 模型管理打开（引擎 cache） | 初始 large-v3 + qwen-mt-flash，cache 标签激活 |
+| 只点 MT lite（不点应用） | 900ms 后自动保存：cache large-v3 + lite，ASR 未被串 |
+| 刷新 | 仍 cache large-v3 + lite |
+| 点回 MT flash | 自动保存恢复 |
+| set_default('mt', lite) | defaults 与 loopback/cache 的 mt 都变 lite |
+| check_admin_html | 34/0 |

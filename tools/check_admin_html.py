@@ -86,6 +86,9 @@ def main(argv=None) -> int:
     chk("应用只提交改过的槽位（不串模式）",
         "state.dirty.asr" in s and "payload.asr" in s and "payload.mt" in s)
     chk("应用后切到目标模式", "state.mode = which" in s)
+    chk("选模型即自动保存（选择即加载）", "scheduleModelAutoApply" in s)
+    chk("仓库设为默认后刷新模型/重启引擎",
+        "refreshModelData" in s and 'act === "default"' in s)
 
     print("五、JS 语法（node --check）")
     node = None

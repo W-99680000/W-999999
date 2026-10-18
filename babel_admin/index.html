@@ -1344,6 +1344,57 @@ function adoptModels(raw, kind, detail){
   DATA_SOURCE.at = new Date().toLocaleTimeString("zh-CN", { hour12:false });
   return true;
 }
+let _modelAutoTimer = null;
+
+/* 选择模型后自动保存到“当前模式”（900ms 防抖），并刷新服务端快照。
+   成熟模型管理器（LM Studio / Ollama）都是“选模型 = 加载/生效”，
+   没有隐藏的“先选再记得点应用”这一步；否则用户切换页面就丢失选择。 */
+function scheduleModelAutoApply(){
+  if (_modelAutoTimer) clearTimeout(_modelAutoTimer);
+  _modelAutoTimer = setTimeout(function(){
+    _modelAutoTimer = null;
+    if (!state.dirty.asr && !state.dirty.mt) return;
+    const mode = state.mode;
+    const payload = { mode: mode };
+    if (state.dirty.asr) payload.asr = state.asrId;
+    if (state.dirty.mt) payload.mt = state.mtId;
+    fetch("/api/set-mode", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then(function(r){ return r.json(); }).then(function(j){
+      if (!j.ok){
+        toast("模型保存失败", j.error || "服务拒绝", "warn");
+        return;
+      }
+      if (j.snapshot) adoptModels(j.snapshot, "api", "POST /api/set-mode");
+      state.dirty = { asr:false, mt:false };
+      applyMode(mode, false);
+      renderModeSeg(); renderApplyText(); renderModelCards(); renderDataSource();
+      const modeLabel = (MODELS.modes[mode] || {}).label || mode;
+      if (ENGINE.running && ENGINE.mode === mode){
+        toast("模型已保存到「" + modeLabel + "」，重启引擎生效…", pairLabel());
+        engAction("restart");
+      } else {
+        toast("模型已保存到「" + modeLabel + "」", pairLabel());
+      }
+    }).catch(function(e){
+      toast("模型保存失败", String(e), "warn");
+    });
+  }, 900);
+}
+
+/* 从服务端 /api/models 严格重读并重绘（仓库设为默认后用）。 */
+function refreshModelData(){
+  return fetch("/api/models", { cache:"no-store" })
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if (!adoptModels(j, "api", "GET /api/models")) return;
+      resolveModeBinding(state.mode);
+      renderModeSeg(); renderApplyText(); renderModelCards(); renderDevices();
+      renderStats(); renderChips(); renderAdvanced(); renderDataSource();
+    }).catch(function(){});
+}
+
 function loadModels(){
   const out = { kind:"builtin", detail:DATA_SOURCE.detail, errors:DATA_SOURCE.errors };
   const fetchJSON = function(url){
@@ -1777,10 +1828,12 @@ function onToolbarChange(id, v, o){
     state.asrId = v;
     state.dirty.asr = true;
     syncAfterModelChange("识别模型已切换为 " + label);
+    scheduleModelAutoApply();
   } else if (id === "tb-mt"){
     state.mtId = v;
     state.dirty.mt = true;
     syncAfterModelChange("翻译模型已切换为 " + label);
+    scheduleModelAutoApply();
   } else if (id === "tb-lang"){
     state.toolbar.lang = v;
     const note = document.querySelector("#tb-lang") ? document.querySelector("#tb-lang").parentNode.parentNode.querySelector(".field-note") : null;
@@ -1863,6 +1916,7 @@ function renderModelCards(){
         syncAfterModelChange("识别模型：" + m.name); }
       else { state.mtId = id; state.dirty.mt = true;
         syncAfterModelChange("翻译模型：" + m.name); }
+      scheduleModelAutoApply();
     });
   });
 }
@@ -2355,6 +2409,7 @@ function setView(view){
   if (window.__onView) window.__onView(view);   // 浮窗控制台 / 模型仓库 / 实时字幕的挂点
 }
 function applyMode(mode, announce){
+  if (_modelAutoTimer){ clearTimeout(_modelAutoTimer); _modelAutoTimer = null; }
   state.mode = mode;
   const preset = BABEL_UI.presets[mode];
   const cfg = MODELS.modes[mode];
@@ -2427,15 +2482,23 @@ function bindGlobal(){
       const label = which === "both" ? "两个模块" : "「" + MODELS.modes[which].label + "」";
       // 真写注册表（以前是原型：只改浏览器内存，刷新就丢、引擎更不知道），
       // 引擎在跑就自动重启让它立刻生效 —— "改了就生效"。
-      if (!state.dirty.asr && !state.dirty.mt){
+      if (_modelAutoTimer){ clearTimeout(_modelAutoTimer); _modelAutoTimer = null; }
+      const _both = which === "both";
+      if (!_both && !state.dirty.asr && !state.dirty.mt){
         toast("没有未应用的模型改动", "先点选模型卡片，再点应用", "warn");
         return;
       }
       ap.disabled = true;
       Promise.all(modes.map(function(m){
         const payload = { mode: m };
-        if (state.dirty.asr) payload.asr = state.asrId;
-        if (state.dirty.mt) payload.mt = state.mtId;
+        if (_both){
+          // 用户明确点“两个都用” → 把当前选择同步到两个模式
+          payload.asr = state.asrId;
+          payload.mt = state.mtId;
+        } else {
+          if (state.dirty.asr) payload.asr = state.asrId;
+          if (state.dirty.mt) payload.mt = state.mtId;
+        }
         return fetch("/api/set-mode", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
@@ -3027,6 +3090,11 @@ function repoRender(){
       apiPost("/api/model-repo", {action: act, id: id, slot: el.dataset.slot}).then(function(r){
         toast(r.ok ? "操作成功" : "操作失败", r.message || r.error || "", r.ok ? "" : "warn");
         repoLoad();
+        if (act === "default") refreshModelData();
+        if (act === "default" && ENGINE.running){
+          toast("默认模型已更新，重启引擎生效…");
+          engAction("restart");
+        }
       }).catch(function(){ el.disabled = false; });
     });
   });

@@ -479,6 +479,14 @@ def set_default(slot: str, model_id: str) -> tuple[bool, str]:
             # 本地模型可能还没在注册表里 → 先登记
             _register_local(data, model_id)
         data.setdefault("defaults", {})[slot] = model_id
+        # 「设为默认」对用户意味着“以后都用它”。但 modes 里显式绑定的
+        # 值优先级高于 defaults（cache.asr=large-v3 会压住默认），
+        # 只写 defaults 会出现“点了设为默认，模型管理一点变化都没有”。
+        # 因此默认同时写入两个模式的该槽位；想给两个模式分别设不同模型
+        # 仍可在模型管理里单独改。
+        for _m in (data.get("modes") or {}).values():
+            if isinstance(_m, dict):
+                _m[slot] = model_id
         reg.save(data)
         try:
             reg.export_web(do_probe=False)   # web 端快照同步一份
