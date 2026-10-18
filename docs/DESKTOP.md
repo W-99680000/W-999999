@@ -3,6 +3,20 @@
 双击一个图标就能用：**没有黑色命令行窗口**，关掉窗口程序不退出（收到托盘），
 日志写文件。本文是这一层的一页说明。
 
+## 0. 一键安装 / 卸载（推荐）
+
+```powershell
+powershell -ExecutionPolicy Bypass -File desktop\install.ps1
+# 可选：登录后托盘常驻（写 HKCU Run，不需要管理员）
+powershell -ExecutionPolicy Bypass -File desktop\install.ps1 -Autostart
+# 卸载（删快捷方式 + 自启 + 安装标记）
+powershell -ExecutionPolicy Bypass -File desktop\install.ps1 -Uninstall
+```
+
+`install.ps1` 只负责入口：建快捷方式、写
+`%LOCALAPPDATA%\BabelPlan\install.json`、可选自启；不复制文件、不动模型。
+加 `-DryRun` 可先看它会做什么。日志目录默认保留（`-Uninstall -RemoveLogs` 才删）。
+
 ## 1. 一次性创建快捷方式
 
 在项目根目录打开 PowerShell：
@@ -61,6 +75,9 @@ powershell -ExecutionPolicy Bypass -File desktop\create_shortcut.ps1 -Remove
 或项目根下的 `run.log` / `watch.log`。
 
 ## 5. 卸载
+
+最省事：`powershell -ExecutionPolicy Bypass -File desktop\install.ps1 -Uninstall`
+（默认保留日志；加 `-RemoveLogs` 连日志一起删）。手动步骤：
 
 1. 托盘菜单「退出」；
 2. 删除桌面/开始菜单的「巴别塔计划」快捷方式（或跑

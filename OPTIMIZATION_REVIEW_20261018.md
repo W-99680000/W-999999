@@ -586,3 +586,38 @@ AlignAtt/SimulStreaming 需 cross-attention 且推荐 ≥10GB 显存 → 只列 
 | ench/_verify_quality_gates.py | 25/0（回归） |
 | 	ools/check_admin_html.py | 28/0（首页新增后） |
 | pretranslate.py/llm_translate/live selftest | 编译通过；selftest 174/0（上一轮） |
+
+
+---
+
+## 21. 稳定性验证（看门狗）+ 一键安装/卸载（2026-10-18 第四轮）
+
+### 21.1 看门狗：强杀引擎 → 自动重启
+
+- 新增 `tools/test_watchdog.py`：直接驱动 `babel_admin.serve` 的
+  ENGINE/看门狗线程，启动 → `proc.kill()` 强杀 → 等 pid 变化 → 等 ready
+  → 主动停止。
+- 实测：**7 项通过 / 0 失败**；强杀后看门狗（3s 轮询、5 分钟 3 次上限）
+  拉起新进程并回到 ready，主动停止干净退出。
+- 意义：管理端/桌面壳只要服务活着，引擎崩溃不再"整场没字幕"，这是
+  消费级稳定性的底线。
+
+### 21.2 一键安装 / 卸载（`desktop/install.ps1`）
+
+- 安装：建桌面/开始菜单快捷方式（复用 create_shortcut.ps1）、写
+  `%LOCALAPPDATA%\BabelPlan\install.json`（记录项目路径/时间/自启状态）；
+  `-Autostart` 可选写 HKCU Run（`wscript.exe BabelPlan.vbs --tray`，用户级、
+  无管理员、无黑窗）。
+- 卸载：删快捷方式、删 Run 项、删 install.json；`-RemoveLogs` 才删日志。
+- `-DryRun` 支持先看动作；本次 dry-run 验证输出正确（安装 3 步/卸载 3 步）。
+- 注意：PowerShell 5.1 读 UTF-8 无 BOM 的中文脚本会把中文 GBK 化，可能
+  吃掉后续引号/括号 —— `install.ps1` 已存为 **UTF-8 with BOM**（与
+  create_shortcut.ps1 一致）。
+
+### 21.3 验证
+
+| 项 | 结果 |
+|---|---|
+| `tools/test_watchdog.py`（新） | 7/0（强杀→新 pid→ready→干净停止） |
+| `desktop/install.ps1 -DryRun` | 安装/卸载动作输出正确（BOM 后解析通过） |
+| 质量回归（上轮） | quality gates 25/0、admin 28/0、selftest 174/0 |

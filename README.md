@@ -36,10 +36,10 @@
 | **直播翻译** | `loopback` | 抓系统音频（WASAPI 回环），实时识别 + 翻译，浮窗/直播字幕 | `start.bat`、桌面版 |
 | **视频翻译** | `cache` | 整片预翻译成双语 SRT 缓存，播放时按播放位置显示 | `watch.bat`、`cache.bat` |
 
-**桌面版（推荐给普通用户）**：先运行一次
-`powershell -ExecutionPolicy Bypass -File desktop\create_shortcut.ps1`
-生成桌面/开始菜单快捷方式，之后双击「巴别塔计划」图标即可 —— **没有命令行
-窗口**，关窗收到托盘，日志在 `%LOCALAPPDATA%\BabelPlan\app.log`。
+**桌面版（推荐给普通用户）**：运行一次
+`powershell -ExecutionPolicy Bypass -File desktop\install.ps1`
+（`-Autostart` 开机托盘常驻，`-Uninstall` 卸载），之后双击「巴别塔计划」图标即可 ——
+**没有命令行窗口**，关窗收到托盘，日志在 `%LOCALAPPDATA%\BabelPlan\app.log`。
 详见 [docs/DESKTOP.md](docs/DESKTOP.md)。
 
 **概念澄清（后台里最容易混的两个词）**：
