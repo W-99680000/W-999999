@@ -675,6 +675,29 @@ td.muted{color:var(--ink-3)}
   body.embed .meta-pill b, body.embed .meta-pill span { color:inherit !important; }
   body.embed .oc-vendor, body.embed .oc-note { color:var(--ink-2) !important; }
   body.embed .oc-note.bad { color:#ffb3be !important; }
+  /* 设备放置 / 显存预算：这些块是写死的浅色底，必须单独压深 */
+  body.embed .device-box{
+    background:rgba(255,255,255,.05) !important;
+    border-color:rgba(255,255,255,.10) !important;
+  }
+  body.embed .device-top{color:var(--ink) !important}
+  body.embed .device-top .dv-role,
+  body.embed .device-top .dv-name,
+  body.embed .device-foot,
+  body.embed .legend,
+  body.embed .hint-line,
+  body.embed .spark-legend{color:var(--ink-2) !important}
+  body.embed .bar{
+    background:rgba(255,255,255,.10) !important;
+    border-color:rgba(255,255,255,.12) !important;
+  }
+  body.embed #deviceLegend i[style*="#EDF5F0"],
+  body.embed #deviceLegend i[style*="#edf5f0"]{
+    background:rgba(255,255,255,.20) !important;
+    border-color:rgba(255,255,255,.28) !important;
+  }
+  body.embed .speed-box{background:rgba(255,255,255,.05) !important;
+    border-color:rgba(255,255,255,.10) !important}
 </style>
 </head>
 <body>
@@ -2870,6 +2893,7 @@ function repoRender(){
     const st = REPO.state[m.id] || {};
     let status, stCls;
     if (m.status === "installed"){ status = "已安装"; stCls = "st-ok"; }
+    else if (m.status === "ready"){ status = "可用（已配置 API）"; stCls = "st-ok"; }
     else if (m.status === "needs_key"){ status = "需 API key"; stCls = "st-key"; }
     else { status = "可下载"; stCls = "st-dl"; }
     if (m.recommended) status += ' <span class="rec-star">★</span>';

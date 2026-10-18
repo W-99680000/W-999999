@@ -173,6 +173,16 @@ def _validate_overlay(changes: dict) -> tuple[bool, str]:
     return True, "ok"
 
 
+def _keys_payload() -> dict:
+    try:
+        import key_store
+        return key_store.status()
+    except Exception as e:
+        return {"dashscope_set": False, "dashscope_hint": "",
+                "hf_token_set": False, "hf_token_hint": "",
+                "path": "", "error": f"{type(e).__name__}: {e}"}
+
+
 _ADMIN_DEFAULTS = {"prewarm": True, "watchdog": True}
 
 
@@ -846,6 +856,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False,
                                    "error": "hardware_detect 不可用"}, 503)
             return self._json({"ok": True, "report": HW.detect()})
+        if path == "/api/keys":
+            return self._json(_keys_payload())
         if path == "/api/admin-config":
             return self._json(_admin_cfg())
         if path == "/api/startup-stats":
@@ -1044,6 +1056,30 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False,
                                    "error": "hardware_detect 不可用"}, 503)
             return self._json({"ok": True, "report": HW.detect(force=True)})
+
+        if path == "/api/keys":
+            # {dashscope?: "sk-...", hf_token?: "hf_..."}；空串=清除
+            try:
+                import key_store
+            except Exception as e:
+                return self._json({"ok": False,
+                                   "error": f"key_store 不可用：{e}"}, 500)
+            kw = {}
+            for k in ("dashscope", "hf_token"):
+                if k in req:
+                    v = req[k]
+                    if v is not None and not isinstance(v, str):
+                        return self._json({"ok": False,
+                                           "error": f"{k} 必须是字符串"}, 400)
+                    kw[k] = (v or "").strip()
+            if not kw:
+                return self._json({"ok": False,
+                                   "error": "没有要保存的字段"}, 400)
+            key_store.update(**kw)
+            key_store.apply_env()
+            out = {"ok": True}
+            out.update(key_store.status())
+            return self._json(out)
 
         if path == "/api/admin-config":
             d = _admin_cfg()

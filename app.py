@@ -456,6 +456,14 @@ def _set_window_icon(window) -> bool:
             hwnd = 0
     if not hwnd:
         return False
+    # 再兜一层：pywebview 的 Form 如果没吃上 icon，直接改 WinForms Icon
+    try:
+        from System.Drawing import Icon as _Icon
+        native = getattr(window, "native", None)
+        if native is not None and hasattr(native, "Icon"):
+            native.Icon = _Icon(ico)
+    except Exception:
+        pass
     WM_SETICON = 0x0080
     IMAGE_ICON = 1
     LR_LOADFROMFILE = 0x0010
@@ -644,6 +652,11 @@ def _apply_babel_py() -> None:
 def main(argv=None) -> int:
     _setup_logging()
     atexit.register(_log_exit)
+    try:                                     # 后台保存的 API key / HF token
+        import key_store as _ak
+        _ak.apply_env()
+    except Exception:
+        pass
     args = _parse_args(argv)
 
     log("=" * 64)
@@ -679,6 +692,14 @@ def main(argv=None) -> int:
     if not _start_server():
         return 1
 
+    # 任务栏按应用分组（必须在创建窗口之前设置）
+    if os.name == "nt":
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "BabelPlan.Desktop")
+        except Exception:
+            pass
+    _ico = os.path.join(HERE, "desktop", "babel.ico")
     try:
         window = webview.create_window(
             APP_NAME, URL,
@@ -743,7 +764,13 @@ def main(argv=None) -> int:
         log("· 界面已就绪")
 
     try:
-        webview.start(after_start)
+        # pywebview 的 winforms 后端支持 icon=：会给 Form 设 Icon
+        # （任务栏/标题栏从根上就是 babel.ico，而不是 pythonw 的图标）
+        _start_icon = _ico if os.path.isfile(_ico) else None
+        try:
+            webview.start(after_start, icon=_start_icon)
+        except TypeError:
+            webview.start(after_start)
     except Exception:
         log("！界面启动失败：\n" + traceback.format_exc())
         _fatal("界面启动失败",

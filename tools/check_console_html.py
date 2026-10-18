@@ -55,8 +55,13 @@ def main() -> int:
         chk(f"高级页 {label}（{page}）", f'data-page="{page}"' in s, page)
     chk("高级页内嵌经典后台（embed=1&view=）",
         "embed=1&view=" in s and 'class="advframe"' in s)
-    chk("无外部网络资源",
-        not re.search(r'(src|href)="https?://', s), "发现外链")
+    chk("接口密钥页", 'data-page="keys"' in s and 'id="keyDashInput"' in s
+        and 'id="keyHfInput"' in s)
+    _no_src = not re.search(r'src="https?://', s)
+    _links = re.findall(r'href="(https?://[^"]+)"', s)
+    _ok_links = all(("bailian.console.aliyun.com" in u
+                     or "huggingface.co" in u) for u in _links)
+    chk("无外部资源加载；外链仅申请页", _no_src and _ok_links, _links)
 
     scripts = re.findall(r"<script>(.*?)</script>", s, re.S)
     chk("有内联脚本", len(scripts) >= 1, len(scripts))

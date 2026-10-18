@@ -158,11 +158,16 @@ def catalog() -> list[dict]:
         for m in reg.pool("mt", data) + reg.pool("asr", data):
             if m.get("source") != "remote":
                 continue
+            try:
+                import key_store as _ak
+                _ready = _ak.dashscope_available()
+            except Exception:
+                _ready = False
             out.append({
                 "id": m["id"], "name": m.get("name", m["id"]),
                 "group": "mt" if m.get("kind") in ("llm", "llm-mt") else "asr",
                 "size_mb": 0, "vram_mb": 0,
-                "status": "needs_key",
+                "status": "ready" if _ready else "needs_key",
                 "path": None, "source": m.get("vendor", "remote"),
                 "note": m.get("note", "在线服务，需要 API key"),
             })
@@ -177,8 +182,37 @@ def catalog() -> list[dict]:
     return out
 
 
+# 搜索别名：模型卡片只写正式名/来源，用户常搜中文/用途/厂商。
+# 这里把常见说法都挂上，搜索命中 name/id/source/note/group + 别名。
+_ALIAS_RULES = (
+    ("local:faster-whisper-",
+     "语音识别 听写 转录 asr whisper 本地 离线 识别 英文 英语 中文 日语 韩语 越南语"),
+    ("local:hh-translate-",
+     "机器翻译 翻译 译器 mt 本地 离线 混元 腾讯 hy-mt 1.8b 7b 中文 英文 日文 韩文 越南语"),
+    ("remote:qwen-mt",
+     "机器翻译 翻译 译器 mt 远端 在线 阿里云 百炼 dashscope api key qwen-mt"),
+    ("remote:qwen3-asr",
+     "语音识别 听写 转录 asr 远端 在线 阿里云 百炼 dashscope api key qwen3"),
+    ("remote:", "远端 在线 云 api key 需要密钥"),
+)
+
+
+def _search_haystack(m: dict) -> str:
+    parts = [str(m.get(k, "") or "") for k in
+             ("name", "id", "source", "note", "group", "size_key")]
+    mid = str(m.get("id") or "")
+    for pre, words in _ALIAS_RULES:
+        if mid.startswith(pre):
+            parts.append(words)
+    return " ".join(parts).lower()
+
+
 def search(query: str = "", group: str = "", only_available: bool = False) -> list[dict]:
-    """按关键字 + 分组过滤。query 命中 name/id/source（不区分大小写）。"""
+    """按关键字 + 分组过滤。
+
+    query 命中 name/id/source/note/group + 中文/用途/厂商别名
+    （如「腾讯」「离线翻译」「7B」「语音识别」「阿里云」）。
+    """
     q = query.strip().lower()
     out = []
     for m in catalog():
@@ -186,7 +220,7 @@ def search(query: str = "", group: str = "", only_available: bool = False) -> li
             continue
         if only_available and m["status"] == "needs_key":
             continue
-        if q and q not in (m["name"] + m["id"] + m["source"]).lower():
+        if q and q not in _search_haystack(m):
             continue
         out.append(m)
     return out
@@ -264,6 +298,11 @@ class DownloadJob:
         total_mb = _WHISPER_SIZES.get(size, {}).get("mb", 0)
         self._set(state="downloading", pct=0.0, detail=f"解析仓库 {repo}")
         try:
+            import key_store as _ak          # HF Access Token（gated 模型用）
+            _ak.apply_env()
+        except Exception:
+            pass
+        try:
             from huggingface_hub import snapshot_download
         except ImportError:
             raise RuntimeError("缺 huggingface_hub：pip install huggingface_hub")
@@ -294,7 +333,8 @@ class DownloadJob:
         t = threading.Thread(target=_ticker, daemon=True)
         t.start()
         try:
-            path = snapshot_download(repo_id=repo)
+            path = snapshot_download(repo_id=repo,
+                                     token=os.environ.get("HF_TOKEN") or None)
         finally:
             stop.set()
         if self.cancel.is_set():

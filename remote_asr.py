@@ -59,6 +59,19 @@ _CTX.verify_mode = ssl.CERT_NONE
 
 
 def read_key(path=DASHSCOPE_KEYS_FILE):
+    # ① 环境变量（app 启动时 key_store.apply_env() 会灌进来）
+    k = (os.environ.get("DASHSCOPE_API_KEY") or "").strip()
+    if k:
+        return k
+    # ② 后台「接口密钥」页保存的 key_store.json
+    try:
+        import key_store as _ak
+        k = _ak.get("dashscope")
+        if k:
+            return k
+    except Exception:
+        pass
+    # ③ 老位置 ~/.dsh/.dashscope（兼容已配置的用户）
     try:
         for line in open(path, encoding="utf-8"):
             line = line.strip()

@@ -336,8 +336,10 @@ gpu_available() → True。
    初始化失败（WinError 1114），ctranslate2 import 时连带崩。新增
    
 ative_preload.py，在 Qt 之前 ctypes 预载 c10.dll。
-2. **管理端日志迟到 42 秒**：serve.py 子进程管道 ead(4096) 会攒满
-   4KB 才返回；改 ead1(4096)（watch_player.py 同处也改）。
+2. **管理端日志迟到 42 秒**：serve.py 子进程管道 
+ead(4096) 会攒满
+   4KB 才返回；改 
+ead1(4096)（watch_player.py 同处也改）。
 3. **设备偏好被临时故障写死**：CUDA 缺失那轮把 CPU 存成偏好，之后一直
    CPU。现在只在选到 GPU / 确无 GPU / 用户显式选 CPU 时保存。
 4. **ctranslate2 CUDA 能力合并后仍走 Vulkan 复测**：合并设备时把
@@ -530,7 +532,8 @@ AlignAtt/SimulStreaming 需 cross-attention 且推荐 ≥10GB 显存 → 只列 
 
 ### 19.4 指标与报告
 
-- metrics_live.jsonl 每批新增：lush、ejected_hallu/lowq/remote
+- metrics_live.jsonl 每批新增：lush、
+ejected_hallu/lowq/remote
   （累计拒段），	ools/quality_report.py 打出发批原因分布与三类拒段。
 - 调研报告 §2 增加「复核更正与落地状态」：澄清幻觉闸门/ASR-MT 并行
   **本仓库已实现**（原调研判断有误），并标注 P0-1 已实现、P0-2 部分实现。
@@ -975,3 +978,58 @@ watch 模式同样无子进程/无 conhost。
   - 重新跑 `desktop/create_shortcut.ps1` 刷新桌面/开始菜单快捷方式图标。
 - 验证：App 日志出现"窗口图标已设置（babel.ico）"；Win32 `WM_GETICON`
   返回大/小图标句柄均非 0；快捷方式 IconLocation 指向 babel.ico。
+
+
+---
+
+## 31. 可读性 / 应用图标 / 搜索 / 接口密钥（2026-10-18）
+
+### 31.1 经典内嵌「设备放置 / 显存预算」太亮看不清
+
+- 原因：这些块 CSS 写死浅色底（`.device-box #FCFEFD`、`.bar #EDF5F0`），
+  embed 深色模式没覆盖到，白底浅字。
+- 修复：补 embed 专用覆盖（设备卡、进度条、图例、空闲色块、说明行），
+  实测 `.device-box` 背景为 `rgba(255,255,255,.05)`，截图可读。
+
+### 31.2 App 图标（像正规软件）
+
+- 之前只做了 WM_SETICON；pywebview 的 WinForms 窗口仍可能显示 pythonw 图标。
+- 修复：
+  - `SetCurrentProcessExplicitAppUserModelID("BabelPlan.Desktop")`
+    **在创建窗口之前**设置；
+  - `webview.start(..., icon=babel.ico)`（winforms 后端会设 Form.Icon）；
+  - 再兜底 WM_SETICON + WinForms `native.Icon`；
+  - 重新生成桌面/开始菜单快捷方式（IconLocation=babel.ico）。
+- 验证：窗口标题栏截图已显示巴别塔图标；`WM_GETICON` 大/小句柄非 0；
+  App 日志「窗口图标已设置（babel.ico）」。
+
+### 31.3 模型搜索范围更广
+
+- 之前只匹配 name/id/source。
+- 现在匹配 name/id/source/note/group + **中文别名**：
+  厂商（腾讯/阿里云/混元）、用途（语音识别/听写/翻译）、部署（本地/离线/
+  远端/在线）、档位（7B/1.8B）、语种（英文/日语/越南语）等。
+- 实测：`腾讯` 4 条、`7B` 4 条、`语音识别` 6 条、`阿里云` 4 条。
+
+### 31.4 远端模型 API Key 在哪里填
+
+- 新增左侧「高级 → 接口密钥」页（深色原生 UI）：
+  - **DashScope API Key**（sk-...）：远端识别 qwen3-asr / 远端翻译 qwen-mt；
+  - **HuggingFace Access Token**（hf_...）：仅 gated 模型下载需要。
+- 后端新增 `GET/POST /api/keys`，保存到
+  `%LOCALAPPDATA%\BabelPlan\key_store.json`（不进仓库），并同步环境变量；
+- 兼容老配置 `~/.dsh/.dashscope`：页面上显示「已配置 · sk-xxxx（旧位置 ~/.dsh）」；
+- 远端模型在仓库里的状态从「需 API key」变为「可用（已配置 API）」；
+- 注意：远端模型是 API 调用，**不存在下载权重**；本地模型下载不需要 Key。
+
+### 31.5 验证
+
+| 项 | 结果 |
+|---|---|
+| 设备放置深色可读 | `.device-box` 背景 rgba(255,255,255,.05)，截图确认 |
+| 接口密钥保存/清除 | POST/GET 往返，掩码 sk-t…7890，文件写入正确 |
+| 读取链路 | remote_asr.read_key / llm_translate._read_dashscope_key 均能读到 |
+| 旧 key 识别 | dashscope_source=legacy，页面显示已配置 |
+| 搜索 | tools/test_model_search.py 10/0 |
+| 图标 | 标题栏截图可见图标、WM_GETICON 非 0 |
+| 回归 | check_admin_html 29/0、check_console_html 22/0、models 41/0 |

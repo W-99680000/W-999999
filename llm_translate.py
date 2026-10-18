@@ -74,11 +74,21 @@ DASHSCOPE_KEYS_FILE = os.path.join(os.path.expanduser("~"), ".dsh",
 
 
 def _read_dashscope_key():
-    """从 ~/.dsh/.dashscope 读 key（单独一个文件，不要落进仓库）。
+    """读 DashScope key：env → 后台接口密钥页 → ~/.dsh/.dashscope。
 
-    不写进 .credentials.yaml 是因为那是 DSH 自己管理的文件，我不该动。
-    一行一条，`#` 开头为注释。
+    后台「接口密钥」页保存的 key 在 %LOCALAPPDATA%\\BabelPlan\\key_store.json；
+    app 启动/保存时会同步进环境变量，两个读取点都认。
     """
+    k = (os.environ.get("DASHSCOPE_API_KEY") or "").strip()
+    if k:
+        return k
+    try:
+        import key_store as _ak
+        k = _ak.get("dashscope")
+        if k:
+            return k
+    except Exception:
+        pass
     try:
         with open(DASHSCOPE_KEYS_FILE, encoding="utf-8") as f:
             for line in f:

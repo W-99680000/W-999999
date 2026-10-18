@@ -211,6 +211,8 @@
   .muted{color:var(--dim2)}
   .spacer{flex:1}
   .advframe{width:100%;height:calc(100vh - 130px);border:1px solid var(--line);border-radius:16px;background:#0b1220;display:block}
+  .keyinput{width:100%;height:40px;padding:0 12px;border-radius:11px;border:1px solid var(--line);background:rgba(255,255,255,.05);color:var(--txt);outline:none;margin-top:10px;font-size:13px}
+  .keyinput:focus{border-color:rgba(79,140,255,.55);background:rgba(79,140,255,.07)}
   .toast{
     position:fixed;left:50%;bottom:30px;transform:translate(-50%,20px);opacity:0;pointer-events:none;
     background:rgba(18,26,43,.96);border:1px solid var(--line);color:var(--txt);
@@ -269,6 +271,10 @@
         <button class="nav-item" data-page="cfgadv">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 0 0-.13-1.3l2-1.5-2-3.4-2.3.9a7 7 0 0 0-2.2-1.3L14 3h-4l-.37 2.4a7 7 0 0 0-2.2 1.3l-2.3-.9-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .45.05.88.13 1.3l-2 1.5 2 3.4 2.3-.9a7 7 0 0 0 2.2 1.3L10 21h4l.37-2.4a7 7 0 0 0 2.2-1.3l2.3.9 2-3.4-2-1.5c.08-.42.13-.85.13-1.3z"/></svg>
           <span>高级设置</span>
+        </button>
+        <button class="nav-item" data-page="keys">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8.5" cy="15.5" r="3.5"/><path d="m11 13 8-8M16 5l2 2M18 3l3 3"/></svg>
+          <span>接口密钥</span>
         </button>
       </div>
       <div class="nav-group" hidden>
@@ -454,6 +460,41 @@
       <iframe class="advframe" data-adv="settings" title="高级设置"></iframe>
     </section>
 
+    <!-- 接口密钥 -->
+    <section class="page" id="page-keys">
+      <div class="card">
+        <h3 style="margin:0 0 6px;font-size:16px">接口与密钥</h3>
+        <p class="sub" style="font-size:12px;line-height:1.7">
+          远端模型（qwen3-asr / qwen-mt）需要 <b>阿里云百炼 DashScope API Key</b>；
+          下载受限的 HuggingFace 模型才需要 Access Token。普通模型下载不需要。
+          密钥只保存在本机 <span class="mono" style="font-size:11px">%LOCALAPPDATA%\BabelPlan\key_store.json</span>，不进仓库。
+        </p>
+
+        <div class="field">
+          <label>DashScope API Key <b id="keyDashStatus">未配置</b></label>
+          <input class="keyinput" id="keyDashInput" type="password" placeholder="sk-..." autocomplete="off">
+          <div class="row mt10">
+            <button class="btn primary" id="keyDashSave">保存</button>
+            <button class="btn" id="keyDashClear">清除</button>
+            <a class="link" href="https://bailian.console.aliyun.com/" target="_blank">去阿里云百炼申请 →</a>
+          </div>
+          <p class="sub" style="font-size:11.5px;margin-top:8px">用于：远端识别 qwen3-asr-flash、远端翻译 qwen-mt（保存后选择远端模型即可用）。</p>
+        </div>
+
+        <div class="field">
+          <label>HuggingFace Access Token <b id="keyHfStatus">未配置</b></label>
+          <input class="keyinput" id="keyHfInput" type="password" placeholder="hf_..." autocomplete="off">
+          <div class="row mt10">
+            <button class="btn primary" id="keyHfSave">保存</button>
+            <button class="btn" id="keyHfClear">清除</button>
+            <a class="link" href="https://huggingface.co/settings/tokens" target="_blank">去 HuggingFace 生成 Token →</a>
+          </div>
+          <p class="sub" style="font-size:11.5px;margin-top:8px">仅下载 gated/受限模型时需要；faster-whisper 与 HY-MT 普通下载不需要 Token。</p>
+        </div>
+        <div class="hint">保存后立即生效，无需重启；远端模型要再点一次「启动」才会用新配置。</div>
+      </div>
+    </section>
+
     <!-- 设置 -->
     <section class="page" id="page-settings">
       <div class="card">
@@ -481,7 +522,7 @@
   var $ = function(s){ return document.querySelector(s); };
   var $$ = function(s){ return Array.prototype.slice.call(document.querySelectorAll(s)); };
   var App = { page:"home", engine:null, ovLive:null, ovWatch:null, live:[], cfg:{}, busy:false };
-  var PAGE_TITLE = { home:"工作台", live:"直播翻译", video:"视频翻译", overlay:"浮窗控制", models:"模型管理", repo:"模型仓库", records:"同传记录", ovadv:"浮窗高级", cfgadv:"高级设置", settings:"设置" };
+  var PAGE_TITLE = { home:"工作台", live:"直播翻译", video:"视频翻译", overlay:"浮窗控制", models:"模型管理", repo:"模型仓库", records:"同传记录", ovadv:"浮窗高级", cfgadv:"高级设置", keys:"接口密钥", settings:"设置" };
 
   function toast(msg){
     var el = $("#toast"); el.textContent = msg; el.classList.add("show");
@@ -725,6 +766,53 @@
     refreshEngine(); refreshOverlay(); refreshCfg();
     if (App.page === "home" || App.page === "live") refreshLive();
   }
+
+  /* ── 接口密钥 ── */
+  function keyStatus(el, set, hint, source){
+    if (!el) return;
+    var tag = set ? ("已配置" + (hint ? " · " + hint : "")) : "未配置";
+    if (set && source === "legacy") tag += "（旧位置 ~/.dsh）";
+    el.textContent = tag;
+    el.style.color = set ? "var(--green)" : "var(--dim2)";
+  }
+  function refreshKeys(){
+    return api("/api/keys").then(function(j){
+      keyStatus($("#keyDashStatus"), j.dashscope_set, j.dashscope_hint,
+                j.dashscope_source);
+      keyStatus($("#keyHfStatus"), j.hf_token_set, j.hf_token_hint);
+    }).catch(function(){});
+  }
+  function keySave(id, field, inputId){
+    var b = $(id); if (!b) return;
+    b.addEventListener("click", function(){
+      var v = ($(inputId).value || "").trim();
+      if (!v){ toast("先填入 Key"); return; }
+      b.disabled = true;
+      post("/api/keys", (function(){ var o={}; o[field]=v; return o; })())
+        .then(function(j){
+          b.disabled = false;
+          if (j.ok){ toast("已保存"); $(inputId).value = ""; refreshKeys(); }
+          else toast(j.error || "保存失败");
+        }).catch(function(e){ b.disabled = false; toast("请求失败：" + e); });
+    });
+  }
+  function keyClear(id, field){
+    var b = $(id); if (!b) return;
+    b.addEventListener("click", function(){
+      b.disabled = true;
+      post("/api/keys", (function(){ var o={}; o[field]=""; return o; })())
+        .then(function(j){
+          b.disabled = false;
+          if (j.ok){ toast("已清除"); refreshKeys(); }
+          else toast(j.error || "清除失败");
+        }).catch(function(e){ b.disabled = false; toast("请求失败：" + e); });
+    });
+  }
+  keySave("#keyDashSave", "dashscope", "#keyDashInput");
+  keyClear("#keyDashClear", "dashscope");
+  keySave("#keyHfSave", "hf_token", "#keyHfInput");
+  keyClear("#keyHfClear", "hf_token");
+  refreshKeys();
 
   /* ── 日志按钮 ── */
   $("#btnLog").addEventListener("click", function(){
