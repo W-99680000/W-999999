@@ -484,6 +484,11 @@ def main():
     from watch_overlay import QtOverlay
     from PyQt5.QtCore import QTimer, Qt
     ov = QtOverlay()
+    # Qt 默认"最后一个窗口关闭 → 退出事件循环"。浮窗反复 clear/flash
+    # （状态提示）时会销毁瞬时 QLabel，实测会把整个观看器带走
+    # （log 里先 lastWindowClosed 再 watch 退出）。观看器常驻，退出只认
+    # Esc / Ctrl+C，因此关掉这个默认行为。
+    ov.app.setQuitOnLastWindowClosed(False)
     ov.flash("字幕已加载 —— 与播放位置同步中", 3.0)
 
     starts = [c[0] for c in cues]
@@ -564,6 +569,9 @@ def main():
 
     def _key(e):
         k = e.key()
+        if k == Qt.Key_Escape:
+            ov.app.quit()          # 关掉 quitOnLastWindowClosed 后要显式退
+            return
         if isinstance(pos_src, MpvIPC):
             # mpv 模式：←/→ 直接让 mpv 自己 seek，位置它自己会上报
             if k == Qt.Key_Left:
@@ -700,11 +708,25 @@ def _auto_main(args):
     if not available():
         raise SystemExit("--auto 需要 winsdk：pip install winsdk")
     from watch_overlay import QtOverlay
-    from PyQt5.QtCore import QTimer
+    from PyQt5.QtCore import QTimer, Qt
 
     tracker = SmtcTracker(poll=0.15, log=_log)   # 位置感知更快一档（原 0.25）
     tracker.start()
     ov = QtOverlay()
+    # 常驻模式：别因为某个瞬时子窗口关闭就整体退出。
+    # Qt 默认"最后一个窗口关闭→quit"，而浮窗在反复 clear/flash（状态提示）
+    # 时会 setParent(None)/销毁临时 QLabel；实测 watch 启动 1 秒就自己退出
+    # （日志先 lastWindowClosed 再 watch 退出）。退出只认 Esc / Ctrl+C。
+    ov.app.setQuitOnLastWindowClosed(False)
+    _orig_key = ov.w.keyPressEvent
+
+    def _key(e):
+        if e.key() == Qt.Key_Escape:
+            ov.app.quit()
+            return
+        _orig_key(e)
+
+    ov.w.keyPressEvent = _key
     _log("=" * 44)
     _log("watch --auto 启动")
     ov.flash("常驻字幕已启动 —— 有缓存直接出，没缓存自动预翻译", 5.0)
@@ -730,6 +752,54 @@ def _auto_main(args):
     _jump = _JumpDetector()
     # 自动预翻译的尝试记录：ntitle -> {"n": 次数, "ts": 上次时间}
     tried = {}
+    # 已经为哪些标题续跑过预翻译（避免每拍重复提交）
+    resumed = set()
+
+    def _cache_unfinished(srt_path):
+        """缓存是否只是半截（上次看到一半关了/崩了/还在翻）。
+
+        为什么需要：命中缓存就直接 _load 的话，遇到只翻了前 4 条的半截
+        srt 会永远停在那里 —— 用户看到的就是"缓存有了但字幕不跟"。
+        判据：meta.complete 不为 true，或最后一条 cue 离视频时长还差 5s 以上。
+        """
+        try:
+            meta = json.load(open(srt_path + ".meta.json", encoding="utf-8"))
+        except Exception:
+            meta = {}
+        if not meta.get("complete"):
+            return True
+        dur = tracker.duration()
+        try:
+            cues = parse_srt(srt_path)
+        except Exception:
+            return True
+        if not cues:
+            return True
+        if dur and cues[-1][1] < float(dur) - 5.0:
+            return True
+        return False
+
+    def _resume_if_needed(srt_path, title):
+        """半截缓存：先把已有部分显示上，同时后台续跑预翻译。
+
+        续跑是 pretranslate 自带的断点续跑（读回已有 srt，从最后一条
+        的 end 继续），tick 里的热重载会边看边长 —— 这就是缓存模块的
+        "实时性"，不需要借回环模块。
+        """
+        if autocache is None or not cur["title"]:
+            return
+        nt = cur["title"]
+        if nt in resumed or not _cache_unfinished(srt_path):
+            return
+        resumed.add(nt)
+        _log(f"缓存未完成（半截 srt）→ 后台续跑预翻译: "
+             f"{os.path.basename(srt_path)}")
+        try:
+            autocache.ensure_async(title, args.dst,
+                                   dur_provider=tracker.duration)
+            _status("字幕只译到前面 → 后台续译中，会边看边长…")
+        except Exception as e:
+            _log(f"续跑预翻译启动失败: {type(e).__name__}: {e}")
 
     # ── 浮窗状态：没字幕可显示时，直接告诉用户卡在哪一环 ──
     def _drop_status():
@@ -894,6 +964,7 @@ def _auto_main(args):
                 hit = _find_cached_srt(title, args.dst)
                 if hit:
                     _load(hit)
+                    _resume_if_needed(hit, title)
                 else:
                     _log("无缓存字幕；pre_cache 候选: "
                          f"{_cached_names(args.dst)}")
@@ -989,6 +1060,20 @@ def _auto_main(args):
                 _show(i)
             else:
                 _show(None)
+            # 当前播放位置还没被译到 → 告诉用户"已译到哪 / 当前在哪"，
+            # 别让浮窗在等待期间一片空白（缓存模块允许边看边等，
+            # 但不能让人以为死了）。节流 3s，避免提示闪个不停。
+            _covered = cur["cues"][-1][1] if cur["cues"] else 0.0
+            if pos > _covered + 0.5 \
+                    and time.time() - cur.get("status_ts", 0.0) >= 3.0:
+                st = (autocache.state_of(cur["title"])
+                      if autocache is not None else None)
+                if st and st["state"] == "running":
+                    _status(f"续译中：已译到 {_covered/60:.1f} 分钟"
+                            f" / 当前 {pos/60:.1f} 分钟")
+                elif autocache is None:
+                    _status(f"缓存只译到 {_covered/60:.1f} 分钟"
+                            f"（当前 {pos/60:.1f}）")
         except Exception as e:
             now = time.time()
             if now - cur["err_ts"] > 2:      # 限频，别刷爆日志

@@ -394,3 +394,42 @@ ative_preload.py，在 Qt 之前 ctypes 预载 c10.dll。
 | watch.bat --no-pretranslate 10s 实测 | 标题零漂移，只切换 1 次 |
 | pretranslate.py <B站已缓存 URL> | 缓存命中 0.5s 返回 |
 | python tools/doctor.py | PASS，系统 Python 全依赖齐（av 19.0.1 / winsdk / yt-dlp） |
+
+---
+
+## 17. 模块边界纠正 + 缓存模块自己的"实时性"（2026-10-18）
+
+用户指出：**回环（任意系统音频）与缓存（点播视频实时翻译）是两个独立模块**，
+我上一轮把回环引擎塞进 watch 的实时兜底是错的。已 git revert e97c27d
+（提交 df1a391）撤销，两条路线恢复互不调用：
+
+- 回环：start.bat → live_subtitle_v2.py（WASAPI 回环采集 → 实时 ASR/翻译 → 浮窗/SRT）
+- 缓存：watch.bat → watch_player.py（SMTC 位置 + pre_cache 里的预翻译 srt）
+  → pretranslate.py（整片预翻译，子进程）
+
+### 17.1 缓存模块自身的实时性修复（不借回环）
+
+1. **半截缓存自动续跑**（watch_player.py）：命中缓存但 meta.complete
+   不为真、或最后一条 cue 离视频时长还差 5s 以上时，先显示已有部分，
+   同时后台 ensure_async 续跑 pretranslate（断点续跑）；tick 的热重载
+   每长一截就追加，浮窗提示"续译中：已译到 X 分钟 / 当前 Y 分钟"。
+   实测 15:48：4 条 → 10 条，日志出现 字幕增量：8 条（覆盖到 0.8 分钟），
+   覆盖到当前播放位置后自动切回按位置精确同步。
+2. **常驻浮窗不再自己退出**（watch_player.py）：Qt 默认
+   quitOnLastWindowClosed，浮窗反复 clear/flash 时销毁临时 QLabel
+   会触发 lastWindowClosed → watch 启动 1 秒就退出（实测日志）。
+   现在 setQuitOnLastWindowClosed(False)，Esc 显式 pp.quit()。
+   单文件模式（watch_player.py 字幕.srt）同样处理。
+3. **watch_overlay 不再预载 torch DLL**：watch 进程本身不 import torch
+   （预翻译在子进程），这次预载只会多一次 DLL 加载；移除后模块边界更干净。
+4. 此前已有、保留的修复：启动器依赖探针（winsdk/yt_dlp/av）、SMTC 稳定
+   会话键、管理端管道 read1、autopipe 失败行不再写 running。
+
+### 17.2 验证
+
+| 项 | 结果 |
+|---|---|
+| ench/_verify_hysteresis.py | 16 通过 / 0 失败 |
+| watch_player.py --auto（半截缓存） | 存活 >90s；4→10 条增量；状态行正常 |
+| watch_player.py 字幕.srt --clock（单文件） | 存活，位置源 AutoClock 正常 |
+| watch.bat --no-pretranslate | 标题零漂移（10s） |
