@@ -441,7 +441,19 @@ class QtOverlay:
         if not ch:
             return
         act = ch.pop("_action", None)
-        if act == "recenter":
+        if act == "sync_position":
+            try:
+                sec = max(0.0, float(ch.pop("pos", 0) or 0))
+            except Exception:
+                sec = 0.0
+            cb = getattr(self, "on_sync_position", None)
+            if cb is not None:
+                try:
+                    cb(sec)
+                except Exception:
+                    pass
+            print(f"  手动对齐到 {sec:.1f}s", flush=True)
+        elif act == "recenter":
             self.recenter()
         elif act == "reset":
             self.reset()

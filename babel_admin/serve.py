@@ -108,7 +108,7 @@ _OVERLAY_NUM = {
     "font_size", "ref_height", "original_ratio", "opacity", "outline_width",
     "bg_alpha", "border_width", "max_lines", "hold_seconds",
     "max_lines_per_entry", "width", "max_entry_chars", "line_height",
-    "gap_px", "x", "y",
+    "gap_px", "x", "y", "pos",
 }
 _OVERLAY_COLOR = {
     "text_color", "original_text_color", "outline_color", "bg_color",
@@ -120,7 +120,7 @@ _OVERLAY_ENUM = {"layout": {"inline", "stacked", "zh_only"},
                  "text_align": {"center", "left", "right"}}
 _OVERLAY_FONTS = {"Microsoft YaHei UI", "SimSun", "KaiTi",
                   "Segoe UI", "Georgia", "Consolas"}
-_OVERLAY_ACTIONS = {"recenter", "toggle", "reset"}
+_OVERLAY_ACTIONS = {"recenter", "toggle", "reset", "sync_position"}
 
 
 def _read_json_file(p: str, default=None):

@@ -801,6 +801,14 @@ def _auto_main(args):
     clock = {"on": False, "base": 0.0, "t0": time.monotonic(),
              "playing": False, "offset": 0.0, "last_pos": 0.0,
              "warned": False}
+    def _sync_to(sec):
+        """面板“视频当前时间”手动对齐：把本地时钟设到该位置。"""
+        clock.update(on=True, base=max(0.0, float(sec)),
+                     t0=time.monotonic(), offset=0.0,
+                     playing=bool(tracker.playing()), warned=True)
+        cur["status"] = None
+        _log(f"手动对齐：本地时钟 base={clock['base']:.1f}s")
+    ov.on_sync_position = _sync_to
     ov.flash("常驻字幕已启动 —— 有缓存直接出，没缓存自动预翻译", 5.0)
     print("常驻模式：监听系统媒体会话，自动匹配 pre_cache 里的字幕")
     print("        （Ctrl+C 或关浮窗退出）")
