@@ -843,3 +843,39 @@ watch 报到 ready
   后 GET/面板显示才是 watch 的真实设置；watch 本身重启后即带兼容回退。
 
 回归：check_admin_html 28/0、wiring 20/0、watch control 9/0。
+
+
+---
+
+## 27. 新消费级后台界面（console.html，2026-10-18）
+
+用户要求：后台要像 DeepSeek/元宝这类产品的操作界面，而不是原来的密集控制台。
+
+### 27.1 做法
+
+- 新增 `babel_admin/console.html`（单文件、零外部依赖、离线可用），
+  路由：`/` 默认新界面，`/admin` 保留经典后台（高级参数/模型/缓存）。
+- 设计：深色渐变底 + 玻璃侧边栏，五个一级入口：
+  工作台 / 直播翻译 / 视频翻译 / 浮窗 / 设置；
+  - 工作台：Hero 主张 + 直播/视频两大卡片（状态、实时预览、一键启动/停止）+
+    引擎/浮窗/运行时长三块状态 + 最近字幕；
+  - 直播翻译：实时字幕流 + 启动/停止 + 日志；
+  - 视频翻译：watch 状态 + 当前字幕预览 + 启动/停止 + watch 日志；
+  - 浮窗：字号/不透明度/条数滑杆、排布/对齐、恢复默认/回中/隐藏（同时写
+    直播+watch 两套命令）；
+  - 设置：预热/看门狗开关、经典后台入口、关于。
+- 复用既有 API：`/api/engine`、`/api/live`、`/api/overlay?target=`、
+  `/api/admin-config`；为首页两卡片与浮窗页补了 `?target=watch|loopback`
+  强制指定（此前只有"最近活跃"自动选择）。
+
+### 27.2 验证
+
+- `tools/check_console_html.py`（新）：**15 项通过 / 0 失败**（五个导航页、
+  四个 API、/admin 入口、无外链、内联 JS 语法 node --check）。
+- 用 Edge（Playwright channel=msedge）实际渲染 1440×950：
+  无 pageerror/console error；首页/视频/浮窗三张截图见 `work/console_*.png`；
+  `/` 返回新界面、`/admin` 返回经典后台（HTTP 200）。
+- 修复迭代：`[hidden]` 被 `.btn{display:inline-flex}` 覆盖导致"停止"按钮
+  一直显示（截图发现）→ 加 `[hidden]{display:none!important}`；未运行时
+  首页预览不再展示旧 live.srt 文案。
+- 旧界面体检/回归不动：check_admin_html 28/0、wiring 20/0。

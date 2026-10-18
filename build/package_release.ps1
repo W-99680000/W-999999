@@ -67,7 +67,7 @@ Write-Host ("根文件 {0} 个" -f $nRoot)
 
 # ── 子目录（精确清单，别整目录复制）──────────────────────────
 $dirs = @{
-    "babel_admin" = @("index.html", "serve.py", "dlls.py")
+    "babel_admin" = @("index.html", "console.html", "serve.py", "dlls.py")
     "desktop"     = @("BabelPlan.vbs", "babel.ico", "make_icon.py", "create_shortcut.ps1", "install.ps1")
     "build"       = @("babel.spec", "build_exe.ps1", "package_release.ps1")
     "docs"        = @("DESKTOP.md", "QUALITY_ROADMAP.md", "RESEARCH_20261018_streaming_translation.md")

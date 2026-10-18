@@ -87,6 +87,8 @@ except Exception:
     HW = None
 
 INDEX = os.path.join(HERE, "index.html")
+# 消费级新界面；旧后台保留在 /admin（高级参数/模型/缓存）
+CONSOLE = os.path.join(HERE, "console.html")
 
 # 浮窗与后台自身的文件（与 admin_qt.py 用的是同一份，单一真相）
 OVERLAY_SETTINGS = os.path.join(ROOT, "overlay_qt.json")
@@ -631,6 +633,14 @@ def _read_index() -> bytes:
                 "<p>界面文件缺失，请检查目录。</p>").encode("utf-8")
 
 
+def _read_console() -> bytes:
+    try:
+        with open(CONSOLE, "rb") as f:
+            return f.read()
+    except OSError:
+        return _read_index()          # 新界面缺失时退回经典后台
+
+
 def _snapshot(data: dict | None = None) -> dict:
     """界面要的全部数据，**一次给完**（省往返，也避免界面拿到半更新状态）。
 
@@ -722,7 +732,9 @@ class Handler(BaseHTTPRequestHandler):
     # ── GET ────────────────────────────────────────────────
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
-        if path in ("/", "/index.html", "/admin", "/admin/"):
+        if path in ("/", "/index.html", "/console", "/console/"):
+            return self._send(200, _read_console(), "text/html; charset=utf-8")
+        if path in ("/admin", "/admin/", "/classic", "/classic/"):
             return self._send(200, _read_index(), "text/html; charset=utf-8")
         if path in ("/api/models", "/model_registry_web.json"):
             return self._json(_snapshot())
@@ -761,6 +773,15 @@ class Handler(BaseHTTPRequestHandler):
             watch_on = _online(watch_s, watch_st)
             live_ts = live_s.get("_app_ts") or 0
             watch_ts = watch_s.get("_app_ts") or watch_st.get("ts") or 0
+            # 新界面需要分别看两套浮窗（首页两张卡片 / 浮窗页目标切换）
+            _q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            _want = (_q.get("target") or [""])[0]
+            if _want == "watch":
+                return self._json({"settings": watch_s, "state": watch_st,
+                                   "online": watch_on, "target": "watch"})
+            if _want == "loopback":
+                return self._json({"settings": live_s, "state": live_st,
+                                   "online": live_on, "target": "loopback"})
             use_watch = bool(watch_on and (not live_on or watch_ts >= live_ts))
             if use_watch:
                 return self._json({"settings": watch_s, "state": watch_st,

@@ -202,7 +202,7 @@ def main(argv=None) -> int:
 
         print("一、有服务：页面必须从 API 拿数据")
         dom_api = os.path.join(tmpdir, "dom_api.html")
-        if not dump_dom(browser, base + "/", dom_api):
+        if not dump_dom(browser, base + "/admin", dom_api):
             chk("导出渲染后 DOM", False, "浏览器没给出 DOM")
         else:
             dom = open(dom_api, encoding="utf-8").read()
@@ -372,7 +372,7 @@ def main(argv=None) -> int:
                 "断网了还显示 API 数据源 = 页面上会撒谎")
 
         if a.shot:
-            got = screenshot(browser, base + "/", a.shot)
+            got = screenshot(browser, base + "/admin", a.shot)
             chk(f"整页截图已生成（{a.shot}）", got)
     finally:
         try:

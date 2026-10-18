@@ -48,6 +48,8 @@ powershell -ExecutionPolicy Bypass -File desktop\create_shortcut.ps1 -Remove
 
 窗口标题：`巴别塔计划 · 直播翻译与视频翻译`。
 
+打开后默认是新版消费级「工作台」：可直接启动直播翻译 / 视频翻译、调浮窗、看最近字幕；模型/缓存/设备等高级参数在左下角「经典后台」（`/admin`）。
+
 ## 3. 托盘菜单
 
 右键托盘图标（绿底声波）：
