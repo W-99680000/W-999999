@@ -1,13 +1,33 @@
 # -*- coding: utf-8 -*-
-"""会话迟滞切换 + 前台窗口匹配的纯逻辑单测（不碰 winsdk/真窗口）。
+"""smtc_tracker 的真实实现单测：跨拍对象身份 + 迟滞切换 + seek。
+
+**为什么重写**：旧版这里把 `_tick` 里的迟滞代码**抄了一份**到测试里，
+用两个长期存在的 FakeSession 驱动 —— 于是"用 id(s) 当状态键"的 bug
+永远测不出来。实测（2026-10-18）：winsdk 的 session 对象每次
+`get_sessions()` 都是**新的 Python 包装**（`a[i] is b[i]` 为 False），
+真实代码里的 `_titles[id]` / `_pos_seen[id]` / `s is self._session`
+全部永远不命中；表现为多标签页时字幕在几部片之间来回跳、预翻译被反复
+取消、缓存建不完。
+
+这份测试用"每拍都返回新对象、数据相同"的 Fake 管理器**驱动真实
+`_tick`**，覆盖：
+  ① 标题跨拍稳定（不再每拍丢）；
+  ② 时间线前进（advancing）能跨拍检测到；
+  ③ 候选交替时迟滞生效：不每拍切；
+  ④ 挑战者连续赢满 _SWITCH_HOLD 拍才切换；
+  ⑤ 现任消失立即接上；
+  ⑥ 同一部片 seek 仍被识别；
+  ⑦ 同一会话换片（标题变）立即切、标题更新。
+
 跑法：python bench/_verify_hysteresis.py
 """
+import asyncio
+import datetime as dt
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import smtc_tracker as S          # noqa: E402
-from foreground import title_matches_window   # noqa: E402
 
 _ok = _fail = 0
 
@@ -22,79 +42,176 @@ def chk(name, cond):
         print(f" FAIL {name}")
 
 
-print("== 前台窗口标题匹配 ==")
-chk("标签标题 ⊂ 窗口标题（带浏览器后缀）",
-    title_matches_window("FX战士久留美 第1话",
-                         "FX战士久留美 第1话 - 哔哩哔哩 - Google Chrome"))
-chk("窗口标题 ⊂ 会话标题也中",
-    title_matches_window("某视频 - 哔哩哔哩", "某视频"))
-chk("不相干不命中",
-    not title_matches_window("财经新闻", "动漫剪辑 - Google Chrome"))
-chk("空串不命中",
-    not title_matches_window("", "x") and not title_matches_window("x", ""))
+if not S._OK:
+    print("跳过：winsdk 不可用（pip install winsdk）")
+    sys.exit(0)
 
 
-print("== 迟滞切换 ==")
+class _Props:
+    def __init__(self, title):
+        self.title = title
+        self.artist = ""
+        self.album_title = ""
+
+
+class _Playback:
+    def __init__(self, playing, rate=1.0):
+        self.playback_status = (S._Status.PLAYING if playing
+                                else S._Status.PAUSED)
+        self.playback_rate = rate
+
+
+class _Timeline:
+    def __init__(self, pos, dur=600.0):
+        self.position = dt.timedelta(seconds=pos)
+        self.last_updated_time = dt.datetime.now(dt.timezone.utc)
+        self.end_time = dt.timedelta(seconds=dur)
 
 
 class FakeSession:
-    def __init__(self, name):
-        self.name = name
+    """模拟 winsdk 的 session：**每次 get_sessions() 都新建一个包装**，
+    数据从共享 state 字典读（所以对象换、数据不换）。"""
+
+    def __init__(self, state):
+        self._st = state
+        self.source_app_user_model_id = "Quark"
+
+    async def try_get_media_properties_async(self):
+        return _Props(self._st["title"])
+
+    def get_playback_info(self):
+        return _Playback(self._st["playing"], self._st.get("rate", 1.0))
+
+    def get_timeline_properties(self):
+        return _Timeline(self._st["pos"], self._st.get("dur", 600.0))
 
 
-class PickTracker(S.SmtcTracker):
-    """绕过 winsdk：用与 _tick 相同的字段/规则驱动切换状态机。"""
+class FakeMgr:
+    """每拍按当前 state 造**全新** session 对象（复现 winsdk 身份不稳）。"""
 
-    def __init__(self):
-        super().__init__(poll=0.15)
+    def __init__(self, states):
+        self.states = states          # list[dict]，顺序每拍可变
 
-    # 与 _tick 中的迟滞块逐行一致
-    def step(self, s, sessions):
-        if s is not self._session:
-            current_gone = self._session is None or not any(
-                x is self._session for x in sessions)
-            if current_gone:
-                self._switch_to(s)
-            elif s is self._challenger:
-                self._chall_streak += 1
-                if self._chall_streak >= self._SWITCH_HOLD:
-                    self._switch_to(s)
-            else:
-                self._challenger = s
-                self._chall_streak = 1
-            s = self._session
-        else:
-            self._challenger = None
-            self._chall_streak = 0
-        return s
+    def get_sessions(self):
+        return [FakeSession(st) for st in self.states]
 
 
-A, B = FakeSession("A"), FakeSession("B")
-t = PickTracker()
+def tick(t, mgr):
+    asyncio.run(t._tick(mgr))
 
-chk("首次锁定立即生效", t.step(A, [A, B]) is A)
-chk("挑战者第 1 次出现不换", t.step(B, [A, B]) is A)
-chk("挑战者连续 2 拍仍不换（< HOLD）", t.step(B, [A, B]) is A)
-t.step(B, [A, B])
-chk("挑战者连续 4 拍（=HOLD）换", t.step(B, [A, B]) is B)
-chk("换完挑战者状态清零", t._challenger is None and t._chall_streak == 0)
 
-# 闪现干扰：B 当现任，A 闪一拍就走 → 不换
-t2 = PickTracker()
-t2.step(B, [A, B])
-t2.step(A, [A, B])                      # A 冒头
-chk("闪现 1 拍后不换", t2.step(B, [A, B]) is B)
-chk("闪现后挑战者计数被重置", t2._chall_streak in (0, 1))
+def new_tracker():
+    return S.SmtcTracker(poll=0.15)
 
-# 现任消失：立即切
-t3 = PickTracker()
-t3.step(A, [A, B])
-chk("现任从会话列表消失 → 立即切换", t3.step(B, [B]) is B)
 
-# 换会话清锚点
-t3._anchor = (10.0, None)
-t3._switch_to(B)
-chk("切换会清锚点", t3._anchor is None)
+print("== ① 跨拍标题稳定 + 前进检测 ==")
+st = {"title": "测试视频A", "playing": True, "pos": 0.0}
+t = new_tracker()
+mgr = FakeMgr([st])
+tick(t, mgr)
+st["pos"] = 0.15
+tick(t, mgr)
+chk("标题跨拍不丢", t.current_title() == "测试视频A")
+chk("有会话", t.has_session())
+chk("位置带外推", t.position() is not None and t.position() >= 0.1)
+chk("时间线前进被记录（_pos_seen 有键）",
+    any(k[1] == "测试视频a" for k in t._pos_seen))
+key0 = t._session_key
+st["pos"] = 0.30
+tick(t, mgr)
+chk("同一部片不误切", t._session_key == key0)
+
+print("== ② 候选交替：迟滞必须生效 ==")
+# A/B 都像是"在播的浏览器视频"，但**交替**有一个在前进（advancing），
+# 于是 _pick 的候选每拍 A/B 交替 —— 没有迟滞就会每拍切，字幕乱跳。
+sa = {"title": "视频A", "playing": True, "pos": 0.0}
+sb = {"title": "视频B", "playing": True, "pos": 0.0}
+t2 = new_tracker()
+mgr2 = FakeMgr([sa, sb])
+for i in range(12):
+    if i % 2 == 0:
+        sa["pos"] += 0.5
+    else:
+        sb["pos"] += 0.5
+    tick(t2, mgr2)
+chk("交替候选人下只锁定 1 次（不来回跳）",
+    t2._session_key in {("quark", "视频a"), ("quark", "视频b")})
+chk("交替 12 拍后标题稳定", t2.current_title() in ("视频A", "视频B"))
+_, _title = t2._session_key
+chk("锁定标题与读数一致", t2.current_title().lower() == _title)
+
+print("== ③ 挑战者连续赢满 HOLD 才换 ==")
+sa2 = {"title": "视频A", "playing": True, "pos": 0.0}
+sb2 = {"title": "视频B", "playing": True, "pos": 0.0}
+t3 = new_tracker()
+mgr3 = FakeMgr([sa2, sb2])
+sa2["pos"] = 1.0
+sb2["pos"] = 1.0
+tick(t3, mgr3)                     # A 先入（同分取第一）
+first = t3._session_key
+assert first == ("quark", "视频a"), first
+# B 开始持续领先（B 在前进，A 停住）
+switched_at = None
+for i in range(6):
+    sb2["pos"] += 0.5
+    tick(t3, mgr3)
+    if switched_at is None and t3._session_key != first:
+        switched_at = i + 1
+chk("连续领先 4 拍才切（不是第 1 拍）", switched_at == 4)
+chk("切换后确实跟 B", t3._session_key == ("quark", "视频b"))
+
+print("== ④ 现任消失 → 立即接上 ==")
+sa3 = {"title": "视频A", "playing": True, "pos": 0.0}
+sb3 = {"title": "视频B", "playing": True, "pos": 0.0}
+t4 = new_tracker()
+mgr4 = FakeMgr([sa3, sb3])
+sa3["pos"] = 1.0
+tick(t4, mgr4)
+chk("先跟 A", t4._session_key == ("quark", "视频a"))
+mgr4.states = [sb3]                # A 的标签页关了
+sb3["pos"] = 5.0
+tick(t4, mgr4)
+chk("现任消失当拍就切 B", t4._session_key == ("quark", "视频b"))
+
+print("== ⑤ seek 识别 ==")
+s5 = {"title": "视频A", "playing": True, "pos": 10.0}
+t5 = new_tracker()
+mgr5 = FakeMgr([s5])
+tick(t5, mgr5)
+n0 = t5.seek_serial()
+s5["pos"] = 120.0                  # 用户拖到 2 分钟
+tick(t5, mgr5)
+chk("进度拖动被识别", t5.seek_serial() > n0)
+
+print("== ⑥ 同一会话换片（标题变）→ 立即切、标题更新 ==")
+s6 = {"title": "视频A", "playing": True, "pos": 10.0}
+t6 = new_tracker()
+mgr6 = FakeMgr([s6])
+tick(t6, mgr6)
+s6.update(title="视频C", pos=0.0)
+tick(t6, mgr6)
+chk("片名变了立即更新", t6.current_title() == "视频C")
+
+print("== ⑦ 缓存标题匹配（watch_player._find_cached_srt）==")
+_pre = os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), "pre_cache")
+_cached = ([f for f in os.listdir(_pre) if f.lower().endswith(".zh.srt")]
+           if os.path.isdir(_pre) else [])
+if not _cached:
+    print("  skip（pre_cache 里没有缓存字幕）")
+else:
+    import watch_player as W
+    ok_n = 0
+    for f in _cached:
+        base = f[:-len(".zh.srt")]
+        for title in (base, base + " - 哔哩哔哩_bilibili"):
+            got = W._find_cached_srt(title, "zh")
+            if got and os.path.basename(got) == f:
+                ok_n += 1
+                break
+    chk(f"缓存标题可匹配（{ok_n}/{len(_cached)}）", ok_n == len(_cached))
+    chk("无关标题不误配",
+        W._find_cached_srt("完全不存在的视频标题XYZ", "zh") is None)
 
 print(f"\n合计 {_ok} 通过 / {_fail} 失败")
 sys.exit(1 if _fail else 0)

@@ -14,17 +14,31 @@ rem ============================================================
 
 set "PY="
 set "CAND1=C:\Users\w\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe"
+set "CAND2=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+
+rem Probe needs faster_whisper (ASR), av (PyAV decode), yt_dlp (URL) and
+rem numpy. Checking only "import faster_whisper" picked a python without
+rem av/yt_dlp -> every auto pre-translate failed with a bare "source: url"
+rem line (measured 2026-10-18).
+set "PROBE=import importlib.util as u,sys;sys.exit(0 if all(u.find_spec(m) for m in ('faster_whisper','av','yt_dlp','numpy')) else 1)"
 
 if not exist "%CAND1%" goto findpy
-"%CAND1%" -c "import faster_whisper" >nul 2>nul
+"%CAND1%" -c "%PROBE%" >nul 2>nul
 if errorlevel 1 goto findpy
 set "PY=%CAND1%"
 goto pyset
 
 :findpy
+if not exist "%CAND2%" goto findpy2
+"%CAND2%" -c "%PROBE%" >nul 2>nul
+if errorlevel 1 goto findpy2
+set "PY=%CAND2%"
+goto pyset
+
+:findpy2
 for /f "delims=" %%P in ('where python 2^>nul') do (
   if not defined PY (
-    "%%P" -c "import faster_whisper" >nul 2>nul
+    "%%P" -c "%PROBE%" >nul 2>nul
     if not errorlevel 1 set "PY=%%P"
   )
 )

@@ -352,3 +352,45 @@ ative_preload.py，在 Qt 之前 ctypes 预载 c10.dll。
 | python tools/test_engine_control.py | 20 通过 / 0 失败（起 6s / 停 0.2s） |
 | python live_subtitle_v2.py --no-overlay 播放 samples/loopback_test.wav | SRT 产出 "Hello, this is a test / 你好，这是一次测试。" |
 | python tools/doctor.py | 退出码 0，GPU 可用，6 个模型缓存 5.3GB |
+
+---
+
+## 15. 追加修复：点播/缓存模块实时性（2026-10-18）
+
+用户反馈："视频缓存模块没有以前好用了，特别是没有解读缓存之后的实时性反应"。
+
+### 15.1 根因（两条，叠在一起）
+
+1. **启动器挑错解释器**：watch.bat/cache.bat 只探测
+   aster_whisper + PyQt5（cache.bat 甚至只查 faster_whisper），会选中
+   缺 winsdk / yt_dlp / v 的 Python。后果：
+   - watch：SMTC 不可用 → 没有播放位置 → 缓存匹配上了字幕也不跟；
+   - cache/auto：网址反查/下载失败 → 预翻译启动即挂，日志只剩
+     预翻译失败：来源: <url>（watch.log 里刷了几十分钟）。
+2. **SMTC 会话状态拿对象身份当键**：winsdk 的
+   GlobalSystemMediaTransportControlsSession 每次 get_sessions() 都是
+   **新的 Python 包装**（本机实测 [i] is b[i] 为 False）。旧
+   smtc_tracker 用 id(s) 存标题/位置、用 s is self._session 做迟滞：
+   - _titles[id]、_pos_seen[id] 永不命中 → 标题不稳定、"时间线在前进"恒 False；
+   - 迟滞永远走"现任消失"分支 → 没有迟滞，多标签页时每拍都可能换会话；
+   后果：字幕在几部片之间来回跳、缓存反复重载/预翻译被取消。
+
+### 15.2 修复
+
+| 文件 | 改动 |
+|---|---|
+| smtc_tracker.py | 状态键改为稳定键 (AUMID, 归一化标题)；迟滞切换真正生效；补上 playback_rate 外推；会话切换写日志 |
+| watch_player.py | tracker 传 log=_log；--auto 下标题漂移可追溯 |
+| utopipe.py | "预翻译失败：…" 结论行不再当成进度写 running（避免"预翻译中 52:35｜预翻译失败…"假进度） |
+| watch.bat | 探针补 winsdk/yt_dlp/av/numpy；显式优先 %LOCALAPPDATA%\...\Python312；只给选项（如 --no-pretranslate）也进常驻模式 |
+| cache.bat | 探针补 v/yt_dlp/numpy（原来只查 faster_whisper）；同样优先 Python312 |
+| ench/_verify_hysteresis.py | 重写为**驱动真实 _tick** 的测试（旧版抄逻辑+FakeSession 身份稳定，正好测不出这个 bug），新增缓存标题匹配 |
+
+### 15.3 验证
+
+| 项 | 结果 |
+|---|---|
+| python bench/_verify_hysteresis.py | 16 通过 / 0 失败（含缓存标题匹配 12/12） |
+| watch.bat --no-pretranslate 10s 实测 | 标题零漂移，只切换 1 次 |
+| pretranslate.py <B站已缓存 URL> | 缓存命中 0.5s 返回 |
+| python tools/doctor.py | PASS，系统 Python 全依赖齐（av 19.0.1 / winsdk / yt-dlp） |

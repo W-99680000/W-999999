@@ -348,7 +348,12 @@ class AutoCache:
 
             def prog(line):
                 last["line"] = (line or "").strip()
-                self._set_running(nt, last["line"][:44], "translate")
+                # "预翻译失败：…" 是 run_pretranslate 的**结论行**，不是进度。
+                # 不能拿它调 _set_running —— 否则任务已经失败、状态又被改回
+                # running，界面会一直显示 "预翻译中 mm:ss｜预翻译失败…"
+                # （watch.log 实测出现过 52:35 的假进度）。
+                if "预翻译失败" not in last["line"]:
+                    self._set_running(nt, last["line"][:44], "translate")
                 # "已出字幕到 X 分钟" = 某一块已经译完并落盘了。
                 # 立刻发一个 partial 事件：观看端可以先把它显示上，
                 # 后面的块由观看端轮询 srt 增长自行续上（边看边等）。

@@ -38,7 +38,7 @@ except Exception:
     _OK = False
 
 BROWSER_HINTS = ("chrome", "msedge", "firefox", "brave", "opera", "vivaldi",
-                 "360", "qq", "sogou", "browser")
+                 "360", "qq", "sogou", "browser", "quark", "chromium", "edge")
 
 
 def available():
@@ -48,11 +48,13 @@ def available():
 class SmtcTracker:
     """后台轮询系统媒体会话，持续给出网页视频的播放位置。"""
 
-    def __init__(self, title_hint=None, poll=0.25):
+    def __init__(self, title_hint=None, poll=0.25, log=None):
         """title_hint：视频标题（缓存 srt 的文件名），用来在多个媒体会话
-        里认出正确的那一个；没有也能工作（选正在播放的浏览器会话）。"""
+        里认出正确的那一个；没有也能工作（选正在播放的浏览器会话）。
+        log：可选回调，会话切换/失去会话时打一行（watch.log 排障用）。"""
         self.title_hint = (title_hint or "").lower()
         self.poll = poll
+        self._log = log
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._pos = None            # (上报位置秒, 上报时刻 datetime)
@@ -62,15 +64,18 @@ class SmtcTracker:
         self._source = ""
         self._dur = None            # 总时长（秒）—— 用来消歧多个候选网址
         self._alive = False         # 有没有锁定到会话（与标题是否读到无关）
-        self._session = None        # 当前锁定的会话
+        self._session = None        # 最近一拍锁定的会话对象（只用于本拍读数）
+        self._session_key = None    # **稳定键** (aumid, title)，见 _key_of
         self._thread = None
         self._anchor = None         # 上一次的时间线锚点 (pos, ts)，seek 检测用
         self._seek_n = 0            # 检测到的进度拖动次数（每次跳变 +1）
         self._seek_at = 0.0         # 最近一次 seek 的 monotonic 时刻
-        self._pos_seen = {}         # id(会话) -> 上次看到的 position，判"在动"
+        # 稳定键 -> (上次位置, monotonic 时刻)，判"时间线在前进"
+        self._pos_seen = {}
         # 迟滞切换：挑战者要连续 _SWITCH_HOLD 拍击败现任才换会话 ——
-        # 标签页闪烁/广告弹窗抢 SMTC 时字幕不会来回跳
-        self._challenger = None
+        # 标签页闪烁/广告弹窗抢 SMTC 时字幕不会来回跳。
+        # 注意：比较的是**稳定键**，不是会话对象（对象每拍都是新的）。
+        self._challenger_key = None
         self._chall_streak = 0
         self._SWITCH_HOLD = 4       # 150ms 轮询下 ≈ 0.6s 确认窗口
 
@@ -215,91 +220,19 @@ class SmtcTracker:
                 pass
             await asyncio.sleep(self.poll)
 
-    def _pick(self, sessions):
-        """从所有媒体会话里挑我们要跟的那个。"""
-        cands = []
-        for s in sessions:
-            try:
-                aumid = (s.source_app_user_model_id or "").lower()
-            except Exception:
-                aumid = ""
-            try:
-                info = s.get_playback_info()
-                playing = info.playback_status == _Status.PLAYING
-            except Exception:
-                playing = False
-            is_browser = any(h in aumid for h in BROWSER_HINTS)
-            # "时间线在前进"是真正在播视频的最强信号 —— 没有 title_hint
-            # 时（--auto 常驻）全靠它把视频会话和挂起的音乐标签页分开：
-            # 两者都可能"播放中+浏览器"，但只有前者的 position 在动。
-            pos = None
-            try:
-                pos = s.get_timeline_properties().position.total_seconds()
-            except Exception:
-                pass
-            advancing = False
-            if pos is not None:
-                last = self._pos_seen.get(id(s))
-                advancing = last is not None and pos > last + 0.05
-                self._pos_seen[id(s)] = pos
-            cands.append((s, aumid, playing, is_browser, advancing))
-        if not cands:
-            return None
-        # 前台窗口信号：用户正在看哪个网页，前台就是哪个 ——
-        # 多开网页时这是"翻译哪一个"的最直接判据。
-        fg_title = ""
-        try:
-            from foreground import foreground_is_browser, title_matches_window
-            fg_ok, fg_title = foreground_is_browser()
-            if not fg_ok:
-                fg_title = ""
-        except Exception:
-            pass
-        # 优先级：显式 title_hint > 前台窗口命中 > 时间线在前进 >
-        # 浏览器且播放中 > 播放中 > 浏览器 > 第一个
-        def score(c):
-            s, aumid, playing, is_browser, advancing = c
-            sc = 0
-            t = getattr(self, "_titles", {}).get(id(s), "")
-            if self.title_hint:
-                if t and (self.title_hint in t or t in self.title_hint):
-                    sc += 100
-            if fg_title and t:
-                try:
-                    from foreground import title_matches_window as _tm
-                    if _tm(t, fg_title):
-                        sc += 50
-                except Exception:
-                    pass
-            if advancing:
-                sc += 20
-            if playing:
-                sc += 10
-            if is_browser:
-                sc += 5
-            return sc
-        cands.sort(key=score, reverse=True)
-        return cands[0][0]
-
-    async def _remember_title(self, s):
-        """记住会话标题（供匹配缓存 srt 用）。
-
-        **读到空标题不能缓存** —— 实测：会话刚建立时元数据还没准备好，
-        读到的就是空串；原来一读就存下来，于是这个会话永远"没有标题"，
-        哪怕之后标题早就有了也不会再查。改成空标题 2 秒后重试，
-        并退一步用 artist/album 兜底。
-        """
-        if not hasattr(self, "_titles"):
-            self._titles = {}
-        if not hasattr(self, "_title_try"):
-            self._title_try = {}
-        sid = id(s)
-        if self._titles.get(sid):
-            return                      # 已经有标题，不重复查
-        now = time.monotonic()
-        if now - self._title_try.get(sid, 0.0) < 2.0:
-            return                      # 空标题：每 2 秒重试一次
-        self._title_try[sid] = now
+    # ── 会话识别（稳定键）───────────────────────────────────────
+    # **关键教训（2026-10-18 实测）**：winsdk 的
+    # GlobalSystemMediaTransportControlsSession 对象**每次 get_sessions()
+    # 都是新的 Python 包装**（两次调用 `a[i] is b[i]` == False）。所以任何
+    # 拿 id(s) 当键的状态都**永远不命中**：
+    #   · _titles[id] 每拍查不到 → 标题存不起来；
+    #   · _pos_seen[id] 每拍都是空 → "时间线在前进"永远 False；
+    #   · s is self._session 永远 False → 迟滞切换永远走"现任消失"分支，
+    #     等于完全没有迟滞 —— 多标签页/多会话时字幕在几部片之间来回跳，
+    #     预翻译被反复取消，缓存永远建不完（watch.log 实测就是这个）。
+    # 修法：用**数据本身**当稳定键 —— (AUMID, 归一化标题)。标题读取很便宜
+    # （实测全部会话一次约 1ms），每拍读一次即可。
+    async def _read_title(self, s):
         try:
             props = await s.try_get_media_properties_async()
             t = (props.title or "").strip()
@@ -309,80 +242,158 @@ class SmtcTracker:
                     (getattr(props, "artist", "") or "",
                      getattr(props, "album_title", "") or "")
                     if x and x.strip())
-            if t:
-                self._titles[sid] = t.lower()
+            return t
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _key_of(aumid, title):
+        return ((aumid or "").lower(), (title or "").strip().lower())
+
+    def _prune_pos_seen(self, now):
+        """删掉 2 分钟没再出现的键，免得常驻久了字典无限长。"""
+        dead = [k for k, (_p, t) in self._pos_seen.items()
+                if now - t > 120.0]
+        for k in dead:
+            self._pos_seen.pop(k, None)
+
+    def _pick(self, infos):
+        """从本拍现读的会话数据里挑要跟的那个（infos 见 _tick）。"""
+        fg_title = ""
+        try:
+            from foreground import foreground_is_browser
+            fg_ok, fg_title = foreground_is_browser()
+            if not fg_ok:
+                fg_title = ""
         except Exception:
             pass
 
-    def _switch_to(self, s):
-        """实际切换锁定的会话：清锚点、清挑战者状态。"""
-        self._session = s
-        self._challenger = None
+        def score(inf):
+            sc = 0
+            t = inf["title"]
+            if self.title_hint:
+                if t and (self.title_hint in t or t in self.title_hint):
+                    sc += 100
+            if fg_title and t:
+                try:
+                    from foreground import title_matches_window
+                    if title_matches_window(t, fg_title):
+                        sc += 50
+                except Exception:
+                    pass
+            if inf["advancing"]:
+                sc += 20
+            if inf["playing"]:
+                sc += 10
+            if inf["is_browser"]:
+                sc += 5
+            return sc
+
+        infos.sort(key=score, reverse=True)
+        return infos[0]
+
+    def _switch_to(self, inf):
+        """真正切换锁定的会话（只存**稳定键**+本拍对象，不存旧包装）。"""
+        old = (self._session_key or (None, None))[1]
+        self._session_key = inf["key"]
+        self._session = inf["s"]
+        self._challenger_key = None
         self._chall_streak = 0
         with self._lock:
-            self._anchor = None              # 换会话 = 换片子，旧锚点作废
+            self._anchor = None          # 换会话 = 换片子，旧锚点作废
+        if self._log:
+            try:
+                self._log(f"[smtc] 会话切换 → {inf['title'][:48]!r}"
+                          f"（上一部: {(old or '无')[:32]!r}）")
+            except Exception:
+                pass
 
     async def _tick(self, mgr):
         sessions = mgr.get_sessions()
-        # 记住每个会话的标题（供 _pick 匹配；空标题会定时重试）
+        # ① 本拍读数：标题/播放状态/倍速/时间线，全部现读
+        infos = []
         for s in sessions:
-            await self._remember_title(s)
-        s = self._pick(sessions)
-        if s is None:
+            try:
+                aumid = s.source_app_user_model_id or ""
+            except Exception:
+                aumid = ""
+            title = await self._read_title(s)
+            playing, rate = False, 1.0
+            try:
+                pi = s.get_playback_info()
+                playing = pi.playback_status == _Status.PLAYING
+                r = getattr(pi, "playback_rate", None)
+                if r and float(r) > 0:
+                    rate = float(r)
+            except Exception:
+                pass
+            pos = ts = dur = None
+            try:
+                tl = s.get_timeline_properties()
+                pos = tl.position.total_seconds()
+                ts = tl.last_updated_time
+                dur = tl.end_time.total_seconds()
+            except Exception:
+                pass
+            infos.append({
+                "s": s, "aumid": aumid, "title": title,
+                "key": self._key_of(aumid, title),
+                "playing": playing, "rate": rate,
+                "pos": pos, "ts": ts, "dur": dur,
+                "is_browser": any(h in aumid.lower()
+                                  for h in BROWSER_HINTS),
+            })
+        # ② "时间线在前进"：按稳定键跨拍比较
+        now = time.monotonic()
+        for inf in infos:
+            k, pos = inf["key"], inf["pos"]
+            last = self._pos_seen.get(k)
+            inf["advancing"] = bool(
+                last is not None and pos is not None
+                and pos > last[0] + 0.05)
+            if pos is not None:
+                self._pos_seen[k] = (pos, now)
+        self._prune_pos_seen(now)
+        if not infos:
             self._set(None, None, False, "", "", alive=False)
-            self._session = None
-            self._challenger = None
+            self._session_key = None
+            self._challenger_key = None
             self._chall_streak = 0
             return
-        if s is not self._session:
-            # 迟滞切换：现任会话消失了立即换；现任还在，挑战者要连续
-            # _SWITCH_HOLD 拍都赢才换 —— 防止广告/弹窗抢一下 SMTC
-            # 就把字幕带跑，也防止两个标签页分数交替领先时来回跳。
-            current_gone = self._session is None or not any(
-                x is self._session for x in sessions)
-            if current_gone:
-                self._switch_to(s)
-            elif s is self._challenger:
-                self._chall_streak += 1
-                if self._chall_streak >= self._SWITCH_HOLD:
-                    self._switch_to(s)
-            else:
-                self._challenger = s
-                self._chall_streak = 1
-            s = self._session               # 本拍仍跟现任
-        else:
-            self._challenger = None
+        # ③ 选会话 + 迟滞切换（比较稳定键，而不是对象身份）
+        cand = self._pick(infos)
+        cur_key = self._session_key
+        cur_alive = cur_key is not None and any(
+            i["key"] == cur_key for i in infos)
+        if cur_key is None or not cur_alive:
+            self._switch_to(cand)        # 现任没了 → 立即接上
+        elif cand["key"] == cur_key:
+            self._challenger_key = None
             self._chall_streak = 0
-        title = getattr(self, "_titles", {}).get(id(s), "")
-        try:
-            aumid = s.source_app_user_model_id or ""
-        except Exception:
-            aumid = ""
-        try:
-            playing = s.get_playback_info().playback_status == _Status.PLAYING
-        except Exception:
-            playing = False
-        pos, ts, dur = None, None, None
-        try:
-            tl = s.get_timeline_properties()
-            # position 是 last_updated_time 时刻的位置；TimeSpan→timedelta
-            pos = tl.position.total_seconds()
-            ts = tl.last_updated_time          # datetime（UTC）
-            dur = tl.end_time.total_seconds()
-        except Exception:
-            pass
-        # 锚点级 seek 检测：很多浏览器只在 seek/暂停时刷新时间线，
-        # 新锚点一到这里就能发现跳变 —— 比上层靠外推位置比较更早。
-        if pos is not None and ts is not None:
+        elif cand["key"] == self._challenger_key:
+            self._chall_streak += 1
+            if self._chall_streak >= self._SWITCH_HOLD:
+                self._switch_to(cand)
+        else:
+            self._challenger_key = cand["key"]
+            self._chall_streak = 1
+        chosen = next((i for i in infos if i["key"] == self._session_key),
+                      cand)
+        self._session = chosen["s"]
+        # ④ 锚点级 seek 检测：同一部片的新锚点跳变 → 用户拖了进度条
+        if chosen["pos"] is not None and chosen["ts"] is not None:
             with self._lock:
                 old_anchor = self._anchor
-            if self._anchor_jumped(old_anchor, (pos, ts), playing):
+            if self._anchor_jumped(old_anchor, (chosen["pos"], chosen["ts"]),
+                                   chosen["playing"]):
                 with self._lock:
                     self._seek_n += 1
                     self._seek_at = time.monotonic()
             with self._lock:
-                self._anchor = (pos, ts)
-        self._set(pos, ts, playing, title, aumid, dur=dur)
+                self._anchor = (chosen["pos"], chosen["ts"])
+        self._rate = chosen["rate"]
+        self._set(chosen["pos"], chosen["ts"], chosen["playing"],
+                  chosen["title"], chosen["aumid"], dur=chosen["dur"])
 
 
 if __name__ == "__main__":

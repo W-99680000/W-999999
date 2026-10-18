@@ -14,10 +14,15 @@ rem ============================================================
 
 set "PY="
 set "CAND1=C:\Users\w\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe"
+set "CAND2=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
 
 rem Interpreter probe: find_spec (milliseconds) instead of importing
 rem faster_whisper+PyQt5 (seconds per candidate, worse cold).
-set "PROBE=import importlib.util as u,sys;sys.exit(0 if all(u.find_spec(m) for m in ('faster_whisper','PyQt5')) else 1)"
+rem Probe MUST include watch-only deps: winsdk (SMTC position), yt_dlp
+rem (URL resolve/download), av (audio decode), numpy. A python that only
+rem has faster_whisper+PyQt5 runs but silently loses realtime sync and
+rem every auto pre-translate fails (measured 2026-10-18).
+set "PROBE=import importlib.util as u,sys;sys.exit(0 if all(u.find_spec(m) for m in ('faster_whisper','PyQt5','winsdk','yt_dlp','av','numpy')) else 1)"
 
 if not exist "%CAND1%" goto findpy
 "%CAND1%" -c "%PROBE%" >nul 2>nul
@@ -26,6 +31,13 @@ set "PY=%CAND1%"
 goto pyset
 
 :findpy
+if not exist "%CAND2%" goto findpy2
+"%CAND2%" -c "%PROBE%" >nul 2>nul
+if errorlevel 1 goto findpy2
+set "PY=%CAND2%"
+goto pyset
+
+:findpy2
 for /f "delims=" %%P in ('where python 2^>nul') do (
   if not defined PY (
     "%%P" -c "%PROBE%" >nul 2>nul
@@ -43,8 +55,12 @@ set HF_HUB_OFFLINE=1
 if /i "%~1"=="help" goto usage
 
 rem double-click with no args -> resident mode (any video, auto)
-set "ARGS=--auto"
-if not "%~1"=="" set "ARGS="
+rem only watch options (leading "-") -> resident mode as well, e.g.
+rem   watch.bat --no-pretranslate
+set "ARGS="
+set "A1=%~1"
+if "%A1%"=="" set "ARGS=--auto"
+if not "%A1%"=="" if "%A1:~0,1%"=="-" set "ARGS=--auto"
 
 echo launching watch mode ...
 echo.

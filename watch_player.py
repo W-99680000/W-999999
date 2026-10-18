@@ -702,7 +702,7 @@ def _auto_main(args):
     from watch_overlay import QtOverlay
     from PyQt5.QtCore import QTimer
 
-    tracker = SmtcTracker(poll=0.15)     # 位置感知更快一档（原 0.25）
+    tracker = SmtcTracker(poll=0.15, log=_log)   # 位置感知更快一档（原 0.25）
     tracker.start()
     ov = QtOverlay()
     _log("=" * 44)

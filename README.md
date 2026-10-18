@@ -494,6 +494,29 @@ panel.bat
 缓存在 `pre_cache/`（按"来源 + 模型 + 目标语言"做键），`--force` 可重跑；
 翻译有断点续跑（中途 Ctrl+C，下次从断点继续）。
 
+### 点播/缓存实时性修复（2026-10-18）
+
+症状：**缓存明明在，播放时字幕不跟 / 乱跳**；`--auto` 反复
+"预翻译失败：来源: …"，缓存永远建不完。两个根因都修了：
+
+1. **启动器挑错解释器**：`watch.bat` / `cache.bat` 只按
+   `faster_whisper + PyQt5` 探测，会选中缺 `winsdk` / `yt_dlp` / `av` 的
+   Python —— 于是 SMTC 拿不到播放位置（字幕不跟）、网址反查/下载失败
+   （预翻译启动即挂，日志只剩一行"来源: …"）。现在探针把三个依赖都算上，
+   并显式优先 `%LOCALAPPDATA%\Programs\Python\Python312`；这种"缺库"
+   用 `python tools/doctor.py` 一条命令就能查出来。
+2. **SMTC 会话状态拿对象身份当键**：winsdk 每次 `get_sessions()` 都返回
+   **新的 Python 包装对象**（实测 `a is b` 为 False）。旧代码用 `id(s)`
+   缓存标题、"时间线在前进"、用 `s is self._session` 做迟滞切换 ——
+   全部永不命中。后果：多标签页时字幕在几部片之间来回跳、缓存标题对不上、
+   预翻译被反复取消。现在改成 `(AUMID, 标题)` 稳定键 + 真正的迟滞切换
+   （挑战者连续 4 拍确认），并启用 SMTC 上报的播放倍速外推（1.5x/2x 追剧
+   不再越看越漂）。
+
+验证：`python bench/_verify_hysteresis.py`（16 项，含缓存标题匹配 12/12）；
+`watch.bat --no-pretranslate` 实测 10 秒内标题零漂移；B 站已缓存网址
+走 pretranslate 缓存命中 **0.5 秒**返回。
+
 ### 全自动路径：在播视频 → 字幕（`--auto`）
 
 ```
