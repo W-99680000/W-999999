@@ -945,3 +945,33 @@ watch 模式同样无子进程/无 conhost。
   0 pageerror。
 - 截图：`work/console_adv_models.png`、`work/console_adv2_ovadv.png`。
 - check_console_html 扩到检查高级页/内嵌参数（全部通过）。
+
+
+---
+
+## 30. 7B 模型误报不可用 + 应用启动图标（2026-10-18）
+
+### 30.1 7B（HY-MT 7B GGUF）显示错误
+
+- 现象：模型管理里 `HY-MT 7B (GGUF)` 卡片显示不可用原因
+  "找不到 gguf 模型文件（设 HYMT_MODEL）"。
+- 根因：模型文件其实在
+  `F:\hh_si_pro\hh-translate-model\hh-translate-large.gguf`（4.6GB），
+  但 `local_mt.MODEL_CANDIDATES` 只收录了 base/small/medium 三个 F: 路径，
+  漏了 large；`find_local_model()` 按文件名里的 size 匹配，自然找不到。
+- 修复：候选表补 large；并把 `models/` 与 F: HY-MT 目录都动态 glob
+  `*.gguf`（以后装新模型不会再漏）。
+- 验证：`model_registry.probe()` 里 7B `available=True`、
+  `/api/models` 同步为可用；重启 App 后卡片不再报错。
+
+### 30.2 缺少启动/应用图标
+
+- 现象：窗口/任务栏上只看得到 pythonw 的默认图标（像"没有启动图标"）。
+- 修复：
+  - `app.py` 新增 `_set_window_icon()`：设置进程 AppUserModelID，
+    用 `LoadImageW` + `WM_SETICON` 给窗口设置 `desktop/babel.ico` 的
+    大/小图标（窗口、任务栏、Alt-Tab 都生效）；
+  - `/favicon.ico` 直接返回 `desktop/babel.ico`，WebView/浏览器标签页也有图标；
+  - 重新跑 `desktop/create_shortcut.ps1` 刷新桌面/开始菜单快捷方式图标。
+- 验证：App 日志出现"窗口图标已设置（babel.ico）"；Win32 `WM_GETICON`
+  返回大/小图标句柄均非 0；快捷方式 IconLocation 指向 babel.ico。

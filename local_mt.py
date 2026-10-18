@@ -66,15 +66,21 @@ MODEL_CANDIDATES = [
     r"F:\hh_si_pro\hh-translate-model\hh-translate-base.gguf",
     r"F:\hh_si_pro\hh-translate-model\hh-translate-small.gguf",
     r"F:\hh_si_pro\hh-translate-model\hh-translate-medium.gguf",
+    # 7B（HY-MT1.5-7B-GGUF，Q8 约 4.4GB）—— 之前漏了这条，界面误报
+    # "找不到 gguf 模型文件"（文件其实在 F:，只是候选表没收录）
+    r"F:\hh_si_pro\hh-translate-model\hh-translate-large.gguf",
     os.path.join(HERE, "models", "hh-translate-base.gguf"),
 ]
 
-# 项目 models/ 目录里的所有 gguf 也算候选（model_manager 下载到这里）
+# 项目 models/ 和 F: 的 HY-MT 目录里的所有 gguf 都算候选
+# （model_manager 下载到 models/；已有的一代/7B 装在 F:，别写死漏项）
 try:
     import glob as _glob
-    for _p in sorted(_glob.glob(os.path.join(HERE, "models", "*.gguf"))):
-        if _p not in MODEL_CANDIDATES:
-            MODEL_CANDIDATES.append(_p)
+    for _d in (os.path.join(HERE, "models"),
+               r"F:\hh_si_pro\hh-translate-model"):
+        for _p in sorted(_glob.glob(os.path.join(_d, "*.gguf"))):
+            if _p not in MODEL_CANDIDATES:
+                MODEL_CANDIDATES.append(_p)
 except Exception:
     pass
 

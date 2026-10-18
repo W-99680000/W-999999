@@ -409,6 +409,65 @@ def _stop_engine(keep: bool) -> None:
 # ══════════════════════════════════════════════════════════════════
 #  图标 / 托盘
 # ══════════════════════════════════════════════════════════════════
+def _set_window_icon(window) -> bool:
+    """给窗口/任务栏设置 babel.ico。
+
+    pywebview（Edge WebView2）默认用 pythonw.exe 的图标 —— 任务栏上一个
+    Python 图标/空白，看起来像"没有启动图标"。这里用 Win32 WM_SETICON
+    把 desktop/babel.ico 设成窗口大/小图标，并设置 AppUserModelID 让
+    任务栏按应用分组。
+    """
+    if os.name != "nt":
+        return False
+    ico = os.path.join(HERE, "desktop", "babel.ico")
+    if not os.path.isfile(ico):
+        return False
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "BabelPlan.Desktop")
+    except Exception:
+        pass
+    user32 = ctypes.windll.user32
+    try:
+        user32.LoadImageW.restype = ctypes.c_void_p
+        user32.LoadImageW.argtypes = [
+            ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint,
+            ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+        user32.SendMessageW.restype = ctypes.c_void_p
+        user32.SendMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint,
+                                        ctypes.c_void_p, ctypes.c_void_p]
+        user32.FindWindowW.restype = ctypes.c_void_p
+        user32.FindWindowW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
+    except Exception:
+        pass
+    hwnd = 0
+    try:
+        native = getattr(window, "native", None)
+        handle = getattr(native, "Handle", None)
+        if handle is not None:
+            hwnd = int(handle.ToInt64() if hasattr(handle, "ToInt64")
+                       else handle)
+    except Exception:
+        hwnd = 0
+    if not hwnd:
+        try:
+            hwnd = int(user32.FindWindowW(None, APP_NAME) or 0)
+        except Exception:
+            hwnd = 0
+    if not hwnd:
+        return False
+    WM_SETICON = 0x0080
+    IMAGE_ICON = 1
+    LR_LOADFROMFILE = 0x0010
+    big = user32.LoadImageW(None, ico, IMAGE_ICON, 32, 32, LR_LOADFROMFILE)
+    small = user32.LoadImageW(None, ico, IMAGE_ICON, 16, 16, LR_LOADFROMFILE)
+    if big:
+        user32.SendMessageW(hwnd, WM_SETICON, 1, big)    # ICON_BIG
+    if small:
+        user32.SendMessageW(hwnd, WM_SETICON, 0, small)  # ICON_SMALL
+    return bool(big or small)
+
+
 def _tray_image(size: int = 64):
     """托盘图标：绿底圆 + 白色声波（不依赖外部资源文件）。
 
@@ -673,6 +732,14 @@ def main(argv=None) -> int:
                 window.show()
             except Exception as e:
                 log(f"！显示窗口失败：{type(e).__name__}: {e}")
+        # 窗口/任务栏图标（pywebview 默认会显示 pythonw 的图标）
+        try:
+            if _set_window_icon(window):
+                log("· 窗口图标已设置（babel.ico）")
+            else:
+                log("· ！窗口图标设置失败（不影响使用）")
+        except Exception as e:
+            log(f"· ！窗口图标设置异常：{type(e).__name__}: {e}")
         log("· 界面已就绪")
 
     try:

@@ -851,7 +851,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/startup-stats":
             return self._json(_read_json_file(STARTUP_STATS, {}))
         if path == "/favicon.ico":
-            return self._send(204, b"", "image/x-icon")
+            # 浏览器/WebView 标签页图标：直接用桌面图标
+            _ico = os.path.join(ROOT, "desktop", "babel.ico")
+            try:
+                with open(_ico, "rb") as _f:
+                    return self._send(200, _f.read(), "image/x-icon")
+            except OSError:
+                return self._send(204, b"", "image/x-icon")
         if path.startswith("/assets/"):
             rel = path[len("/assets/"):].replace("..", "")
             fp = os.path.join(HERE, "assets", rel)
