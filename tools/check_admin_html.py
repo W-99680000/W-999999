@@ -82,6 +82,11 @@ def main(argv=None) -> int:
     chk("引用了 /api/models 或 model_registry_web.json（可接后端）",
         ("/api/models" in s) or ("model_registry_web.json" in s))
 
+    chk("模型管理按引擎当前模式初始化", "syncModeFromEngine" in s)
+    chk("应用只提交改过的槽位（不串模式）",
+        "state.dirty.asr" in s and "payload.asr" in s and "payload.mt" in s)
+    chk("应用后切到目标模式", "state.mode = which" in s)
+
     print("五、JS 语法（node --check）")
     node = None
     for cand in (r"C:\Users\w\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe",

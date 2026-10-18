@@ -1476,7 +1476,12 @@ const state = {
   params: Object.assign({}, BABEL_UI.presets.loopback.mt),
   glossary: BABEL_UI.presets.loopback.glossary.slice(),
   preview: Object.assign({}, BABEL_UI.preview),
-  filter: { q:"", src:"all", dir:"all", state:"all" }
+  filter: { q:"", src:"all", dir:"all", state:"all" },
+  // 用户改过哪个槽位。应用时只提交改过的，没改的保留目标模式原有绑定。
+  // 之前 apply 无条件提交 asr+mt，会把 loopback 的 ASR 带到 cache，
+  // 用户点“应用到视频翻译”后 cache 的 large-v3 被悄悄换成 medium ——
+  // 看起来就是“改了模型又变回原来的/没体现”。
+  dirty: { asr:false, mt:false }
 };
 
 /* ============================================================
@@ -1538,6 +1543,7 @@ function resolveModeBinding(mode){
   state.asrId = a.id;
   state.mtId = m.id;
   state.bindAnomaly = bindAnomaly;
+  state.dirty = { asr:false, mt:false };
   ensureSelectable();
 }
 function deviceFor(role){
@@ -1769,9 +1775,11 @@ function onToolbarChange(id, v, o){
   const label = o && o.label ? o.label : v;
   if (id === "tb-asr"){
     state.asrId = v;
+    state.dirty.asr = true;
     syncAfterModelChange("识别模型已切换为 " + label);
   } else if (id === "tb-mt"){
     state.mtId = v;
+    state.dirty.mt = true;
     syncAfterModelChange("翻译模型已切换为 " + label);
   } else if (id === "tb-lang"){
     state.toolbar.lang = v;
@@ -1851,8 +1859,10 @@ function renderModelCards(){
         toast("不可用 · " + m.name, m.note || "后端未报告可用性", "warn");
         return;
       }
-      if (kind === "asr"){ state.asrId = id; syncAfterModelChange("识别模型：" + m.name); }
-      else { state.mtId = id; syncAfterModelChange("翻译模型：" + m.name); }
+      if (kind === "asr"){ state.asrId = id; state.dirty.asr = true;
+        syncAfterModelChange("识别模型：" + m.name); }
+      else { state.mtId = id; state.dirty.mt = true;
+        syncAfterModelChange("翻译模型：" + m.name); }
     });
   });
 }
@@ -2417,11 +2427,18 @@ function bindGlobal(){
       const label = which === "both" ? "两个模块" : "「" + MODELS.modes[which].label + "」";
       // 真写注册表（以前是原型：只改浏览器内存，刷新就丢、引擎更不知道），
       // 引擎在跑就自动重启让它立刻生效 —— "改了就生效"。
+      if (!state.dirty.asr && !state.dirty.mt){
+        toast("没有未应用的模型改动", "先点选模型卡片，再点应用", "warn");
+        return;
+      }
       ap.disabled = true;
       Promise.all(modes.map(function(m){
+        const payload = { mode: m };
+        if (state.dirty.asr) payload.asr = state.asrId;
+        if (state.dirty.mt) payload.mt = state.mtId;
         return fetch("/api/set-mode", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mode: m, asr: state.asrId, mt: state.mtId })
+          body: JSON.stringify(payload)
         }).then(function(r){ return r.json(); });
       })).then(function(rs){
         ap.disabled = false;
@@ -2431,6 +2448,12 @@ function bindGlobal(){
           return;
         }
         if (rs[0].snapshot) adoptModels(rs[0].snapshot, "api", "POST /api/set-mode");
+        state.dirty = { asr:false, mt:false };
+        // 关键：应用哪个模式，模型管理就切到哪个模式显示。
+        // 之前界面停在 state.mode（默认 loopback），用户点“应用到视频翻译”
+        // 后看到的仍是 loopback 的旧模型 → 以为没生效/被还原了。
+        if (which !== "both") state.mode = which;
+        applyMode(state.mode, false);   // 从新注册表重新绑定并重绘
         renderModeSeg(); renderApplyText(); renderModelCards(); renderDataSource();
         if (ENGINE.running){
           toast("已应用到" + label + "，正在重启引擎生效…", pairLabel());
@@ -2470,6 +2493,18 @@ function bindGlobal(){
 /* ============================================================
    15. 启动
    ============================================================ */
+/* 模型管理默认展示“引擎当前在跑的模式”，而不是永远 loopback。
+   否则用户从视频翻译页进来，看到的是 loopback 的模型，改完以为没生效。 */
+function syncModeFromEngine(){
+  fetch("/api/engine", { cache:"no-store" }).then(function(r){ return r.json(); })
+    .then(function(st){
+      if (!st || !st.mode || st.mode === state.mode) return;
+      if (state.dirty && (state.dirty.asr || state.dirty.mt)) return;
+      applyMode(st.mode, false);
+      renderModeSeg(); renderApplyText(); renderModelCards(); renderDataSource();
+    }).catch(function(){});
+}
+
 function boot(){
   // 1) 先把两张同传记录表挂好（模型管理视图里那份从模板克隆）
   const slot = $("#recordsCardSlot");
@@ -2497,6 +2532,7 @@ function boot(){
     renderPreviewControls(); renderPreview(); renderLogStrip();
     renderRecords();
     setView(state.view);
+    syncModeFromEngine();
     if (info.kind === "builtin"){
       toast("模型数据用内置假数据", "API 与快照都不可用（file:// 直接打开时正常）", "warn");
     } else if (state.bindAnomaly && state.bindAnomaly.length){

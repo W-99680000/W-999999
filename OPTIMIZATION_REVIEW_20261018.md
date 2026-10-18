@@ -1141,3 +1141,41 @@ watch 模式同样无子进程/无 conhost。
 - 中文视频原文≈译文时不再 stacked 重复显示（相似度≥0.82 只留译文）。
 - watch 浮窗 recenter 回底部居中，max_lines 设为 1，只显示当前一条；
   当前视频显示短 cue、单行贴底（桌面截图 20:42）。
+
+
+---
+
+## 34. 模型热切换“改了不体现 / 动几下又回去”（2026-10-18）
+
+根因有三个，都在模型管理页的**状态同步**，不是注册表写盘失败：
+
+1. **模型管理页永远按 loopback 初始化**：即使引擎正在跑视频翻译（cache），
+   页面仍展示 loopback 的模型；用户在视频翻译下改模型，看到的是另一套
+   绑定，自然觉得“完全没体现”。
+2. **应用时把 asr+mt 都提交**：用户只改了 MT，点“应用到视频翻译”，
+   请求仍带着当前界面的 ASR（loopback 的 medium），把 cache 原本的
+   `large-v3` 覆盖成 medium —— 等于改了 A 槽把 B 槽也串了。
+3. **应用后界面停在原模式**：改了视频翻译，界面仍显示 loopback 的旧
+   模型，看起来像“被还原”。
+
+修复：
+
+- 页面加载后 `syncModeFromEngine()`：引擎在跑什么模式，模型管理就显示
+  该模式；
+- `state.dirty` 记录用户实际改过的槽位（卡片/工具栏都会标记），应用时
+  **只提交 dirty 槽位**；没改的槽位保留目标模式原有绑定；
+- 应用成功后 `state.mode = which` 并 `applyMode()` 重绑，界面立刻切到
+  目标模式显示新模型；
+- `applyMode` 重绑时清 dirty，避免 stale 选择。
+
+实测（浏览器自动化）：
+
+| 步骤 | 结果 |
+|---|---|
+| 引擎 cache 打开模型管理 | 初始选中 large-v3 + qwen-mt-flash（cache 模式） |
+| 只改 MT → 应用到视频翻译 | cache = large-v3 + qwen-mt-lite；loopback 仍 medium + flash |
+| 刷新页面 | 仍 cache large-v3 + qwen-mt-lite |
+| 切 loopback / 回 cache | loopback medium+flash；cache large-v3+lite |
+
+check_admin_html 新增 3 项（按引擎模式初始化 / 只提交 dirty 槽位 /
+应用后切目标模式），当前 **32/0**。
