@@ -456,16 +456,28 @@ class Engine:
             return False, f"未知模式 {mode!r}"
         py = self._pick_python()
         exe = py.get("exe") or sys.executable
-        script = os.path.join(ROOT, "live_subtitle_v2.py")
+        # **视频翻译（cache）走 watch 模块**：常驻监听 SMTC 播放器，
+        # 自动匹配 pre_cache / 反查网址预翻译，浮窗按播放位置显示。
+        # 直播翻译（loopback）才走 live_subtitle_v2。
+        if mode == "cache":
+            script = os.path.join(ROOT, "watch_player.py")
+        else:
+            script = os.path.join(ROOT, "live_subtitle_v2.py")
         if not os.path.isfile(script):
             return False, f"找不到 {script}"
         # `-u` 必须给：否则子进程输出走块缓冲，管理端看到的日志
         # 会成片延迟 —— 而"卡住了"和"还没输出"看起来一样。
         cmd = [exe, "-X", "utf8", "-u", script]
+        if mode == "cache":
+            cmd.append("--auto")
         # 注册表默认值已经由 live_subtitle_v2._apply_registry 灌进去了，
         # 所以这里**不再重复传 --model**：传了就变成"界面写死一个模型"，
         # 又会和注册表分叉。--mode 只用来记状态与给界面看。
-        cmd += list(extra or [])
+        _extra = list(extra or [])
+        if mode == "cache":
+            # 界面上的「不写 .srt」是直播引擎参数；watch 本来就不写，丢掉
+            _extra = [x for x in _extra if x != "--no-srt"]
+        cmd += _extra
         env = (DLLS.env_for_engine() if DLLS else dict(os.environ))
         if force:
             env["BABEL_FORCE"] = "1"
@@ -582,7 +594,8 @@ class Engine:
         # 开始干活的那一行。注意：浮窗现在**在模型加载之前**就出现了
         # （启动并行化），所以 "浮窗位置/采集:" 不能再当就绪标记，否则
         # 界面会在模型还没加载完时就显示"就绪"。只认 "转写:"。
-        marks = ("转写:", "listening")
+        marks = ("转写:", "listening", "watch --auto 启动",
+                 "常驻字幕已启动", "watch 启动")
         while time.time() - t0 < timeout:
             if not self.alive():
                 return {"state": "exited", "exit_code": self.exit_code,

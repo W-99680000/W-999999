@@ -86,6 +86,19 @@ def _log(msg):
         pass
 
 
+def _engine_stop_requested():
+    """管理端（桌面/后台）叫停：写 work/engine_stop.flag。
+
+    watch 由 babel_admin.serve 用 CREATE_NO_WINDOW 拉起，没有控制台，
+    CTRL_BREAK 送不进来；和直播引擎一样用文件哨兵，tick 每 100ms 查一次，
+    退出走正常 Qt 收尾（关浮窗、关 tracker/autocache）。
+    """
+    try:
+        return os.path.isfile(os.path.join(HERE, "work", "engine_stop.flag"))
+    except OSError:
+        return False
+
+
 # ══════════════════════════════════════════════════════════
 # srt 解析
 # ══════════════════════════════════════════════════════════
@@ -730,6 +743,10 @@ def _auto_main(args):
         _orig_key(e)
 
     ov.w.keyPressEvent = _key
+    try:                                     # 清掉上一次的残留
+        os.remove(os.path.join(HERE, "work", "engine_stop.flag"))
+    except OSError:
+        pass
     _log("=" * 44)
     _log("watch --auto 启动")
     ov.flash("常驻字幕已启动 —— 有缓存直接出，没缓存自动预翻译", 5.0)
@@ -889,6 +906,10 @@ def _auto_main(args):
         ov.set(src_txt, zh)
 
     def _tick():
+        if _engine_stop_requested():
+            _log("收到管理端停止请求（engine_stop.flag），退出 watch")
+            ov.app.quit()
+            return
         try:
             # ① 先处理后台自动预翻译送回来的事件
             if autocache is not None:

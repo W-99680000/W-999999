@@ -761,3 +761,46 @@ PASS
 `samples/jfk.wav` 取自 whisper.cpp 官方仓库 samples/（11s JFK 公开演讲，
 仅用于本地 WER 回归；原文见 §24.1）。`samples/loopback_test.wav` 与
 `e2e_speech.wav` 是仓库原有 TTS 样本。
+
+
+---
+
+## 25. 修正：后台「视频翻译」页改为整合 watch 模块（2026-10-18）
+
+用户指出：视频翻译这一块不对，它应该整合的是 **watch 模块**。此前后台
+`cache` 模式点启动仍然拉起 `live_subtitle_v2.py`（直播引擎），只是把
+mode 写成 cache —— 所以视频翻译页没有真正启动 watch（无 SMTC 匹配、
+无自动预翻译、无按播放位置显示的浮窗）。
+
+### 25.1 改动
+
+- `babel_admin/serve.py`：`Engine.start(mode)` 按模式选脚本 ——
+  `cache` → `watch_player.py --auto`；`loopback` → `live_subtitle_v2.py`
+  不变；cache 模式自动忽略只有直播引擎认识的 `--no-srt`。
+- watch 停止：`watch_player.py` 新增 `_engine_stop_requested()`，
+  auto tick 每 100ms 查 `work/engine_stop.flag`（管理端无控制台，SIGBREAK
+  送不进去），收到后关浮窗/关 tracker/关 autocache 正常退出；启动时清残留哨兵。
+- 后台 UI：启动按钮/卡片说明/提示随模式切换（视频翻译显示"常驻监听播放器…
+  已缓存秒出、没缓存边看边长"），cache 模式隐藏"不写 .srt"；
+  loading 判定加入 watch 日志标记（`watch --auto 启动` / `常驻字幕已启动`）。
+- 分发包/白名单补 `tools/test_watch_control.py`。
+
+### 25.2 实测
+
+`tools/test_watch_control.py`（新增）——**9 通过 / 0 失败**：
+
+```
+启动成功
+拉的是 watch_player.py / 带 --auto / 不是 live 引擎
+watch 报到 ready
+日志有 watch 常驻标记 / 进程活着
+停止哨兵生效、进程退出（0.2s）
+不残留 pretranslate 子进程
+```
+
+实测日志（cache 启动）真实走到：SMTC 检测到 Quark 在播 → 匹配 pre_cache
+字幕 → 半截缓存自动续跑 → `位置已对齐 pos=81.75s，开始同步`，
+说明视频翻译页现在启动的就是 watch 的完整链路。
+
+回归：`test_engine_control.py` 20/0（直播模式未受影响）、
+`check_registry_wiring` 20/0、`check_admin_html` 28/0。

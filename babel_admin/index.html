@@ -804,7 +804,7 @@ td.muted{color:var(--ink-3)}
           <div class="card-head">
             <div>
               <h2><span class="ch-ico"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.2v9.3M12 12.5l4.2 4.2M4.6 12a7.4 7.4 0 1 0 14.8 0"/></svg></span>翻译链路</h2>
-              <p class="card-desc">启动后在屏幕底部出现<b>置顶字幕浮窗</b>；它抓系统回环音频，不依赖管理页面开着。</p>
+              <p class="card-desc" id="engCardDesc">启动后在屏幕底部出现<b>置顶字幕浮窗</b>；直播翻译抓系统回环音频，视频翻译监听播放器并预翻译，都不依赖管理页面开着。</p>
             </div>
             <div class="card-head-right">
               <span class="chip" id="engChip"><span class="dot" aria-hidden="true"></span><b id="engState">未启动</b></span>
@@ -816,7 +816,7 @@ td.muted{color:var(--ink-3)}
             <div class="eng-ctl">
               <button class="btn primary" id="btnEngStart" type="button">
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4.8 19 12 7 19.2z"/></svg>
-                启动翻译链路
+                <span id="engStartTxt">启动翻译链路</span>
               </button>
               <button class="btn" id="btnEngStop" type="button" disabled>
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6.5" y="6.5" width="11" height="11" rx="1.6"/></svg>
@@ -826,7 +826,7 @@ td.muted{color:var(--ink-3)}
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.6-5.9M20 4v4.4h-4.4"/></svg>
                 重启
               </button>
-              <label class="eng-opt"><input type="checkbox" id="engNoSrt"> 不写 .srt</label>
+              <label class="eng-opt" id="engNoSrtWrap"><input type="checkbox" id="engNoSrt"> 不写 .srt</label>
             </div>
             <div class="eng-meta">
               <div><span>解释器</span><b class="mono" id="engPy">—</b></div>
@@ -2381,8 +2381,22 @@ function engSetChip(state, text){
   lab.textContent = text;
 }
 
+function engModeUI(mode){
+  const cache = mode === "cache";
+  const st = document.getElementById("engStartTxt");
+  const cd = document.getElementById("engCardDesc");
+  const cb = document.getElementById("engNoSrtWrap");
+  if (st) st.textContent = cache ? "启动视频翻译" : "启动翻译链路";
+  if (cd) cd.innerHTML = cache
+    ? "启动后常驻监听播放器（SMTC）：自动匹配/反查网址并预翻译，<b>浮窗按播放位置显示</b>；已缓存秒出、没缓存边看边长。"
+    : "启动后在屏幕底部出现<b>置顶字幕浮窗</b>；它抓系统回环音频，不依赖管理页面开着。";
+  if (cb) cb.style.display = cache ? "none" : "";
+}
+
 function engRender(st){
   if (!st) return;
+  const _em = st.mode || (typeof state !== "undefined" && state.mode) || "loopback";
+  engModeUI(_em);
   ENGINE.running = !!st.running;
   const pid = st.pid;
   document.getElementById("btnEngStart").disabled = ENGINE.running || ENGINE.busy;
@@ -2412,7 +2426,8 @@ function engRender(st){
   // "浮窗已启动"（那会儿浮窗还没出现），也不能写"未启动"。
   if (ENGINE.running && (st.log || []).length && !ENGINE.ready){
     const tail = (st.log || []).slice(-25).join("\n");
-    if (!/浮窗位置|转写:|listening/.test(tail)) engSetChip("starting", "加载模型…");
+    if (!/浮窗位置|转写:|listening|watch --auto|常驻字幕/.test(tail))
+      engSetChip("starting", _em === "cache" ? "启动 watch…" : "加载模型…");
     else ENGINE.ready = true;
   }
   if (!ENGINE.running) ENGINE.ready = false;
@@ -2424,10 +2439,14 @@ function engRender(st){
     note.innerHTML = "<b>注意：</b>" + st.gpu_hint;
   } else if (!ENGINE.running){
     note.classList.remove("bad");
-    note.innerHTML = '点「启动翻译链路」→ 浮窗会出现（先闪一行 ready，然后常驻 <b>● 正在听……</b>）。没有声音时浮窗是全透明的，那是正常的 —— 去播放任意视频就会出字幕。';
+    note.innerHTML = _em === "cache"
+      ? '点「启动视频翻译」→ 常驻监听播放器；之后在任何播放器/浏览器里打开视频，它会自动匹配缓存或反查网址预翻译，浮窗按播放位置显示（已缓存秒出，没缓存边看边长）。'
+      : '点「启动翻译链路」→ 浮窗会出现（先闪一行 ready，然后常驻 <b>● 正在听……</b>）。没有声音时浮窗是全透明的，那是正常的 —— 去播放任意视频就会出字幕。';
   } else {
     note.classList.remove("bad");
-    note.innerHTML = '链路在运行。<b>去播放视频</b>（浏览器 / 播放器都行）就会出字幕；音频没走默认输出设备时浮窗会一直空着 —— 这是唯一的常见坑。';
+    note.innerHTML = _em === "cache"
+      ? '视频翻译（watch）在运行。<b>播放任意视频</b>：缓存命中会立刻出字幕；没缓存会自动反查网址并预翻译，浮窗显示“续译中：已译到 X 分钟 / 当前 Y 分钟”。'
+      : '链路在运行。<b>去播放视频</b>（浏览器 / 播放器都行）就会出字幕；音频没走默认输出设备时浮窗会一直空着 —— 这是唯一的常见坑。';
   }
 
   const log = (st.log || []).join("\n");
@@ -2457,7 +2476,9 @@ async function engAction(action){
   if (action === "restart") engSetChip("starting", "重启中…");
   engPoll();
   try {
-    const extra = document.getElementById("engNoSrt").checked ? ["--no-srt"] : [];
+    const _mode = (typeof state !== "undefined" && state.mode) || "loopback";
+    const extra = (_mode === "loopback" && document.getElementById("engNoSrt").checked)
+      ? ["--no-srt"] : [];
     // **wait:false** —— 首次启动要冷加载模型（实测 177 秒），HTTP 一次
     // 等到底会让浏览器请求挂 3 分钟，界面上看着就是"点了没反应"。
     // 改成立刻返回 + 1.5 秒轮询：日志逐行滚出来，用户能看见它在动。
