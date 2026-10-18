@@ -52,6 +52,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 PIPE_NAME = r"\\.\pipe\live-subtitle-mpv"
+from subtitle_layout import split_cue as _split_cue_display
 LOG_PATH = os.path.join(HERE, "watch.log")
 
 # 自动预翻译的节流：同一个视频失败后隔多久再试、最多试几次。
@@ -132,7 +133,12 @@ def parse_srt(path):
         src = body[1] if len(body) >= 2 else body[0]
         cues.append((tm[0], tm[1], zh, src))
     cues.sort(key=lambda c: c[0])
-    return cues
+    # 视频翻译的 cue 常常 8~16 秒、40~55 字一条；显示端切成 2~5.5 秒、
+    # 每条约 24 个汉字，避免浮窗/播放器硬折行把中文从词中间劈开。
+    pretty = []
+    for st, en, zh, src in cues:
+        pretty.extend(_split_cue_display(st, en, zh, src))
+    return pretty
 
 
 def no_url_backoff(tried, nt, now=None, max_tries=AUTO_NOURL_MAX_TRIES,

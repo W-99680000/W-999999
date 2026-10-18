@@ -46,8 +46,11 @@ URL_DIR = os.path.join(PRE_DIR, "url_cache")
 # ── 切 cue 的参数（实测取舍）────────────────────────────────
 # 上限 7 秒 / 56 字符：再长观众读不完；再短译文碎（与 live 路线
 # 的教训一致：碎片翻译质量远低于整句）。
-MAX_CUE_DUR = 7.0
-MAX_CUE_CHARS = 56
+MAX_CUE_DUR = 5.5
+MAX_CUE_CHARS = 30
+
+# 断行/切条：优先标点、空格边界，避免把中文词从中间劈开
+from subtitle_layout import split_cue as _split_cue_layout
 # 句末标点（在这些符号后允许断句）
 TERM_PUNCT = tuple("。！？…!?")
 # 次级断点（句内太长时在它们后面断）
@@ -406,27 +409,9 @@ def _seg_sentences(seg):
 
 
 def _split_long(start, end, text):
-    """单句超长：先按软标点断，再不行按字符等分（时间按比例摊）。"""
-    if end - start <= MAX_CUE_DUR + 2.0 and len(text) <= MAX_CUE_CHARS * 1.6:
-        return [(start, end, text)]
-    parts, cur = [], ""
-    for ch in text:
-        cur += ch
-        if ch in SOFT_PUNCT and len(cur) >= MAX_CUE_CHARS * 0.5:
-            parts.append(cur)
-            cur = ""
-    if cur:
-        parts.append(cur)
-    if len(parts) < 2:
-        parts = [text[i:i + MAX_CUE_CHARS]
-                 for i in range(0, len(text), MAX_CUE_CHARS)]
-    total = sum(len(p) for p in parts) or 1
-    out, t = [], start
-    for p in parts:
-        d = (end - start) * len(p) / total
-        out.append((t, t + d, p.strip()))
-        t += d
-    return [(a, b, x) for a, b, x in out if x]
+    """单句过长：交给 subtitle_layout 按标点/空格/字符边界切，避免断字。"""
+    parts = _split_cue_layout(start, end, "", text)
+    return [(a, b, src) for a, b, _zh, src in parts if src]
 
 
 def _mk_pseudo_seg(words, mark=""):
@@ -780,13 +765,20 @@ def write_srt(path, cues, done):
     新版，永远不会是半截。
     """
     tmp = path + ".tmp"
+    # 写盘前也切短：外部播放器/浮窗读到的就是 2~5.5s、每行约 24 字的字幕，
+    # 而不是 8~16s、50 字一条（播放器硬折行会把中文从词中间劈开）。
+    rows = []
+    for j, c in enumerate(cues):
+        zh = (done.get(j) or "").strip()
+        for st, en, z, src in _split_cue_layout(c.start, c.end, zh, c.text):
+            if z or src:
+                rows.append((st, en, z.strip(), src.strip()))
     with open(tmp, "w", encoding="utf-8-sig") as f:   # BOM：PotPlayer 友好
-        for j, c in enumerate(cues):
-            zh = (done.get(j) or "").strip()
-            f.write(f"{j + 1}\n{_ts(c.start)} --> {_ts(c.end)}\n")
-            if zh:
-                f.write(zh + "\n")
-            f.write(c.text.strip() + "\n\n")
+        for k, (st, en, z, src) in enumerate(rows):
+            f.write(f"{k + 1}\n{_ts(st)} --> {_ts(en)}\n")
+            if z:
+                f.write(z + "\n")
+            f.write(src + "\n\n")
     try:
         os.replace(tmp, path)
     except OSError:

@@ -1092,3 +1092,45 @@ watch 模式同样无子进程/无 conhost。
 | 白色高亮 | 5 个内嵌页审计 0 处白底浅字 |
 | 图标 | 桌面/开始菜单快捷方式 Target=desktop\\BabelPlan.exe、Icon=exe,0 |
 | 回归 | check_admin_html 29/0、check_console_html 22/0、model_search 10/0 |
+
+
+---
+
+## 33. 直播丢字 / 视频断字与呈现（2026-10-18）
+
+### 33.1 直播翻译“丢字特别高”
+
+- 用结构化指标 `work/metrics_live.jsonl` 定位：57 个批次里约 30 段
+  被 **段级质量闸** 判废（约 50%），用户看到的就是大量丢字。
+- 打印真实信号后确认阈值照搬纯语音场景不合理：
+  - `nsp=0.657 / lgp=-0.434` 的“這35年 4個點基本夠”完全正确，却被
+    `nsp>=0.55` 误杀；
+  - 中文视频带 BGM，VAD 已经过滤真静音，nsp 仍会到 0.6~0.8。
+- 修复：`bad = lgp<=-1.05 or cr>=2.6 or (nsp>=0.90 and lgp<=-0.75)`；
+  实测同一视频连续批次 `rejected_lowq=0`，每批 `shown=1`。
+- 另修：ASR 字级时间戳用空格拼接导致原文“储 蓄 险 能…”；现在 CJK 字间
+  空格删除、英文/数字空格保留。
+
+### 33.2 视频翻译断字 / 整体不美观
+
+- 原因：预翻译 cue 常 8~16 秒、40~55 字一条；SRT/浮窗只能硬折行，
+  中文从词中间劈开，且一条字幕停留过久。
+- 新增 `subtitle_layout.py`：按软标点/空格/字符边界切短（每条约 24 字、
+  ≤5.5 秒），英文保护单词边界，时间按文本长度比例摊。
+- 三处接线：
+  - `watch_player.parse_srt()` 显示端切短（旧缓存立即变好看）；
+  - `pretranslate._split_long()` 生成端切短（新缓存/续跑）；
+  - `pretranslate.write_srt()` 写盘前切短（外部播放器也友好）。
+- 新增 `tools/rewrite_srt_layout.py` 可重排已有 SRT（自动 .bak）；
+  当前视频 SRT 实测 **347 → 655 条**，每条 2~5 秒。
+
+### 33.3 验证
+
+| 项 | 结果 |
+|---|---|
+| 直播质量闸 | 连续批次 `rejected_lowq=0`、`shown=1`，丢段消失 |
+| 直播原文 | CJK 字间空格已去掉 |
+| 视频显示 | watch 加载 655 条短 cue，浮窗在线输出 |
+| SRT 文件 | 当前视频重排 347→655 条（.bak 备份） |
+| 布局测试 | tools/test_subtitle_layout.py 8/0 |
+| 回归 | check_admin_html 29/0、check_console_html 22/0、model_search 10/0 |

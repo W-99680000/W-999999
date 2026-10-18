@@ -904,12 +904,23 @@ class BatchTranscriber:
             nsp = float(getattr(s, "no_speech_prob", 0) or 0)
             lgp = float(getattr(s, "avg_logprob", 0) or 0)
             cr = float(getattr(s, "compression_ratio", 0) or 0)
-            bad = (nsp >= 0.55) or (lgp <= -0.75) or (cr >= 2.4)
+            # 阈值不能照搬纯语音：中文视频常带 BGM/音效，VAD 已过滤真静音，
+            # 但 nsp（no_speech_prob）仍会到 0.6~0.8，而文本完全正确。
+            # 实测（本机中文视频）：nsp=0.657/lgp=-0.434 的
+            # “這35年 4個點基本夠”被原阈值 0.55 误杀 → 用户看到大量丢字。
+            # 现在 nsp 只在与低置信度同时出现时才判废；单看 lgp/cr。
+            bad = ((lgp <= -1.05) or (cr >= 2.6)
+                   or (nsp >= 0.90 and lgp <= -0.75))
             self.last_quality.append((nsp, lgp, cr, bad, s.text.strip()[:40]))
             if not bad:
                 keep.append(s)
             else:
                 self.rejected_lowq += 1
+                # 诊断：为什么丢这段（阈值调参依据；前 30 条足够看）
+                if self.rejected_lowq <= 30:
+                    print(f"  质量闸丢弃 #{self.rejected_lowq}: "
+                          f"nsp={nsp:.3f} lgp={lgp:.3f} cr={cr:.2f} "
+                          f"文本={s.text.strip()[:38]!r}", flush=True)
         segs_out = keep
         # 把检测结果留给调用方（LanguageLock 用它锁定源语言，
         # 翻译器再据此选路 —— 原来这里丢了，导致翻译器一直用 args.src）
@@ -943,6 +954,18 @@ class BatchTranscriber:
             out[k].append(w.word.strip())
         # 中文无空格，但英文要空格连；统一用空格连再压掉多余空格
         res = [re.sub(r"\s{2,}", " ", " ".join(ws)).strip() for ws in out]
+        # word 级时间戳是“每个汉字一个 word”，用空格连起来会变成
+        # “储 蓄 险 能…”。中文必须去掉字间空格；英文/数字之间的空格保留。
+        res = [
+            re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff，。！？、；：）】」』”’])",
+                   "", x)
+            for x in res
+        ]
+        res = [
+            re.sub(r"(?<=[，。！？、；：（【「『“‘])\s+(?=[\u4e00-\u9fff])",
+                   "", x)
+            for x in res
+        ]
         # 幻觉过滤：whisper 在静音/低能量上会复读，那种文本不能进字幕
         for i, s in enumerate(res):
             if is_hallucination(s):

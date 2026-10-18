@@ -960,3 +960,14 @@ MIT
 - App 图标：`desktop\BabelPlan.exe`（PyInstaller 嵌入 babel.ico）是
   app 自身带图标的启动器；快捷方式优先指向它。没有 exe 时退回
   wscript + BabelPlan.vbs（同样无黑窗）。
+
+## 字幕断行与直播丢字（2026-10-18）
+
+- 直播翻译原来把 whisper 字级时间戳用空格拼接，中文变成“储 蓄 险 能…”；
+  且质量闸 `nsp>=0.55` 会误杀带 BGM 的正常中文语音（实测丢段约 50%）。
+  现在 CJK 字间空格去掉，质量闸改为 `lgp<=-1.05 / cr>=2.6 /
+  (nsp>=0.90 且 lgp<=-0.75)`，正常语音不再丢字。
+- 视频翻译新增 `subtitle_layout.py`：长 cue 按标点/空格切短到约 24 字、
+  ≤5.5 秒；显示端（watch）、生成端（pretranslate）、写盘都接线。
+- 旧 SRT 可用 `python tools/rewrite_srt_layout.py "xxx.zh.srt"` 重排
+  （自动 .bak 备份）。
