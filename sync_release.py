@@ -58,7 +58,9 @@ BENCH = ["bench_latency.py", "bench_localagree.py", "bench_fastest.py",
          "_diag_watch.py", "_diag_smtc_self.py", "_diag_chunk_speed.py",
          "_smoke_overlay.py", "_repro_stuck.py", "_verify_switch.py",
          "_verify_hotreload.py", "_verify_incremental.py",
-         "_verify_rolling.py", "_cmp_chunk_full.py", "_prestore_vs_live.py"]
+         "_verify_rolling.py", "_cmp_chunk_full.py", "_prestore_vs_live.py",
+         "_verify_quality_gates.py",  # 质量闸/SRT 真实时长回归
+         "_bench_batched_asr.py"]     # 顺序 vs 批推理基准
 TOOLS = ["test_pipeline.py", "test_borrowed.py", "test_drag2.py", "test_loopback3.py", "test_vietnamese.py",
          "test_mymemory.py", "test_google_free.py", "test_google_sustained.py",
          "compare_vi_paths.py", "compare_vi_models.py", "compare_vi3.py",
@@ -73,7 +75,7 @@ TOOLS = ["test_pipeline.py", "test_borrowed.py", "test_drag2.py", "test_loopback
          "_probe_streaming_asr.py",   # 流式 WebSocket 探测
          "_probe_streaming2.py",      # 流式精确延迟（修正版）
          "_measure_e2e_lag.py", "_bench_wlk.py", "_bench_wlk2.py", "_bench_wlk3.py", "_probe_wlk.py", "_bench_readside.py", "_bench_stream_vs_chunk.py", "_bench_stream_clean.py", "_bench_hybrid.py", "_bench_hybrid2.py", "_bench_stream_accuracy.py", "_eye3.py", "_watch.py", "_bench_unit_size.py", "_probe_units.py", "_bench_capture_latency.py", "_bench_7b_v2.py", "_bench_7b.py", "_bench_hymt_official.py", "_inspect_gguf.py", "_inspect_hymt_iface.py", "_bench_local_mt.py", "_bench_hymt_prompt.py", "_bench_hymt_template.py", "_bench_vi_local_vs_remote.py", "_bench_dsp_gate.py", "_bench_mt_batch.py", "_bench_mt_cost.py", "_test_full_gpu.py", "_test_multilang.py", "_test_compare.py", "_bench_gpu.py", "_bench_ja.py", "_diag_ja.py", "_diag_ja2.py", "_bench_punct_split.py", "_bench_punct2.py", "_bench_merge_translate.py", "_bench_decouple.py", "_bench_params.py",       # 端到端延迟主测量工具
-         "_measure_lag.py", "_trace_drop.py", "_capture_streaming.py"]
+         "_measure_lag.py", "_trace_drop.py", "_capture_streaming.py", "quality_report.py", "check_qwen_terms.py", "check_admin_html.py"]
 # 样本：只放跑得动的小文件。vi_long.wav / vi_sample.wav 是几 MB 的
 # 真实素材，属于本地测试资产，不进仓库。
 # streaming_msgs.json 是流式协议的真实消息序列（96KB），

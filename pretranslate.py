@@ -481,6 +481,23 @@ def _try_merge(cur, pst, pen, ptxt):
     return None
 
 
+def transcribe_batched(pipe, audio, lang=None, prompt=None, tag="",
+                       batch_size=8):
+    """整块批推理：返回 (segments, info)。比流式快 ~2.9×（120s 实测），
+    代价是 segment 更粗（见 bench/_bench_batched_asr.py），所以只在
+    --asr-batch > 0 且块够长时用；首块仍走流式保首屏。"""
+    t0 = time.time()
+    segs, info = pipe.transcribe(
+        audio, batch_size=batch_size, beam_size=5,
+        vad_filter=True, word_timestamps=True,
+        condition_on_previous_text=True,
+        initial_prompt=(prompt or None))
+    out = list(segs)
+    print(f"  识别{tag} 批推理 {len(out)} 段 / {len(audio)/16000:.0f}s，"
+          f"用时 {time.time()-t0:.1f}s（batch={batch_size}）")
+    return out, info
+
+
 def iter_chunk_cues(model, audio, lang=None, prompt=None, tag="",
                     info_box=None):
     """**边识别边产出**已封尾的 cue（块内相对时间）—— 生成器。
@@ -804,6 +821,16 @@ def process(src, args):
     start_sec = cues[-1].end if cues else 0.0
 
     model = load_asr(args.model)
+    _asr_pipe = None
+    _asr_batch = int(getattr(args, "asr_batch", 0) or 0)
+    if _asr_batch > 0:
+        try:
+            from faster_whisper import BatchedInferencePipeline
+            _asr_pipe = BatchedInferencePipeline(model=model)
+            print(f"  批推理开启（batch={_asr_batch}；首块仍走流式）")
+        except Exception as e:
+            print(f"  批推理不可用（{type(e).__name__}: {e}），退回顺序识别")
+            _asr_pipe = None
     tr = None
     # 跨块上下文：用上一块末尾的原文当 initial_prompt，把语气接上
     prompt = cues[-1].text[-120:] if cues else None
@@ -851,9 +878,21 @@ def process(src, args):
         # 块内流水：识别一句产一句，凑够一批（mt_batch 条）就翻译落盘 ——
         # 首屏从"整块识别完+整块翻译完"提前到"头一批译完"。
         got_any = False
-        for c in iter_chunk_cues(model, audio[int(a * sr):int(b * sr)],
-                                 lang=(args.lang or None), prompt=prompt,
-                                 tag=tag, info_box=info_box):
+        _chunk_audio = audio[int(a * sr):int(b * sr)]
+        if _asr_pipe is not None and (b - a) >= 60:
+            _segs, _info = transcribe_batched(
+                _asr_pipe, _chunk_audio, lang=(args.lang or None),
+                prompt=prompt, tag=tag, batch_size=_asr_batch)
+            info_box["language"] = getattr(_info, "language", None)
+            info_box["language_probability"] = getattr(
+                _info, "language_probability", 0.0)
+            _cue_iter = iter(build_cues(_segs))
+        else:
+            _cue_iter = iter_chunk_cues(
+                model, _chunk_audio,
+                lang=(args.lang or None), prompt=prompt,
+                tag=tag, info_box=info_box)
+        for c in _cue_iter:
             got_any = True
             c.start += a                       # 块内相对时间 → 全局时间
             c.end += a
@@ -964,6 +1003,9 @@ def build_parser():
                     help="一次调用合并翻译的条数（默认 8；失败自动退回逐条）")
     ap.add_argument("--mt-local", action="store_true",
                     help="用本地 HY-MT 翻译（完全离线）")
+    ap.add_argument("--asr-batch", type=int, default=0,
+                    help="faster-whisper 批推理 batch（0=关；建议 8，"
+                         "长片提速约 2.9×，segment 会变粗）")
     ap.add_argument("--terms", action="append", default=[],
                     help="术语：'源词=译法' 或术语表文件（仅 --mt-local 生效）")
     ap.add_argument("--force", action="store_true", help="忽略缓存重跑")

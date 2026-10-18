@@ -547,3 +547,42 @@ AlignAtt/SimulStreaming 需 cross-attention 且推荐 ≥10GB 显存 → 只列 
 | 	ools/check_admin_html.py | 28 通过 / 0 失败 |
 | 	ools/doctor.py | 退出码 0 |
 | 直播 E2E 样本 | SRT 4 条、spans [2.455,1.182,1.5,4.26]、无重叠；指标 natural=2 |
+
+---
+
+## 20. 视频翻译批推理（可选）+ 消费级首页（2026-10-18 第三轮）
+
+### 20.1 视频翻译 --asr-batch（默认 0=关，长片提速）
+
+- 实测 ench/_bench_batched_asr.py（large-v3，真实 120s 音频）：
+  | 方案 | 首段产出 | 总耗时 | 段数 | 字符 | 文本相似度(词集) |
+  |---|---|---|---|---|---|
+  | 顺序识别（现状） | 3.36s | 12.18s | 43 | 513 | — |
+  | 批推理 batch=8 | 4.24s | 4.24s | 4 | 461 | 0.83 |
+  总耗时 **2.9×** 加速；代价：batch 的 segment 更粗（cue 19→11），
+  所以**默认关闭**，只在 --asr-batch 8 且块 ≥60s 时启用；首块仍走流式，
+  保住"第一屏"延迟。
+- 接线：pretranslate.py 新增 	ranscribe_batched()，块循环里长块走
+  uild_cues(batched_segments)，短块/首块仍用 iter_chunk_cues（流式）。
+  集成实测：386s 音频（5 块）总用时 12s（识别+翻译），批推理路径实际跑到。
+- 后续要做的（下一轮）：批推的 cue 更粗，需要在 uild_cues 前用
+  word 时间戳 + 静音间隙重新切句（或做标点恢复），再把默认值打开。
+
+### 20.2 消费级首页（后台去"丑"第一步）
+
+- 左侧新增「总览 → 首页」，默认打开首页：两个大卡片
+  「开始直播翻译」「打开视频翻译」，模型/浮窗/记录/设置仍在左侧导航；
+  首页时自动隐藏工具栏。
+- 实现：abel_admin/index.html 新增 iew-home、VIEW_TITLE.home、
+  data-go 按钮绑定、默认 setView("home")、首页隐藏 .toolbar。
+- 校验：	ools/check_admin_html.py 28/0（结构 + 两段 JS 语法）。
+
+### 20.3 本轮验证
+
+| 项 | 结果 |
+|---|---|
+| ench/_bench_batched_asr.py（新） | 120s：12.18s→4.24s（2.9×），首段 3.36→4.24s |
+| pretranslate.py --asr-batch 8 集成 | 386s 音频 5 块，12s 完成，批推理路径生效 |
+| ench/_verify_quality_gates.py | 25/0（回归） |
+| 	ools/check_admin_html.py | 28/0（首页新增后） |
+| pretranslate.py/llm_translate/live selftest | 编译通过；selftest 174/0（上一轮） |
