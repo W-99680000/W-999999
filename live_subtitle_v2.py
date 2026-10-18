@@ -79,6 +79,30 @@ TARGET_RATE = 16000
 SETTINGS = os.path.join(HERE, "overlay_settings.json")
 
 
+def _hf_model_cached(name) -> bool:
+    """HF 缓存里有没有这个 faster-whisper 模型。
+
+    用途：有缓存时给 WhisperModel 传 local_files_only=True，跳过
+    huggingface 的元数据请求。实测教训：缓存明明在，代理抖动时那一步
+    能把启动从 4s 拖到 12s+；原来的写法是"网络失败后再用离线重试"，
+    属于先撞墙再绕。这里改成先判断。
+    """
+    if not name:
+        return False
+    if os.path.isdir(str(name)):        # 直接给了本地目录
+        return False
+    key = str(name).lower().replace("_", "-")
+    hub = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+    try:
+        for d in os.listdir(hub):
+            dl = d.lower()
+            if "faster-whisper" in dl and key in dl:
+                return True
+    except OSError:
+        pass
+    return False
+
+
 def make_dpi_aware():
     """必须最先调用。
 
@@ -684,19 +708,18 @@ class BatchTranscriber:
         # 降级状态：资源类错误退 CPU 后置位，避免反复重建
         self.fell_back_to_cpu = False
         self.fallback_reason = ""
+        _kw = dict(device=device, compute_type=compute_type, cpu_threads=threads)
+        _local = _hf_model_cached(model)
         try:
-            self.m = WhisperModel(model, device=device,
-                                  compute_type=compute_type,
-                                  cpu_threads=threads)
+            # 缓存命中 → local_files_only，跳过 HF 元数据联网（启动更稳）
+            self.m = WhisperModel(model, local_files_only=_local, **_kw)
         except Exception:
             # **区分"模型坏"和"网络坏"。** faster-whisper 加载**已缓存**
             # 的模型前也会先问 huggingface hub；代理故障（实测 502）时
             # 这一步直接抛，整机启动崩掉。网络类失败时用 HF_HUB_OFFLINE
             # 重试一次：缓存完整就照常加载，缓存不全才真报错。
             os.environ["HF_HUB_OFFLINE"] = "1"
-            self.m = WhisperModel(model, device=device,
-                                  compute_type=compute_type,
-                                  cpu_threads=threads)
+            self.m = WhisperModel(model, local_files_only=True, **_kw)
         self.max_batch = max_batch
         self.max_wait = max_wait
         # 远端识别器。非 None 时 transcribe_batch 会改走它
@@ -1558,6 +1581,73 @@ def run(args):
     print("=" * 64)
     print("live-subtitle v2")
     print("=" * 64)
+    _t0_start = time.time()
+
+    # ══════════════════════════════════════════════════════════════
+    # 先建浮窗/采集/分段器/字幕文件，**模型放到后台加载**。
+    # 实测（work/startup_stats.json）：原来总启动 4.49s，其中模型加载
+    # 4.15s（92%），而且发生在浮窗出现之前 —— 点"启动"后 4 秒里屏幕上
+    # 什么都没有，开头几秒音频还会因为采集未启动而丢掉。现在：
+    #   · 浮窗 ~0.3s 出现，显示"正在加载识别模型…"
+    #   · 采集立刻开始，音频先进队列（16s 容量），不丢开头
+    #   · 模型在后台线程加载，主线程只 pump 浮窗（Qt 要求 GUI 在主线程）
+    # ══════════════════════════════════════════════════════════════
+    ov = None
+    if not args.no_overlay:
+        try:
+            ov = Overlay(font_size=args.font_size)
+            ov.flash("正在加载识别模型…", 30.0)
+            print(f"浮窗位置: {ov.geo[0]},{ov.geo[1]}  "
+                  f"尺寸 {ov.geo[2]}x{ov.geo[3]}  "
+                  f"flags=0x{int(ov.w.windowFlags()):08X}"
+                  f"（启动后 {time.time() - _t0_start:.1f}s）")
+            SS.mark("浮窗就绪")
+            # 注意：flush_ready 放到**模型加载完**再调用 —— 启动统计记的是
+            # "整条链路就绪"（ASR 能干活），浮窗提前出现这一点单独看日志。
+        except Exception as _e:
+            print(f"！浮窗创建失败：{type(_e).__name__} {_e}")
+            ov = None
+    cap = LoopbackCapture(chunk_ms=getattr(args, "chunk_ms", 10.0)).start()
+    print(f"采集: [{cap.dev['index']}] {cap.dev['name'][:44]}")
+    SS.mark("音频采集")
+    seg = Segmenter(min_len=args.min_seg, max_len=args.max_seg,
+                    silence=args.vad_silence)
+    srt = SrtWriter(args.srt) if args.srt else None
+    if srt:
+        print(f"字幕文件: {args.srt}　（播放器加载它，不依赖浮窗）")
+    # 被管理端叫停的开关必须最早装：这样"还在加载模型时点停止"也能退出
+    stop = _install_kill_switch()
+
+    def _load_model_bg(factory, label="识别模型"):
+        """在后台线程建模型；主线程在此期间只 pump 浮窗。
+
+        返回建好的对象。构造抛异常时**原样抛回**（不在线程里吞掉），
+        保持原有"模型加载失败就退出"的语义。
+        """
+        box = {}
+
+        def _work():
+            try:
+                box["obj"] = factory()
+            except Exception as _e:       # noqa: BLE001 —— 交回主线程处理
+                box["err"] = _e
+
+        _t = threading.Thread(target=_work, daemon=True, name="model-load")
+        _t.start()
+        _last = 0.0
+        while _t.is_alive():
+            if ov is not None:
+                ov.pump()
+            time.sleep(0.02)
+            if time.time() - _last > 2.0:
+                _last = time.time()
+                print(f"  …正在加载{label}（已 "
+                      f"{time.time() - _t0_start:.0f}s，浮窗已就绪）",
+                      flush=True)
+        if "err" in box:
+            raise box["err"]
+        return box["obj"]
+
     # 译器实例缓存 + 当前键（None = 让 Google 自己判源语言）。
     # **必须在初始化 tr 之前定义**（我第一版放在它后面，启动即
     # UnboundLocalError: _tr_key）。
@@ -1684,11 +1774,12 @@ def run(args):
         # 永远不触发（th.last_lang 没人写）。与分块路线对齐：
         # 默认自动检测（None），要固定语言用 --lang + --no-detect。
         _st_lang = None if args.detect else (args.lang or None)
-        th = StreamingTranscriber(
+        th = _load_model_bg(lambda: StreamingTranscriber(
             model=args.stream_model, threads=args.threads,
             language=_st_lang, update_interval=args.stream_interval,
             tail_seconds=args.stream_tail, max_buffer=args.stream_maxbuf,
-            device=_st_dev, compute_type=_st_ct)
+            device=_st_dev, compute_type=_st_ct), "流式识别模型")
+        print(f"  ✓ 流式识别模型就绪（启动后 {time.time() - _t0_start:.1f}s）")
         print(f"转写: 流式 {args.stream_model}（LocalAgreement-2）"
               f"　更新间隔 {args.stream_interval}s　tail {args.stream_tail}s"
               f"　上限 {args.stream_maxbuf}s　设备 {_st_dev}/{_st_ct}")
@@ -1853,10 +1944,17 @@ def run(args):
             print(f"  放置：识别 → {_ra.name[:40]}　翻译 → {_rb.name[:40]}")
             for _w in dict.fromkeys(_why):        # 去重后打印
                 print(f"    · {_w}")
-            try:
-                _DPREF.save_preference(_ra.id, _rb.id, _devs)
-            except Exception:
-                pass
+            # **不要在"临时故障回退 CPU"时把偏好写死。**
+            # 实测踩到（2026-10-18）：CUDA DLL 缺失那次，放置回退到 CPU 并
+            # 自动保存了偏好，之后即使环境修好也一直用 CPU（用户观感是
+            # "越来越慢"）。规则：① 选中的不是 CPU → 保存；② 机器确实没有
+            # 可识别 GPU → 保存 CPU 合理；③ 用户显式指定 CPU → 保存。
+            _gpu_recog = any(d.id != "cpu" and d.can_recognition for d in _devs)
+            if (_ra.id != "cpu" or not _gpu_recog or _recog_want == "cpu"):
+                try:
+                    _DPREF.save_preference(_ra.id, _rb.id, _devs)
+                except Exception:
+                    pass
             _use_gpu = (_ra.id != "cpu")
             if _use_gpu and _ra.backend not in ("cuda", "rocm"):
                 # llama.cpp 报的 Vulkan 设备：识别走 ctranslate2，
@@ -1875,21 +1973,25 @@ def run(args):
                     print(f"    · 实测探测失败: {type(e).__name__} {e}")
                     _use_gpu = False
         if _use_gpu:
-            th = BatchTranscriber(args.model, args.threads,
-                                  max_batch=args.max_batch,
-                                  max_wait=args.max_wait,
-                                  device="cuda", compute_type="float16")
+            th = _load_model_bg(lambda: BatchTranscriber(
+                args.model, args.threads,
+                max_batch=args.max_batch, max_wait=args.max_wait,
+                device="cuda", compute_type="float16"),
+                f"识别模型 {args.model}/float16")
             args.remote_asr = False        # 本地可用时不走远端
             print(f"  识别：本地 GPU　模型 {args.model}　float16")
         elif _dev == "cuda":
             print("  指定了 --device cuda 但 GPU 不可用，回退")
-            th = BatchTranscriber(args.model, args.threads,
-                                  max_batch=args.max_batch,
-                                  max_wait=args.max_wait)
+            th = _load_model_bg(lambda: BatchTranscriber(
+                args.model, args.threads,
+                max_batch=args.max_batch, max_wait=args.max_wait),
+                f"识别模型 {args.model}")
         else:
-            th = BatchTranscriber(args.model, args.threads,
-                                  max_batch=args.max_batch,
-                                  max_wait=args.max_wait)
+            th = _load_model_bg(lambda: BatchTranscriber(
+                args.model, args.threads,
+                max_batch=args.max_batch, max_wait=args.max_wait),
+                f"识别模型 {args.model}")
+        print(f"  ✓ 识别模型就绪（启动后 {time.time() - _t0_start:.1f}s）")
         # ── 远端识别（仅在没有可用 GPU 时）──────────────────────
         # 本地 CPU 的延迟已到天花板（_bench_bottleneck.py 实测）：
         #   一次 transcribe 固定成本 ≈ 2.0 秒，**与音频长短无关**
@@ -1948,39 +2050,27 @@ def run(args):
         SS.mark("转写器")
         print("      优点：字幕与音频同步、不积压")
         print("      代价：要等整段说完（首字延迟 = 段长 + 1.5s）")
-    cap = LoopbackCapture(chunk_ms=getattr(args, "chunk_ms", 10.0)).start()
-    print(f"采集: [{cap.dev['index']}] {cap.dev['name'][:44]}")
-    SS.mark("音频采集")
     print("控制：**拖动字幕本身**移动（整块都能拖，点一下不会动）")
     print("      滑轮字号　Shift+滑轮条数　Alt+滑轮宽度　Ctrl+滑轮透明度")
     print("      方向键微调　L 排布　J 对齐　M 调整模式　T 深浅底")
     print("      H 隐藏　R 重置　C 回默认位置　Esc 退出\n")
 
-    seg = Segmenter(min_len=args.min_seg, max_len=args.max_seg,
-                    silence=args.vad_silence)
-    ov = None if args.no_overlay else Overlay(font_size=args.font_size)
-    srt = SrtWriter(args.srt) if args.srt else None
-    if srt:
-        print(f"字幕文件: {args.srt}　（播放器加载它，不依赖浮窗）")
+    # 模型已就绪：撤掉"正在加载"提示，闪一行 ready，随后切常驻提示。
+    # 为什么常驻：没有音频时浮窗是全透明的（bg_alpha=0），"程序在跑但没
+    # 声音"和"程序没启动"看起来完全一样 —— 操作者几次报"字幕消失"都是它。
     if ov:
-        # 先闪一行让用户确认框在哪；随后由 idle_hint() 接替成**常驻**的
-        # "正在听"提示。为什么需要常驻：没有音频时浮窗是全透明的
-        # （bg_alpha=0），于是"程序在跑但没声音"和"程序没启动"看起来
-        # 完全一样 —— 操作者几次报"字幕消失"都是这个。
+        try:
+            ov.clear()
+        except Exception:
+            pass
         ov.flash("live-subtitle ready — listening…", 3.0)
-        print(f"浮窗位置: {ov.geo[0]},{ov.geo[1]}  尺寸 {ov.geo[2]}x{ov.geo[3]}  "
-              f"flags=0x{int(ov.w.windowFlags()):08X}")
-        SS.mark("浮窗就绪")
         SS.flush_ready({"mode": getattr(args, "mode", "")})
         try:
             from PyQt5.QtCore import QTimer
             QTimer.singleShot(3200, ov.idle_hint)
         except Exception:
             ov.idle_hint()
-    # 被管理端（babel_admin/serve.py）叫停的开关。
-    # 放在**建浮窗/采集之前**：这样"刚启动就被点停止"也不会留下半截进程。
-    stop = _install_kill_switch()
-    if ov is None:
+    else:
         SS.mark("无浮窗模式")
         SS.flush_ready({"mode": getattr(args, "mode", "")})
 
@@ -2018,10 +2108,14 @@ def run(args):
                 except Exception:
                     pass
 
-        _qt_timer = QTimer()
-        _qt_timer.timeout.connect(_flush_ui)
-        _qt_timer.start(40)
-        print("浮窗更新：主线程 QTimer（Qt 要求 GUI 在主线程）")
+        # 无浮窗模式不建 QTimer：没有 QApplication 时建了也不会转，
+        # 还会在 stderr 刷 "Timers can only be used with threads started
+        # with QThread"（--no-overlay / 自检场景）。
+        if ov is not None:
+            _qt_timer = QTimer()
+            _qt_timer.timeout.connect(_flush_ui)
+            _qt_timer.start(40)
+            print("浮窗更新：主线程 QTimer（Qt 要求 GUI 在主线程）")
     except Exception as e:
         print(f"QTimer 建立失败: {type(e).__name__}")
 
@@ -2156,6 +2250,9 @@ def run(args):
             while True:
                 if ov:
                     ov.pump()
+                if stop.is_set():
+                    print("  收到停止信号，退出流式循环")
+                    break
                 blk = cap.read(timeout=0.25)
                 if blk is not None:
                     th.feed(to_mono16k(blk, cap.rate, cap.ch))
@@ -2249,200 +2346,157 @@ def run(args):
                   f"低置信判定拒票 {lang_lock.rejected_lowconf} 次")
         return
 
+    # ══════════════════════════════════════════════════════════════
+    # ASR 移出主线程（本轮优化 3）
+    # 原来 transcribe_batch 在主循环里同步跑：GPU 0.31~0.87s/批、CPU ~2s。
+    # 这期间 ov.pump() 停摆（浮窗拖不动、QTimer 不触发），而且**已译好的
+    # 字幕要等这批 ASR 结束才上屏** —— 翻译明明并行，显示却没有并行。
+    # 现在：ASR 丢单 worker；主循环只做 pump / 收音频 / 排空显示队列。
+    # ══════════════════════════════════════════════════════════════
+    _asr_pool = _concurrent.ThreadPoolExecutor(max_workers=1)
+    _asr_fut = None
+    _asr_job = None
+    _shown_n = [0]                 # 累计上屏段数（日志用，别再只看当前批）
+
+    def _drain_count():
+        """排空已译好的批次，并累计"上屏了多少段"。
+
+        为什么要累计：翻译是并行的，ASR 批做完那一刻译文往往还没回来，
+        逐批打印"本次上屏 0 段"会让人误以为字幕没上屏（旧日志的
+        "已显示 0 段"就是这个坑）。累计数才反映真实产出。
+        """
+        _n = _drain_translations(block=False)
+        _shown_n[0] += _n
+        return _n
+
+    def _switch_by_lang():
+        """按最近一批 ASR 的检测结果换译器/给提示（与原逻辑一致）。"""
+        nonlocal tr
+        want = _pick_offline_source(th.last_lang, th.last_lang_prob,
+                                    allow_offline=args.prefer_offline)
+        cur_src = "en" if want else None
+        _switch_translator(
+            cur_src,
+            reason=f"；本批检测 {th.last_lang}/{th.last_lang_prob:.2f}")
+        tr = _tr_cache.get(_tr_key[0], tr)
+        _hint = (th.last_lang
+                 if (th.last_lang and th.last_lang_prob >= 0.85) else None)
+        if _hint != tr.src_hint:
+            tr.src_hint = _hint
+
+    def _mt_maybe_flush():
+        """把攒好的语义单元提交给翻译线程（攒够 / 窗口到期）。"""
+        nonlocal mt_units, mt_first_t
+        if not mt_units:
+            return
+        _now = time.time()
+        _due = (len(mt_units) >= args.mt_batch
+                or (mt_first_t is not None
+                    and _now - mt_first_t >= args.mt_batch_wait))
+        if not _due:
+            if mt_first_t is None:
+                mt_first_t = _now
+            return
+        _units = mt_units[:]
+        mt_units = []
+        mt_first_t = None
+        _tr_now = tr                  # 快照：批边界可能换译器
+        _bno = _seq_in[0]
+        _seq_in[0] += 1
+        _segs_b = [(_ph_seg, u) for u in _units]
+
+        def _do_batch(_bno, _units, _segs, _tr):
+            """一次调用译多个语义单元（分隔符格式）。"""
+            try:
+                from llm_translate import translate_batch
+                _zh = translate_batch(_tr, _units,
+                                      max_items=max(2, args.mt_batch))
+            except Exception as _e:
+                print(f"  翻译线程异常: {type(_e).__name__} {_e}")
+                _zh = ["" for _ in _units]
+            if len(_zh) != len(_units):
+                # 长度对不上宁可退回逐条，也不能错位
+                try:
+                    _zh = [_tr(u) for u in _units]
+                except Exception:
+                    _zh = ["" for _ in _units]
+            done_q.put((_bno, _segs, _zh))
+
+        _th_pool.submit(_do_batch, _bno, _units, _segs_b, _tr_now)
+
+    def _on_asr_done():
+        """主线程消费一批 ASR 结果：翻译节拍 + 提交翻译 + 显示诊断。"""
+        nonlocal mt_pending, mt_units, mt_first_t, _asr_fut, _asr_job
+        job = _asr_job
+        _asr_job = None
+        fut, _asr_fut = _asr_fut, None
+        segs_in = job["segs"]
+        t_asr = time.time() - job["t0"]
+        texts = fut.result()          # 异常按原有语义向上抛
+        # 投票只用于诊断显示，不再决定路由
+        lang_lock.observe(th.last_lang, th.last_lang_prob)
+        _switch_by_lang()
+        _keep = [(segs_in[i], texts[i]) for i in range(len(texts))
+                 if texts[i]]
+        # ── 翻译节拍与识别节拍解耦 ──────────────────────────────
+        # 静音切出的段（长度 < max_seg）是自然句边界；长度顶到 max_seg 的
+        # 是强制切分，不是语义边界。识别继续小块高频，翻译等自然边界或
+        # 攒够 mt_cap 秒再做（实测：识别块 4s 的译文比 1.5s 完整得多）。
+        _is_natural = any(len(s) / TARGET_RATE < args.max_seg - 0.05
+                          for s in segs_in)
+        mt_pending.extend(_keep)
+        _pt = sum(len(s) / TARGET_RATE for s, _ in mt_pending)
+        _flush = (args.mt_cap <= 0 or _is_natural or _pt >= args.mt_cap)
+        if mt_pending and _flush:
+            mt_units.append(" ".join(t for _s, t in mt_pending))
+            mt_pending = []
+        _mt_maybe_flush()
+        _n_shown = _drain_count()
+        _g = getattr(th, "gate", None)
+        _gt = (getattr(_g, "threshold_dbfs", None) if _g else None)
+        _rs = getattr(th, "last_remote_stats", {}) or {}
+        print(f"      (批次 {job['nb']}：{len(segs_in)} 段 / "
+              f"{job['dur']:.1f}s 音频，转写 {t_asr:.2f}s；"
+              f"翻译并行，本批 {_n_shown} 段 / 累计 {_shown_n[0]} 段)"
+              f"　[门 {('%.0f' % _gt) if _gt is not None else '未校准'}"
+              f" 拒{getattr(_g, 'rejected', 0) if _g else 0}"
+              f" 远端 {_rs.get('txt_len', '-')}字"
+              f" 失{_rs.get('fails', '-')}]")
+
     try:
         while True:
             if ov:
-                ov.pump()          # 主线程跑事件循环
-            blk = cap.read(timeout=0.25)
+                ov.pump()          # 主线程跑事件循环（每轮都跑）
+            if _asr_fut is not None and _asr_fut.done():
+                _on_asr_done()
+            # 50ms 超时（原来 250ms）：ASR 在后台/静音时浮窗也不卡顿
+            blk = cap.read(timeout=0.05)
             if blk is not None:
                 for s in seg.push(to_mono16k(blk, cap.rate, cap.ch)):
                     pending.append(s)
                     if pend_since is None:
                         pend_since = time.time()
-            # 触发条件：攒够时长 或 等够时间
+            # 触发条件：攒够时长 或 等够时间（ASR 在飞时只攒不发）
             batch_dur = sum(len(x) for x in pending) / TARGET_RATE
             waited = (time.time() - pend_since) if pend_since else 0
-            due = pending and (batch_dur >= args.max_batch or waited >= args.max_wait)
-            # ── 合并翻译的"窗口到期"必须在**每一轮**检查，不能只在有批时查 ──
-            # 这是实测踩出来的真 bug：原来这段检查写在下面 `if segs_in`
-            # 的分支里（即只在"切出段的那一瞬"评估），而切段间隔是
-            # 2~4 秒 —— 0.35 秒的窗口在两次检查之间白白过去了，永远不触发。
-            # 后果：单元只能等"攒够 mt_batch 个"才发，稀疏语音下
-            # 14 个识别批次只显示 2~3 条字幕，观感就是"字幕消失"。
-            # 探针实测（_probe_units.py）：
-            #     b6 t=12.4s 设了 mt_first，下次检查是 b7 t=16.0s
-            #     中间 3.6 秒，0.35s 窗口早就过了却没被评估
-            if mt_units and mt_first_t is not None \
-                    and time.time() - mt_first_t >= args.mt_batch_wait:
-                mt_flush_now = True
-            else:
-                mt_flush_now = False
-            if not due and not mt_flush_now:
-                # **每轮都要顺手显示已译好的批次，不能只在新识别批时显示。**
-                # 原来这里直接 continue，而 _drain_translations 在循环底部 ——
-                # 译文回来了却要等下一个 ASR 批触发才露面。稀疏语音下
-                # "最后一句"之后没有新音频，due 永远为 False，
-                # 译文可能一直不显示（观感 = 字幕消失）。
-                _drain_translations(block=False)
-                continue
-
-            if not due:
-                # 只刷翻译批：这一轮没有新音频要识别
-                segs_in, batch_dur, t_asr = [], batch_dur, 0.0
-            else:
-                segs_in, pending, pend_since = pending, [], None
+            due = bool(pending) and (batch_dur >= args.max_batch
+                                     or waited >= args.max_wait)
+            # 翻译窗口到期：**每一轮**都检查（原来只在有 ASR 批时评估，
+            # 0.35s 窗口会在两次切段之间白白错过 —— 实测 14 批只出 2~3 条）
+            _mt_maybe_flush()
+            if due and _asr_fut is None:
+                _lang = None if args.detect else (args.lang or None)
                 n_batch += 1
-            t0 = time.time()
-            # ── 源语言：完全不做"锁定"，每批独立决策 ──────────────
-            # 操作者要求去掉语言锁定。为什么可以去掉：
-            #   ① Google 那条路本来就是 sl=auto（它自己判源语言，实测比
-            #      whisper 准，而且**快 2.8 倍**：0.86s vs 2.36s）
-            #   ② 锁定唯一的用途是**选译器**（en→argos 离线，其余→Google）
-            # 所以"去掉锁定"= 把这一个决策从"累计投票的结果"改成
-            # "本批自己的检测结果"。
-            #
-            # **但要防一个坑**：Translator("en") 会走 argos。如果 whisper
-            # 把俄语误判成 en，就会把俄语喂给 en→zh 模型 → 输出垃圾。
-            # 所以路由到 argos 的门槛比"能锁定"更高：要 conf >= 0.85。
-            # 达不到就退到 Google + sl=auto（那条路判错也无所谓）。
-            #
-            # 译器实例缓存：argos 加载模型有开销，不能每批重建。
-            want = _pick_offline_source(th.last_lang, th.last_lang_prob,
-                                         allow_offline=args.prefer_offline)
-            cur_src = "en" if want else None
-            # 命中缓存零等待；未命中后台构建，旧译器继续服务（不冻字幕）
-            _switch_translator(
-                cur_src,
-                reason=f"；本批检测 {th.last_lang}/{th.last_lang_prob:.2f}")
-            tr = _tr_cache.get(_tr_key[0], tr)
-            # 源语言提示：高置信才给（低了宁可 auto，不给错误暗示）
-            _hint = (th.last_lang
-                     if (th.last_lang and th.last_lang_prob >= 0.85)
-                     else None)
-            if _hint != tr.src_hint:
-                tr.src_hint = _hint
-            # **强制指定语言是错的默认。** 实测：越南新闻被强制按 en 识别时，
-            # whisper 不是"听错"，而是**把越南语直接意译成英文**（还译错），
-            # 于是后面按 en→zh 翻译全崩。用户实际遇到的就是这个。
-            # 现在默认 auto：whisper 检出 vi 置信度 0.976，识别正确。
-            # 想固定语言用 --lang，不要用 --from 去强制。
-            _lang = None if args.detect else (args.lang or None)
-            if segs_in:
-                texts = th.transcribe_batch(segs_in, lang=_lang)
-                # 仍然喂投票，但只用于**诊断显示**，不再决定路由
-                lang_lock.observe(th.last_lang, th.last_lang_prob)
-            else:
-                # 只刷翻译批：这一轮没有新音频要识别
-                texts = []
-            t_asr = time.time() - t0
-
-            # ── 翻译并行化 ──────────────────────────────────────
-            # 实测（_measure_e2e_lag.py，70 秒真实音频）：
-            #     产出时刻  音频位置  落后   转写   翻译
-            #       9.8      6.0   +3.83  2.58  1.26
-            #      16.3     12.0   +4.31  2.78  1.54
-            #      47.5     42.0   +5.51  3.77  1.75
-            #      66.2     60.0   +6.21  3.89  2.34
-            #   → 平均落后 4.8s，其中翻译占 1~2.3s。
-            #   原来是串行：转写完 → 才翻译 → 才显示。翻译那段时间机器
-            #   完全空着，而下一批音频已经在积压（后半比前半更落后）。
-            #   现在把翻译丢给后台队列，主循环立刻回去收下一批音频。
-            #   代价：多个译器实例会被同时使用（argos 是纯函数式、Google
-            #   是 HTTP，两者都无共享可变状态）；tr 这个变量在批边界被
-            #   换掉，线程里用**当前**引用即可。
-            _keep = [(segs_in[i], texts[i]) for i in range(len(texts))
-                     if texts[i]]
-            # ── 翻译节拍与识别节拍**解耦** ────────────────────────
-            # 实测（_bench_merge_translate.py，同一段 16.4 秒真实语音）：
-            #   识别块 1.5s → 11 条碎片："我从没想过我会。" "再见。" "警察。"
-            #   识别块 4.0s →  4 条完整："我从没想过还能再见到你。走吧。"
-            #   识别块 8.0s →  2 条更完整
-            # 也就是说：小批次**延迟低但字幕是碎的**，大批次译文好但延迟高。
-            # 我上一轮只量了延迟就选 1.5s —— **没量翻译质量**，
-            # 那是个片面的决定。
-            #
-            # HW-TSC（华为，IWSLT 2024 字幕赛道）把这两件事**分开**：
-            # 识别出声，句边界由另一套机制决定。我们照这个思路做，
-            # 但判定手段不同（他们用词级时间戳 + 标点恢复模型，
-            # 实测我们这边不能用：远端识别给每个碎片都补句号，
-            # 见 _bench_punct2.py）。
-            #
-            # 我们可用的判定：**Segmenter 的静音切分**。
-            #   · 静音切出的段 → 长度 < max_len（自然句边界）
-            #   · 长度上限强制的段 → 长度 ≈ max_len（不是语义边界）
-            # 所以：识别继续小块高频（延迟不变），
-            #       翻译等**遇到自然句边界**再做，且累计不超过 mt_cap 秒。
-            _is_natural = any(len(s) / TARGET_RATE < args.max_seg - 0.05
-                              for s in segs_in)
-            mt_pending.extend(_keep)
-            _pt = sum(len(s) / TARGET_RATE for s, _ in mt_pending)
-            # --no-mt-merge（mt_cap<=0）→ 每批立即翻译，回到旧行为
-            _flush = (args.mt_cap <= 0 or _is_natural
-                      or _pt >= args.mt_cap)
-            if mt_pending and _flush:
-                # 攒成**一个语义单元**（合并多段原文，译文更完整）
-                mt_units.append(" ".join(t for _s, t in mt_pending))
-                mt_pending = []
-            # ── 合并翻译的触发：攒够 mt_batch 个单元，或**短窗到期就发** ──────
-            # 为什么要攒**单元**而不是只合并单批内的段：
-            # qwen-mt 每次调用 0.57s 是**固定开销**（实测耗时≈
-            # 0.770ms/字符+0.569s），一批通常只有一个语义单元，
-            # 所以只在批内合并等于没省 —— 必须跨批攒几个单元再一次译。
-            #     4 单元合并 0.734s　vs　逐条 2.428s（每段 0.61s→0.18s）
-            #
-            # **但攒批上限绝不能设长。** 实测过一次真实翻车：
-            # mt_batch=3 + wait=2.0s，而这段素材每 4 秒才切出一个单元，
-            # 于是"等够 3 个"永远等不到（要 12 秒音频），
-            # 14 个识别批次只显示了 2 条字幕 —— 看起来就是"字幕消失"。
-            # 所以主判据必须是**时间**：窗口一到就发，能凑几个算几个。
-            # 默认 0.35s：密集语音时仍能合并 2~3 个单元，稀疏时不会饿死。
-            _now = time.time()
-            if mt_units and (len(mt_units) >= args.mt_batch or mt_flush_now):
-                _units = mt_units[:]
-                mt_units = []
-                mt_first_t = None
-                _tr_now = tr          # 快照：批边界可能换译器
-                _bno = _seq_in[0]
-                _seq_in[0] += 1
-                # 用占位段：显示时只需要文本，段长只用于日志
-                _segs_b = [(_ph_seg, u) for u in _units]
-
-                def _do_batch(_bno, _units, _segs, _tr):
-                    """一次调用译多个语义单元（分隔符格式）。"""
-                    try:
-                        from llm_translate import translate_batch
-                        _zh = translate_batch(_tr, _units,
-                                              max_items=max(2, args.mt_batch))
-                    except Exception as _e:
-                        print(f"  翻译线程异常: {type(_e).__name__} {_e}")
-                        _zh = ["" for _ in _units]
-                    if len(_zh) != len(_units):
-                        # 长度对不上宁可退回逐条，也不能错位
-                        try:
-                            _zh = [_tr(u) for u in _units]
-                        except Exception:
-                            _zh = ["" for _ in _units]
-                    done_q.put((_bno, _segs, _zh))
-
-                _th_pool.submit(_do_batch, _bno, _units, _segs_b, _tr_now)
-            elif mt_units and mt_first_t is None:
-                mt_first_t = _now
-            t_end = time.time() - t0
-            per_call = t_asr
-            # 顺手把已经译好的批显示掉（不阻塞）
-            _n_shown = _drain_translations(block=False)
-            # **每批一行诊断。** 原来只打"转写 0.00s"，那个数字同时对应
-            # 三种完全不同的故障：噪声门挡了、远端没返回、音频是静音。
-            # 把门的门限/拒数、远端返回长度都带上，一眼能分清。
-            _g = getattr(th, "gate", None)
-            _gt = (getattr(_g, "threshold_dbfs", None) if _g else None)
-            _rs = getattr(th, "last_remote_stats", {}) or {}
-            print(f"      (批次 {n_batch}：{len(segs_in)} 段 / {batch_dur:.1f}s "
-                  f"音频，转写 {t_asr:.2f}s；翻译并行，已显示 {_n_shown} 段)"
-                  f"　[门 {('%.0f' % _gt) if _gt is not None else '未校准'}"
-                  f" 拒{getattr(_g, 'rejected', 0) if _g else 0}"
-                  f" 远端 {_rs.get('txt_len', '-')}字"
-                  f" 失{_rs.get('fails', '-')}]")
+                _asr_job = {"segs": pending, "dur": batch_dur,
+                            "nb": n_batch, "t0": time.time()}
+                pending, pend_since = [], None
+                _asr_fut = _asr_pool.submit(th.transcribe_batch,
+                                            _asr_job["segs"], lang=_lang)
+            # 每轮都显示已译好的批次；不能等下一个 ASR 批触发才显示
+            _drain_count()
+            if stop.is_set():
+                print("  收到停止信号，退出主循环")
+                break
     except KeyboardInterrupt:
         print("\n中断。")
     finally:
@@ -2463,6 +2517,10 @@ def run(args):
                 if _joined:
                     done_q.put((_seq_in[0], [(_ph_seg, _joined)], [tr(_joined)]))
                     _seq_in[0] += 1
+        except Exception:
+            pass
+        try:
+            _asr_pool.shutdown(wait=False)
         except Exception:
             pass
         _th_pool.shutdown(wait=False)

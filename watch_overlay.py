@@ -70,6 +70,13 @@ import os
 import sys
 import time
 
+# 与 overlay_qt 同理：在加载 Qt 之前预载 torch 原生 DLL（见 native_preload.py）
+try:
+    from native_preload import preload_torch_dlls as _preload_torch_dlls
+    _preload_torch_dlls()
+except Exception:
+    pass
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 # ── watch 专属设置文件（与回环的 overlay_qt.json **完全分离**）────────

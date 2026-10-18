@@ -47,20 +47,30 @@ for lg, p in (("en", 0.227), ("en", 0.340), ("zh", 0.659),
 chk("低置信全被拒（一票没投）", lk2.votes == {} and lk2.locked is None)
 chk("拒票计数 = 5", lk2.rejected_lowconf == 5)
 
-print("\n=== ② 源语言路由（去掉锁定后的顺序）===")
-# 背景：这一节原来验的是"批前 peek 定译器"。**去掉语言锁定之后这条不成立了** ——
-# 路由现在按**本批自己的检测结果**决定，所以决策必须在转写**之后**
-# （转写才知道这批是什么语言）。下面验新的正确顺序。
+print("\n=== ② 源语言路由（ASR 异步化后的顺序）===")
+# 背景：这一节原来验的是"批前 peek 定译器"。去掉语言锁定后按**本批自己的
+# 检测结果**路由；本轮又把 ASR 移出主线程（异步），所以顺序变成：
+#   后台提交 ASR → 主线程取回结果 → 喂诊断投票 → 换译器/路由
+# 下面验这个新顺序（旧断言 "texts = th.transcribe_batch(segs_in" 已不存在）。
 src = open(os.path.join(HERE, "live_subtitle_v2.py"), encoding="utf-8").read()
-i_pick = src.find("want = _pick_offline_source(th.last_lang")
-i_asr = src.find("texts = th.transcribe_batch(segs_in")
-i_obs = src.find("lang_lock.observe(th.last_lang, th.last_lang_prob)")
-chk("路由决策在转写之前（只能拿到上一批的检测结果）", i_pick < i_asr)
-chk("投票在转写之后喂（只用于诊断显示）", i_asr < i_obs)
+i_sub = src.find("_asr_fut = _asr_pool.submit(th.transcribe_batch")
+i_helper0 = src.find("def _on_asr_done(")
+i_helper1 = src.find("    try:\n        while True:", max(i_helper0, 0))
+helper = src[i_helper0:i_helper1] if (i_helper0 >= 0 and i_helper1 > i_helper0) else ""
+h_res = helper.find("texts = fut.result()")
+h_obs = helper.find("lang_lock.observe(th.last_lang")
+h_sw = helper.find("_switch_by_lang()")
+i_sw = src.find("def _switch_by_lang(")
+i_pick = src.find("want = _pick_offline_source(th.last_lang", max(i_sw, 0))
+chk("ASR 在后台线程提交（不阻塞主循环）", i_sub > 0)
+chk("ASR 结果在主线程取回（_on_asr_done 里）", i_helper0 > 0 and h_res > 0)
+chk("投票在结果之后喂（只用于诊断显示）", h_res < h_obs)
+chk("路由决策在结果之后（用本批检测结果）", h_res < h_sw)
+chk("路由判据在独立函数 _switch_by_lang 里", i_sw > 0 and i_pick > i_sw)
 chk("已无'批前 peek 定译器'的老写法",
     "locked = lang_lock.peek()" not in src)
 chk("初始译器是 auto（不是 args.src，避免第一批把非英语喂给 en→zh）",
-    'tr = Translator("auto", args.dst)' in src)
+    'Translator(args.lang or "auto"' in src and "Translator(args.src" not in src)
 chk("路由判据存在且是独立函数", "def _pick_offline_source(" in src)
 
 print("\n=== ③ LRU + TTL 缓存 ===")

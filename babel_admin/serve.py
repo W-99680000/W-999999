@@ -367,7 +367,11 @@ class Engine:
         buf = b""
         try:
             while True:
-                chunk = stream.read(4096)
+                # **read1，不是 read**：`read(4096)` 会一直阻塞到攒满 4KB
+                # 或进程退出，日志于是"成批迟到"——实测引擎自身 5 秒就绪，
+                # 管理端却 42 秒才看到"转写:"，被误判成"启动慢"。
+                # read1 有多少返回多少，配合下面按块切行才是真·实时。
+                chunk = stream.read1(4096)
                 if not chunk:
                     break
                 buf += chunk
@@ -553,16 +557,16 @@ class Engine:
         """
         t0 = time.time()
         # 判定"起来了"的标记。**"转写:" 一定要在里面** —— 它是模型加载完、
-        # 开始干活的那一行，出现在"浮窗位置"之前。首次启动要冷加载模型
-        # （实测 177 秒），如果不认这行，界面会一直显示"加载中"，
-        # 而其实已经在出字幕了。
-        marks = ("浮窗位置", "转写:", "listening", "采集:", "字幕文件")
+        # 开始干活的那一行。注意：浮窗现在**在模型加载之前**就出现了
+        # （启动并行化），所以 "浮窗位置/采集:" 不能再当就绪标记，否则
+        # 界面会在模型还没加载完时就显示"就绪"。只认 "转写:"。
+        marks = ("转写:", "listening")
         while time.time() - t0 < timeout:
             if not self.alive():
                 return {"state": "exited", "exit_code": self.exit_code,
                         "seconds": round(time.time() - t0, 1)}
             with self.lock:
-                tail = "\n".join(self.lines[-40:])
+                tail = "\n".join(self.lines[-200:])
             if any(m in tail for m in marks):
                 return {"state": "ready", "seconds": round(time.time() - t0, 1)}
             time.sleep(0.5)

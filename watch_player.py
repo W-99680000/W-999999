@@ -209,7 +209,8 @@ class MpvIPC:
         deadline = time.time() + 1.0
         buf = b""
         while time.time() < deadline:
-            chunk = self.pipe.read(4096)
+            chunk = (self.pipe.read1(4096)
+                     if hasattr(self.pipe, "read1") else self.pipe.read(4096))
             if not chunk:
                 continue
             buf += chunk

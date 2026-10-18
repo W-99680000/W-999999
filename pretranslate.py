@@ -241,6 +241,22 @@ def _decode_audio_16k(path):
     return (a.astype(np.float32) / 32768.0)
 
 
+def _hf_model_cached(name):
+    """HF 缓存里有没有这个 faster-whisper 模型（有就跳过联网元数据请求）。"""
+    if not name or os.path.isdir(str(name)):
+        return False
+    key = str(name).lower().replace("_", "-")
+    hub = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+    try:
+        for d in os.listdir(hub):
+            dl = d.lower()
+            if "faster-whisper" in dl and key in dl:
+                return True
+    except OSError:
+        pass
+    return False
+
+
 def load_asr(model_name):
     """加载识别模型（一次，之后所有块共用）。
 
@@ -257,7 +273,9 @@ def load_asr(model_name):
         pass
     print(f"  识别模型 {model_name}（{device}/{ctype}）")
     t0 = time.time()
-    m = WhisperModel(model_name, device=device, compute_type=ctype)
+    # 缓存命中时 local_files_only=True：跳过 huggingface 元数据联网
+    m = WhisperModel(model_name, device=device, compute_type=ctype,
+                     local_files_only=_hf_model_cached(model_name))
     print(f"  模型加载 {time.time()-t0:.1f}s")
     return m
 

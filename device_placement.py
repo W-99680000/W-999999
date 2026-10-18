@@ -114,6 +114,14 @@ def probe_devices(llama_dir: str | None = None) -> tuple[list[Device], list[str]
                          f"faster-whisper 走 ctranslate2，不用 torch）")
     except ImportError:
         notes.append("没装 torch")
+    except Exception as e:
+        # **torch 只是"锦上添花"的设备信息来源，不能让它把引擎带崩。**
+        # 实测（2026-10-18）：先加载 PyQt5、再把 nvidia 的 DLL 目录前置到
+        # PATH 之后，torch（CPU 版）的 c10.dll 初始化会抛 WinError 1114；
+        # 而识别真正的后端是 ctranslate2，torch 是不是 CUDA 版与识别能否
+        # 用 GPU 无关（下面第 ② 段单独问 ctranslate2）。
+        notes.append(f"torch 导入失败（不影响识别；识别走 ctranslate2）："
+                     f"{type(e).__name__}: {str(e)[:110]}")
 
     # ② **ctranslate2** —— 识别走的是它，不是 torch
     # 这是我踩过的坑的另一面：torch 是不是 CUDA 版，**与识别能不能用 GPU 无关**。
@@ -222,8 +230,17 @@ def probe_devices(llama_dir: str | None = None) -> tuple[list[Device], list[str]
         _rec = _tgt.can_recognition or any(d.can_recognition for d in _unnamed)
         _tr = _tgt.can_translation or any(d.can_translation for d in _unnamed)
         _why = "，".join(d.reason for d in _unnamed if d.reason)
+        # **后端按识别来源修正。** 本机（2026-10-18）实测：系统 Python 里
+        # torch 是 CPU 版、没有 cuda: 设备，识别能力只能由 ctranslate2 那条
+        # "CUDA x1" 合并进来；如果保留 llama 的 backend="vulkan"，主程序会
+        # 以为"该设备来自 llama.cpp，需实测 ctranslate2 认不认"，
+        # 每次启动白花 1.6s 跑 gpu_available() 真实前向。
+        # ctranslate2 已经报过 get_supported_compute_types("cuda") 与
+        # get_cuda_device_count()>0，这里可以安全地标成 cuda（跳过复测）。
+        _ct2_cuda = any(d.backend in ("cuda", "rocm") for d in _unnamed)
         devices[devices.index(_tgt)] = replace(
             _tgt, can_recognition=_rec, can_translation=_tr,
+            backend=("cuda" if _ct2_cuda else _tgt.backend),
             reason=(_tgt.reason or "") + (
                 ("；已合并 " + _why) if _why else ""))
         devices = [d for d in devices if d not in _unnamed]

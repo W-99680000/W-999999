@@ -49,6 +49,16 @@ import os
 import sys
 import time
 
+# **必须在第一次 import PyQt5 之前**预载 torch 的原生 DLL。
+# 原因见 native_preload.py：本机先加载 Qt 再 import torch 会让 c10.dll
+# 初始化失败（WinError 1114），而 ctranslate2 在 import 时就 import torch，
+# 整条识别链都会起不来。没有 torch 时这里是 no-op。
+try:
+    from native_preload import preload_torch_dlls as _preload_torch_dlls
+    _preload_torch_dlls()
+except Exception:
+    pass
+
 SETTINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "overlay_qt.json")
 # 浮窗**实时状态**（给外部观察用）。

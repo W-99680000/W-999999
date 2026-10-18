@@ -294,3 +294,61 @@ python tools/_bench_resample.py
 | 重采样混叠 −4.4 dB | `tools/_bench_resample.py` 输出 |
 | `babel_admin/` 未跟踪 | `git ls-files babel_admin` 为空 |
 | 环境 FAIL 明细 | `python tools/doctor.py` |
+
+---
+
+## 14. 已实施（分支 opt/2026-10-18，2026-10-18）
+
+### 14.1 环境（§1）
+
+已装进系统 Python：
+vidia-cublas-cu12 12.9.2.10、
+vidia-cuda-nvrtc-cu12 12.9.86、
+
+vidia-cudnn-cu12 9.27.0.42、winsdk 1.0.0b10、yt-dlp 2026.8.19。
+python tools/doctor.py 现在 **退出码 0**（仅 WARN 管理端端口未监听，属正常）。
+gpu_available() → True。
+
+### 14.2 启动并行化（§2）
+
+- 浮窗/采集/分段器/SRT/停止开关全部提前到模型加载之前；模型在后台线程
+  加载，主线程只 pump 浮窗，浮窗先显示"正在加载识别模型…"。
+- WhisperModel(..., local_files_only=True)（缓存命中时跳过 HF 元数据联网），
+  pretranslate.load_asr 同改。
+- 实测（同机、同解释器、旧版快照 vs 新版）：
+
+  | 指标 | 旧版 | 新版 |
+  |---|---|---|
+  | 浮窗出现 | 7.0s | **0.2–0.3s** |
+  | 模型就绪（ASR 可用） | 7.0s | **5.2s** |
+  | 管理端 ready 检测 | 42s（管道 read 阻塞） | **6s**（改 read1 后） |
+
+### 14.3 ASR 移出主线程（§3）
+
+- 	ranscribe_batch 丢到单 worker；主循环只做 ov.pump() / 收音频 /
+  排空译文，cap.read 超时 0.25s→0.05s，译文一回来就上屏。
+- 日志改为"本批 N 段 / 累计 M 段"，不再用逐批"已显示 0 段"误导。
+- 停止开关每轮检查，管理端 stop 实测 0.2s 退出。
+
+### 14.4 顺带修掉的真实故障
+
+1. **Qt→torch DLL 顺序**：先 import PyQt5 再 import torch，c10.dll
+   初始化失败（WinError 1114），ctranslate2 import 时连带崩。新增
+   
+ative_preload.py，在 Qt 之前 ctypes 预载 c10.dll。
+2. **管理端日志迟到 42 秒**：serve.py 子进程管道 ead(4096) 会攒满
+   4KB 才返回；改 ead1(4096)（watch_player.py 同处也改）。
+3. **设备偏好被临时故障写死**：CUDA 缺失那轮把 CPU 存成偏好，之后一直
+   CPU。现在只在选到 GPU / 确无 GPU / 用户显式选 CPU 时保存。
+4. **ctranslate2 CUDA 能力合并后仍走 Vulkan 复测**：合并设备时把
+   backend 标成 cuda，省掉每次启动 1.6s 的 gpu_available() 真实前向。
+
+### 14.5 验证记录
+
+| 测试 | 结果 |
+|---|---|
+| python live_subtitle_v2.py --selftest | 174 通过 / 0 失败 |
+| python tools/test_borrowed.py | 33 通过 / 0 失败 |
+| python tools/test_engine_control.py | 20 通过 / 0 失败（起 6s / 停 0.2s） |
+| python live_subtitle_v2.py --no-overlay 播放 samples/loopback_test.wav | SRT 产出 "Hello, this is a test / 你好，这是一次测试。" |
+| python tools/doctor.py | 退出码 0，GPU 可用，6 个模型缓存 5.3GB |
