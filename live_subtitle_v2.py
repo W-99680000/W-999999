@@ -78,6 +78,23 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TARGET_RATE = 16000
 SETTINGS = os.path.join(HERE, "overlay_settings.json")
 
+# ── 结构化指标（每次批量转写跑完追加一行 JSONL；失败静默）──────────
+# 为什么需要：稳定性/延迟/准确性不能只看控制台文字，要能算 P50/P90、
+# 长跑趋势、回归对比。tools/quality_report.py 读这个文件。
+METRICS_LIVE = os.path.join(HERE, "work", "metrics_live.jsonl")
+
+
+def _record_metric(**kw):
+    try:
+        os.makedirs(os.path.dirname(METRICS_LIVE), exist_ok=True)
+        kw.setdefault("ts", round(time.time(), 3))
+        kw.setdefault("pid", os.getpid())
+        with open(METRICS_LIVE, "a", encoding="utf-8") as _f:
+            _f.write(json.dumps(kw, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 
 def _hf_model_cached(name) -> bool:
     """HF 缓存里有没有这个 faster-whisper 模型。
@@ -1560,6 +1577,10 @@ def _install_kill_switch(cmd_file=None):
     走正常退出流程 —— 关浮窗、收线程、写日志。
     """
     stop = threading.Event()
+    try:                                     # 清掉上一次的残留
+        os.remove(os.path.join(HERE, "work", "engine_stop.flag"))
+    except OSError:
+        pass
 
     def _bye(signum, _frame):
         print(f"\n收到停止信号 ({signum})，正在退出…")
@@ -1573,6 +1594,20 @@ def _install_kill_switch(cmd_file=None):
         except Exception:
             pass
     return stop
+
+
+def _engine_stop_requested():
+    """管理端（GUI/托盘）叫停：写 work/engine_stop.flag。
+
+    有控制台时 CTRL_BREAK 更快；但消费级桌面下引擎是用
+    CREATE_NO_WINDOW 启动的（没有控制台，SIGBREAK 送不进去），
+    所以再给一条纯文件哨兵，主循环每轮检查。
+    """
+    try:
+        return os.path.isfile(os.path.join(HERE, "work",
+                                          "engine_stop.flag"))
+    except OSError:
+        return False
 
 
 def run(args):
@@ -1780,6 +1815,7 @@ def run(args):
             tail_seconds=args.stream_tail, max_buffer=args.stream_maxbuf,
             device=_st_dev, compute_type=_st_ct), "流式识别模型")
         print(f"  ✓ 流式识别模型就绪（启动后 {time.time() - _t0_start:.1f}s）")
+        _record_metric(kind="startup", mode="stream", model=getattr(args, "model", ""), ready_s=round(time.time() - _t0_start, 2))
         print(f"转写: 流式 {args.stream_model}（LocalAgreement-2）"
               f"　更新间隔 {args.stream_interval}s　tail {args.stream_tail}s"
               f"　上限 {args.stream_maxbuf}s　设备 {_st_dev}/{_st_ct}")
@@ -1992,6 +2028,7 @@ def run(args):
                 max_batch=args.max_batch, max_wait=args.max_wait),
                 f"识别模型 {args.model}")
         print(f"  ✓ 识别模型就绪（启动后 {time.time() - _t0_start:.1f}s）")
+        _record_metric(kind="startup", mode="chunk", model=getattr(args, "model", ""), ready_s=round(time.time() - _t0_start, 2))
         # ── 远端识别（仅在没有可用 GPU 时）──────────────────────
         # 本地 CPU 的延迟已到天花板（_bench_bottleneck.py 实测）：
         #   一次 transcribe 固定成本 ≈ 2.0 秒，**与音频长短无关**
@@ -2250,7 +2287,7 @@ def run(args):
             while True:
                 if ov:
                     ov.pump()
-                if stop.is_set():
+                if (stop.is_set() or _engine_stop_requested()):
                     print("  收到停止信号，退出流式循环")
                     break
                 blk = cap.read(timeout=0.25)
@@ -2357,6 +2394,7 @@ def run(args):
     _asr_fut = None
     _asr_job = None
     _shown_n = [0]                 # 累计上屏段数（日志用，别再只看当前批）
+    _shown_mark = [0]              # 上次记指标时的累计值（算本批新增）
 
     def _drain_count():
         """排空已译好的批次，并累计"上屏了多少段"。
@@ -2462,6 +2500,20 @@ def run(args):
               f" 拒{getattr(_g, 'rejected', 0) if _g else 0}"
               f" 远端 {_rs.get('txt_len', '-')}字"
               f" 失{_rs.get('fails', '-')}]")
+        try:
+            _delta = _shown_n[0] - _shown_mark[0]
+            _shown_mark[0] = _shown_n[0]
+            _record_metric(
+                kind="batch", batch=job["nb"], segs=len(segs_in),
+                audio_s=round(job["dur"], 3),
+                asr_s=round(t_asr, 3),
+                shown=_delta, shown_total=_shown_n[0],
+                lang=th.last_lang,
+                lang_p=round(float(th.last_lang_prob or 0.0), 3),
+                gate=(round(_gt, 1) if _gt is not None else None),
+                rejected=(getattr(_g, "rejected", 0) if _g else 0))
+        except Exception:
+            pass
 
     try:
         while True:
@@ -2494,7 +2546,7 @@ def run(args):
                                             _asr_job["segs"], lang=_lang)
             # 每轮都显示已译好的批次；不能等下一个 ASR 批触发才显示
             _drain_count()
-            if stop.is_set():
+            if (stop.is_set() or _engine_stop_requested()):
                 print("  收到停止信号，退出主循环")
                 break
     except KeyboardInterrupt:

@@ -102,7 +102,8 @@ def nvidia_smi_info():
         r = subprocess.run(
             [exe, "--query-gpu=name,memory.total,memory.free,compute_cap",
              "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=10)
+            capture_output=True, text=True, timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         line = (r.stdout or "").strip().split("\n")[0]
         if not line:
             return None

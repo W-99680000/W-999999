@@ -9,7 +9,8 @@
 不在发布目录上做增量修改。
 
 它做四件事（都是确定性的字符串处理，不做语法重排）：
-  ① 复制白名单文件到 release/（根目录 / bench/ / tools/ / samples/）
+  ① 复制白名单文件到 release/（根目录 / bench/ / tools/ / samples/
+     / desktop/ / build/ / docs/）
   ② 把本机绝对路径换成相对推导
   ③ 子目录脚本的 sys.path / 样本路径按"多退一级"修正
   ④ 生成 LICENSE / .gitignore / requirements.txt
@@ -37,7 +38,12 @@ ROOT_FILES = ["live_subtitle_v2.py", "overlay_qt.py", "streaming_asr.py",
               "watch_player.py", "watch_overlay.py", "pretranslate.py",
               "browser_history.py", "autopipe.py", "smtc_tracker.py",
               "foreground.py",
-              "watch.bat", "cache.bat"]
+              "watch.bat", "cache.bat",
+              # ── 消费级桌面壳 / 环境自检 / 注册表 ─────────────
+              "app.py", "native_preload.py",
+              "model_registry.py", "model_registry.json",
+              "hardware_detect.py", "model_manager.py",
+              "startup_stats.py", "device_placement.py", "device_pref.py"]
 BENCH = ["bench_latency.py", "bench_localagree.py", "bench_fastest.py",
          "bench_realtime.py", "bench_depth.py", "bench_trend.py",
          "bench_final.py",
@@ -74,7 +80,32 @@ TOOLS = ["test_pipeline.py", "test_borrowed.py", "test_drag2.py", "test_loopback
 # streaming_asr_remote 的离线合并验证要用它 —— README 里也引用了。
 SAMPLES = ["e2e_speech.wav", "streaming_msgs.json", "loopback_test.wav"]
 
-SUBDIRS = ("bench", "tools", "samples")
+#: 桌面启动 / 打包 / 文档：按**文件清单**同步，不整目录复制。
+#: 为什么列清单而不是 `shutil.copytree`：build/ 里会出现 PyInstaller 的
+#: 中间物（_work/、_dist/），整目录复制会把几百 MB 垃圾带进发布目录。
+EXTRA_DIRS = {
+    "babel_admin": [
+        "index.html", "serve.py", "dlls.py",   # 桌面壳的 Web 界面与本地服务
+    ],
+    "desktop": [
+        "BabelPlan.vbs",          # 双击入口：wscript 隐藏启动 pythonw
+        "make_icon.py",           # 生成 babel.ico（复用 app.py 的画法）
+        "create_shortcut.ps1",    # 桌面 / 开始菜单快捷方式
+        "babel.ico",              # 快捷方式与 exe 图标
+    ],
+    "build": [
+        "build_exe.ps1",          # PyInstaller 打包脚本
+        "babel.spec",             # one-folder / windowed 打包定义
+    ],
+    "docs": [
+        "DESKTOP.md",             # 一页说明：双击 / 托盘 / 日志 / 卸载 / 调试,
+        "QUALITY_ROADMAP.md",     # 稳定性/实时性/准确性目标与度量
+        "RESEARCH_20261018_streaming_translation.md",
+    ],
+}
+
+SUBDIRS = ("bench", "tools", "samples", "babel_admin",
+           "desktop", "build", "docs")
 
 LICENSE = """MIT License
 
@@ -149,6 +180,10 @@ apikey*
 .idea/
 .DS_Store
 Thumbs.db
+
+# PyInstaller 打包中间物（build/ 里只保留脚本与 spec）
+build/_dist/
+build/_work/
 """
 
 REQUIREMENTS = """# live-subtitle dependencies
@@ -162,6 +197,14 @@ PyAudioWPatch>=0.2.12.8      # WASAPI 环回采集（抓系统播放的声音）
 faster-whisper>=1.0          # 语音识别
 PyQt5>=5.15                  # 透明置顶浮窗
 argostranslate>=1.9          # 离线翻译（注意：没有 vi->zh 直连包）
+winsdk>=1.0.0b10 ; sys_platform == "win32"   # SMTC 媒体会话（视频翻译同步）
+yt-dlp>=2024.1               # 网页视频拉音频
+PyAV>=11                     # 本地视频解码（免 ffmpeg）
+pywebview>=4.4               # 桌面壳原生窗口
+pystray>=0.19                # 托盘常驻
+Pillow>=10                   # 图标
+
+# GPU（可选）：pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
 """
 
 
@@ -292,6 +335,21 @@ def main(src: str, dst: str) -> int:
                 continue
             open(os.path.join(dst, sub, f), "w", encoding="utf-8",
                  newline="").write(fix_subdir(open(s, encoding="utf-8").read()))
+            n += 1
+
+    print("③b 桌面启动 / 打包 / 文档（原样复制，路径都在运行时推导）")
+    for sub, files in EXTRA_DIRS.items():
+        # 目录可能不在 SUBDIRS 里（例如后来才加的白名单项）——
+        # 这里自己兜一层，避免 copy2 到不存在的目录时 WinError 3。
+        os.makedirs(os.path.join(dst, sub), exist_ok=True)
+        for f in files:
+            s = os.path.join(src, sub, f)
+            if not os.path.exists(s):
+                print(f"   !! 缺 {sub}/{f}")
+                continue
+            # 这些文件里没有本机绝对路径（脚本按自身位置推导项目根），
+            # 所以不套 clean()/fix_subdir()，二进制（.ico）更不能改写。
+            shutil.copy2(s, os.path.join(dst, sub, f))
             n += 1
 
     print("④ 样本")

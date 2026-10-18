@@ -64,6 +64,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+STOP_FILE = os.path.join(ROOT, "work", "engine_stop.flag")
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
@@ -482,8 +483,13 @@ class Engine:
         if os.name == "nt":
             # 新进程组：停止时能送 CTRL_BREAK（优雅退出，浮窗会自己关），
             # 而不是只能 TerminateProcess（硬杀 → 浮窗留残影）
-            flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            flags = (getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                 | getattr(subprocess, "CREATE_NO_WINDOW", 0))
         self._push("· 正在拉起进程…")
+        try:
+            os.remove(STOP_FILE)
+        except OSError:
+            pass
         try:
             proc = subprocess.Popen(
                 cmd, cwd=ROOT, env=env, stdout=subprocess.PIPE,
@@ -507,6 +513,14 @@ class Engine:
             p = self.proc
             if not p or p.poll() is not None:
                 return False, "没有在跑"
+        if not hard:
+            try:
+                os.makedirs(os.path.dirname(STOP_FILE), exist_ok=True)
+                with open(STOP_FILE, "w", encoding="utf-8") as _sf:
+                    _sf.write(str(time.time()))
+                self._push("· 已写停止哨兵，等引擎自己收尾")
+            except Exception as _e:
+                self._push(f"· 停止哨兵写入失败：{_e}")
         if os.name == "nt" and not hard:
             # 先优雅：CTRL_BREAK 会进到 _install_kill_switch 里 set(stop)，
             # 主循环走正常退出（关浮窗、收线程）。
@@ -537,12 +551,20 @@ class Engine:
         t0 = time.time()
         while time.time() - t0 < wait:
             if p.poll() is not None:
+                try:
+                    os.remove(STOP_FILE)
+                except OSError:
+                    pass
                 return True, f"已停止（exit {p.returncode}）"
             time.sleep(0.2)
         # 超时 → 硬杀。**必须硬杀**：否则浮窗进程留着，用户看到"关不掉"
         try:
             p.kill()
             p.wait(timeout=8)
+            try:
+                os.remove(STOP_FILE)
+            except OSError:
+                pass
             self._push("· 等待超时，已强制结束")
             return True, "已强制结束（优雅退出超时）"
         except Exception as e:
@@ -984,7 +1006,7 @@ def main(argv=None) -> int:
     print(f"  界面   {url}")
     print(f"  模型表 {url}api/models")
     print(f"  注册表 {R.PATH}")
-    print(f"  两个模块：实时回环系统(loopback) / 视频缓存(cache)")
+    print(f"  两个模块：直播翻译(loopback) / 视频翻译(cache)")
     for mid, r in R.all_resolved().items():
         print(f"    {r['label']:<8} 识别 {r['asr']:<32} 翻译 {r['mt']}")
     print("  Ctrl+C 退出")

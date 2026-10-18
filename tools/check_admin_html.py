@@ -69,8 +69,8 @@ def main(argv=None) -> int:
         not re.search(r"fetch\(\s*['\"]https?://", s))
 
     print("三、关键文案")
-    for word in ("巴别塔计划", "直播翻译和视频翻译", "实时回环系统",
-                 "视频缓存", "同传记录", "模型管理", "设置"):
+    for word in ("巴别塔计划", "直播翻译和视频翻译", "直播翻译",
+                 "视频翻译", "同传记录", "模型管理", "设置"):
         chk(f"含「{word}」", word in s)
 
     print("四、数据契约注入点")

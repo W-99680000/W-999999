@@ -15,7 +15,7 @@
     get_models.py        WANT = [4 个语言对], KNOWN_MB
 
 后果对"两个翻译模块"是直接的：
-  · **实时回环系统**（live_subtitle_v2.py）与**视频缓存**（pretranslate.py /
+  · **直播翻译**（live_subtitle_v2.py）与**视频翻译**（pretranslate.py /
     watch_player.py）各自硬编码默认值，改一个不会带动另一个 —— 两边的
     模型口径必然漂移（现在就是：实时 medium、缓存 large-v3，没人说得清
     这是不是有意的）。
@@ -75,8 +75,8 @@ SCHEMA = 1
 
 #: 模式 id → 中文名。界面左侧那两个入口就是这两个 id。
 MODES = {
-    "loopback": "实时回环系统",
-    "cache": "视频缓存",
+    "loopback": "直播翻译",
+    "cache": "视频翻译",
 }
 
 #: 模式 → 该模式的 CLI 参数名。界面/脚本不用知道具体参数叫什么。
@@ -155,7 +155,7 @@ _DEFAULT_JSON: dict[str, Any] = {
     },
     "modes": {
         "loopback": {
-            "label": "实时回环系统",
+            "label": "直播翻译",
             "goal": "低延迟：音频播出来才存在，等不起",
             "asr": None,
             "asr_stream": None,
@@ -173,7 +173,7 @@ _DEFAULT_JSON: dict[str, Any] = {
             },
         },
         "cache": {
-            "label": "视频缓存",
+            "label": "视频翻译",
             "goal": "高准确：整片先识别后翻译，首句零延迟",
             "asr": "local:faster-whisper-large-v3",
             "asr_stream": None,
@@ -695,10 +695,10 @@ def registry_pending_defaults() -> list[str]:
 def registry_wired_defaults() -> list[str]:
     """列出**已经**由注册表接管的默认值（供界面显示"生效中"）。"""
     return [
-        "实时回环系统：--model（= 注册表 asr）+ 分段/批次等 9 个参数",
-        "实时回环系统：--mt-batch / --mt-batch-wait / --mt-cap",
-        "视频缓存：--model（= 注册表 cache.asr，默认 large-v3）",
-        "视频缓存：--mt-batch（默认 8，比实时大 4 倍）",
+        "直播翻译：--model（= 注册表 asr）+ 分段/批次等 9 个参数",
+        "直播翻译：--mt-batch / --mt-batch-wait / --mt-cap",
+        "视频翻译：--model（= 注册表 cache.asr，默认 large-v3）",
+        "视频翻译：--mt-batch（默认 8，比直播翻译大 4 倍）",
         "两个模块都可用 --no-registry 临时退回旧默认值",
     ]
 

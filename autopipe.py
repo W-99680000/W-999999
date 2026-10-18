@@ -97,7 +97,8 @@ def run_pretranslate(src, dst="zh", on_progress=None, on_target=None,
         proc = subprocess.Popen(
             cmd, cwd=HERE, env=env, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, encoding="utf-8",
-            errors="replace", bufsize=1)
+            errors="replace", bufsize=1,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except Exception as e:
         if on_progress:
             on_progress(f"启动预翻译失败：{type(e).__name__} {e}")

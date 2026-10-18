@@ -433,3 +433,60 @@ ative_preload.py，在 Qt 之前 ctypes 预载 c10.dll。
 | watch_player.py --auto（半截缓存） | 存活 >90s；4→10 条增量；状态行正常 |
 | watch_player.py 字幕.srt --clock（单文件） | 存活，位置源 AutoClock 正常 |
 | watch.bat --no-pretranslate | 标题零漂移（10s） |
+
+---
+
+## 18. 本轮交付：改名 / 调研 / 质量度量 / 消费级桌面（2026-10-18 下午）
+
+### 18.1 模块改名（UI/注册表/文档/测试）
+
+- 「实时回环系统」→ **直播翻译**，「视频缓存」→ **视频翻译**；
+  代码键 loopback / cache 保持不变（避免全链路回归）。
+- 改到的地方：abel_admin/index.html（导航/模式/统计/来源标签/tooltip）、
+  abel_admin/serve.py 启动横幅、model_registry.py/.json 的 label、
+  README、	ools/check_admin_html.py 与 	ools/e2e_admin_browser.py 的期望文案。
+- 后台新增一行概念说明：**本地翻译 = 翻译引擎在本机跑；视频翻译缓存
+  （pre_cache）= 字幕产物**，两者不同维度、不是二选一。
+
+### 18.2 全网调研
+
+docs/RESEARCH_20261018_streaming_translation.md：31 条来源（24 条逐页核验），
+覆盖流式 ASR / 同传 / 字幕工程 / 消费级 UX；四条有代码位置支撑的硬发现：
+① llm_translate.py 没接 Qwen-MT 术语字段；② live.srt 用固定 hold=6s、
+无 CPS/行数约束；③ Whisper 约 1% 整句幻觉（Careless Whisper）；
+④ faster-whisper 批推理官方基准 13min 63s→17s（8GB 可跑）。
+AlignAtt/SimulStreaming 需 cross-attention 且推荐 ≥10GB 显存 → 只列 POC，不直接换。
+
+### 18.3 质量度量与路线图
+
+- 直播引擎新增 work/metrics_live.jsonl（每批 asr_s/audio_s/shown/lang/gate +
+  启动 ready_s），	ools/quality_report.py 出 P50/P90/吞吐。
+  基线：启动 4.4s、识别 P50 0.61s / P90 0.93s、吞吐 4.25×。
+- docs/QUALITY_ROADMAP.md：消费级验收门槛（8h 零崩溃、首字 ≤2s、预翻译
+  ≥8×、WER −10% 等）、度量体系、P0/P1/P2 清单、稳定性测试矩阵；
+  已把调研的 P0（术语表/字幕规整/幻觉闸门）与 P1（ASR-MT overlap、批推理、
+  时间轴规整）回填。
+
+### 18.4 消费级桌面
+
+- pp.py：无控制台安全日志（%LOCALAPPDATA%\BabelPlan\app.log）、命名互斥量
+  单实例、子进程统一 CREATE_NO_WINDOW、关窗收托盘、退出停自己拉起的引擎。
+- desktop/BabelPlan.vbs（wscript→pythonw，整链无控制台）、
+  desktop/babel.ico、desktop/create_shortcut.ps1；
+  uild/babel.spec + uild/build_exe.ps1（PyInstaller one-folder/windowed）。
+- 管理端启动引擎改为隐藏 + work/engine_stop.flag 哨兵优雅停止
+  （无控制台时 SIGBREAK 送不进去）；autopipe/watch_player/gpu/local_mt/
+  dlls 的子进程也统一隐藏控制台窗口。
+
+### 18.5 验证
+
+| 项 | 结果 |
+|---|---|
+| check_admin_html.py | 28/0（新标签 + JS 语法） |
+| model_registry.py check | 41/0 + IO 3/0 |
+| 	est_engine_control.py | 20/0（隐藏引擎启动、停止 0.2s） |
+| live_subtitle_v2.py --selftest | 174/0 |
+| ench/_verify_hysteresis.py | 16/0 |
+| doctor.py | 退出码 0 |
+| 消费级启动（wscript→pythonw） | 2s API ready、无 conhost 子进程、单实例第二进程退出、日志正常 |
+| metrics 基线 | 启动 4.4s、ASR P50 0.61s / P90 0.93s、4.25× |

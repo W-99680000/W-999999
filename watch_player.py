@@ -187,7 +187,9 @@ class MpvIPC:
                 f"--input-ipc-server={PIPE_NAME}",
                 "--sid=no",                 # 字幕由浮窗显示，避免双重
                 "--keep-open=yes", video_path]
-        self.proc = subprocess.Popen(args)
+        self.proc = subprocess.Popen(
+            args,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         self.pipe = None
         self.ok = False
         t0 = time.time()
@@ -382,7 +384,8 @@ def _run_pretranslate(src, dst):
         [sys.executable, "-u", os.path.join(HERE, "pretranslate.py"),
          src, "--to", dst],
         capture_output=True, text=True, encoding="utf-8",
-        errors="replace", env=env)
+        errors="replace", env=env,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     sys.stdout.write(r.stdout)
     if r.returncode != 0:
         sys.stdout.write(r.stderr)

@@ -94,7 +94,8 @@ def describe(py: str, use_cache: bool = True) -> dict:
     info: dict = {"exe": py, "ok": False, "miss": [], "dll": {}, "error": ""}
     try:
         r = subprocess.run([py, "-c", _check_script()], capture_output=True,
-                           text=True, timeout=60)
+                           text=True, timeout=60,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if r.returncode != 0:
             info["error"] = (r.stderr or "").strip()[-200:]
         else:

@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
-<title>巴别塔计划 · 后台管理</title>
+<title>巴别塔计划 · 直播翻译与视频翻译</title>
 <style>
 /* ============================================================
-   巴别塔计划 · 后台管理原型
+   巴别塔计划 · 直播翻译与视频翻译
    浅色科技风 / 大圆角卡片 / 线性内联 SVG 图标 / 零外链
    ============================================================ */
 :root{
@@ -611,14 +611,14 @@ td.muted{color:var(--ink-3)}
     <nav class="nav" aria-label="主导航">
       <div class="nav-group">
         <div class="nav-label">翻译字幕</div>
-        <button class="nav-item tip" type="button" data-nav="loopback" data-tip="实时回环系统" aria-current="false">
+        <button class="nav-item tip" type="button" data-nav="loopback" data-tip="直播翻译" aria-current="false">
           <span class="ni-ico"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h2.5l2-5.5L10.5 18 13 8.5 15 14.5 17 12h4"/></svg></span>
-          <span class="ni-txt">实时回环系统</span>
+          <span class="ni-txt">直播翻译</span>
           <span class="nav-tag">LIVE</span>
         </button>
-        <button class="nav-item tip" type="button" data-nav="cache" data-tip="视频缓存" aria-current="false">
+        <button class="nav-item tip" type="button" data-nav="cache" data-tip="视频翻译" aria-current="false">
           <span class="ni-ico"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.2" y="4.4" width="17.6" height="15.2" rx="2.6"/><path d="M8.2 4.4v15.2M15.8 4.4v15.2M3.2 12h17.6"/></svg></span>
-          <span class="ni-txt">视频缓存</span>
+          <span class="ni-txt">视频翻译</span>
           <span class="nav-tag">CACHE</span>
         </button>
       </div>
@@ -674,7 +674,7 @@ td.muted{color:var(--ink-3)}
       <header class="page-head">
         <div class="page-titles">
           <h1 id="pageTitle">模型管理</h1>
-          <p class="page-sub" id="pageSub">当前模块：<b>实时回环系统</b> · 模型与设备放置</p>
+          <p class="page-sub" id="pageSub">当前模块：<b>直播翻译</b> · 模型与设备放置</p>
         </div>
         <div class="head-chips" id="headChips"></div>
       </header>
@@ -721,6 +721,7 @@ td.muted{color:var(--ink-3)}
               <span class="ph-tag" id="mtCount"></span>
             </div>
             <div class="opt-grid" id="mtGrid" role="radiogroup" aria-label="翻译模型选择"></div>
+                <p class="card-desc" style="margin-top:8px"><b>本地翻译</b> = 翻译引擎在本机跑（离线/隐私/省流量）；<b>视频翻译缓存（pre_cache）</b> = 视频翻译产出的字幕，按播放位置显示。两者不同维度，不是二选一。</p>
           </div>
 
           <div>
@@ -738,10 +739,10 @@ td.muted{color:var(--ink-3)}
           <p class="apply-text" id="applyText"></p>
           <div class="btn-row">
             <button class="btn primary" type="button" data-apply="loopback" id="btnApplyLoop">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h2.5l2-5.5L10.5 18 13 8.5 15 14.5 17 12h4"/></svg>应用到实时回环
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h2.5l2-5.5L10.5 18 13 8.5 15 14.5 17 12h4"/></svg>应用到直播翻译
             </button>
             <button class="btn" type="button" data-apply="cache" id="btnApplyCache">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.2" y="4.4" width="17.6" height="15.2" rx="2.6"/><path d="M8.2 4.4v15.2M15.8 4.4v15.2M3.2 12h17.6"/></svg>应用到视频缓存
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.2" y="4.4" width="17.6" height="15.2" rx="2.6"/><path d="M8.2 4.4v15.2M15.8 4.4v15.2M3.2 12h17.6"/></svg>应用到视频翻译
             </button>
             <button class="btn" type="button" data-apply="both" id="btnApplyBoth">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>两个都用
@@ -762,7 +763,7 @@ td.muted{color:var(--ink-3)}
         <div class="placeholder-note" id="modelSrcNote"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.6"/><path d="M12 11v5.4M12 8.1v.1"/></svg><span id="modelSrcNoteTxt">模型数据加载中…</span></div>
       </section>
 
-      <!-- ===== 视图：翻译字幕工作台（实时回环 / 视频缓存 共用） ===== -->
+      <!-- ===== 视图：翻译字幕工作台（直播翻译 / 视频翻译 共用） ===== -->
       <section class="view" id="view-translate" data-view="translate">
         <!-- ═══ 链路控制卡片 ═══════════════════════════════════════
              为什么必须在最上面：**浮窗是原生窗口，只有链路跑起来才有**。
@@ -799,7 +800,7 @@ td.muted{color:var(--ink-3)}
             </div>
             <div class="eng-meta">
               <div><span>解释器</span><b class="mono" id="engPy">—</b></div>
-              <div><span>模式</span><b id="engMode">实时回环系统</b></div>
+              <div><span>模式</span><b id="engMode">直播翻译</b></div>
               <div><span>已运行</span><b class="mono" id="engUp">—</b></div>
             </div>
           </div>
@@ -922,7 +923,7 @@ td.muted{color:var(--ink-3)}
           <div class="card-head">
             <div>
               <h2><span class="ch-ico"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.2" y="4.4" width="17.6" height="15.2" rx="2.6"/><path d="M3.2 9.6h17.6M3.2 14.6h17.6M9 9.6v10"/></svg></span>同传记录</h2>
-              <p class="card-desc">每次会话一行；实时回环与视频缓存共用同一张表。</p>
+              <p class="card-desc">每次会话一行；直播翻译与视频翻译共用同一张表。</p>
             </div>
             <div class="card-head-right">
               <span class="chip mono">最近 <b>12</b> 条</span>
@@ -1025,8 +1026,8 @@ const BABEL_MODELS = {
          {id:"offline:argos-en-zh", name:"argos en→zh (1.9)", vendor:"argostranslate", source:"offline",
           langs:["en→zh"], vram_mb:0, latency:"0.40s/段", quality:"fair", available:true, note:"离线；无 ja→zh 包"} ],
   modes: {
-    loopback: { label:"实时回环系统", asr:"local:medium", mt:"remote:qwen-mt-flash", preset:"低延迟" },
-    cache:    { label:"视频缓存",     asr:"local:large-v3", mt:"remote:qwen-mt-flash", preset:"高准确" }
+    loopback: { label:"直播翻译", asr:"local:medium", mt:"remote:qwen-mt-flash", preset:"低延迟" },
+    cache:    { label:"视频翻译",     asr:"local:large-v3", mt:"remote:qwen-mt-flash", preset:"高准确" }
   },
   devices: [ {id:"cuda:0", name:"NVIDIA GeForce RTX 4070 Laptop GPU", total_mb:8188, role:"recognition"},
              {id:"cuda:0", name:"NVIDIA GeForce RTX 4070 Laptop GPU", total_mb:8188, role:"translation"} ]
@@ -1039,11 +1040,11 @@ const BABEL_UI = {
   asrPlaceholders: [
     { id:"local:large-v3", name:"faster-whisper large-v3", vendor:"faster-whisper", source:"local",
       langs:["en","ja","ko","vi","*"], vram_mb:3110, latency:"1.10s / 4s段",
-      accuracy:"best", available:false, note:"未在本机 models 目录找到权重（约 3.1 GB）· 缓存模式需要它" }
+      accuracy:"best", available:false, note:"未在本机 models 目录找到权重（约 3.1 GB）· 视频翻译模式需要它" }
   ],
   devicesExtra: [ { id:"cuda:0", name:"NVIDIA GeForce RTX 4070 Laptop GPU", total_mb:8188, role:"recognition" },
                   { id:"cuda:0", name:"NVIDIA GeForce RTX 4070 Laptop GPU", total_mb:8188, role:"translation" } ],
-  /* 模式预设：实时=快，缓存=准 */
+  /* 模式预设：实时=快，视频翻译=准 */
   presets: {
     loopback: { toolbar:{ input:"desktop", lang:"en→zh", fontSize:"20px", chunk:"2s", vprofile:"跟随系统音量" },
                 asr:{ id:"local:medium", beam:"1（贪心）", vad:"DSP 门限 −38 dBFS" },
@@ -1521,7 +1522,7 @@ function toolbarConfig(){
                      {value:"22px",label:"22 px"},{value:"24px",label:"24 px"},{value:"28px",label:"28 px"} ];
   if (state.mode === "loopback"){
     return [
-      { id:"tb-input", label:"输入源", icon:"desktop", note:"实时回环只认设备音频",
+      { id:"tb-input", label:"输入源", icon:"desktop", note:"直播翻译只认设备音频",
         value:state.toolbar.input,
         options:[ {value:"desktop",label:"系统回环（扬声器）",sub:"WASAPI loopback · 48 kHz"},
                   {value:"mic",label:"麦克风阵列",sub:"16 kHz mono"},
@@ -1540,11 +1541,11 @@ function toolbarConfig(){
     ];
   }
   return [
-    { id:"tb-input", label:"输入源", icon:"film", note:"缓存模式读文件/播放器",
+    { id:"tb-input", label:"输入源", icon:"film", note:"视频翻译模式读文件/播放器",
       value:state.toolbar.input,
       options:[ {value:"file",label:"本地视频文件",sub:"mp4 / mkv / mov"},
-                {value:"player",label:"播放器缓存目录",sub:"watch_player.py 输出"},
-                {value:"desktop",label:"系统回环（同步录）",sub:"边放边转"} ] },
+                {value:"player",label:"视频翻译缓存（pre_cache）",sub:"watch_player.py 输出"},
+                {value:"desktop",label:"系统音频（边放边录）",sub:"边放边转"} ] },
     { id:"tb-asr", label:"识别模型", icon:"mic", note:"模式预设：" + p.asr.beam, wide:true,
       value:state.asrId, options:asrOpts },
     { id:"tb-mt", label:"翻译模型", icon:"globe", note:"模式预设：" + p.mt.batch + " 段/批", wide:true,
@@ -1704,7 +1705,7 @@ function renderDevices(){
     '<span><i style="background:#EDF5F0;border:1px solid #E6EFE9"></i>空闲 ' + fmtMB(Math.max(0, total - sum)) + ' MB</span>';
   $("#vramHint").textContent = sum > total
     ? "⚠ 两套模型同时常驻会超出 " + fmtMB(total) + " MB，建议只保留一套本地模型。"
-    : "剩余 " + fmtMB(total - sum) + " MB 可供浮窗渲染与视频解码缓存；" + (state.mode === "loopback" ? "实时模式建议保留 ≥ 1 GB 余量。" : "缓存模式可一次性吃满。");
+    : "剩余 " + fmtMB(total - sum) + " MB 可供浮窗渲染与视频解码缓存；" + (state.mode === "loopback" ? "直播模式建议保留 ≥ 1 GB 余量。" : "视频翻译模式可一次性吃满。");
 }
 function renderApplyText(){
   const a = activeModel("asr"), m = activeModel("mt");
@@ -1716,7 +1717,7 @@ function renderApplyText(){
            '，已改用 <code>' + esc(x.got) + '</code>' + (x.note ? '（' + esc(x.note) + '）' : '') + '</span>';
   }).join("");
   $("#applyText").innerHTML =
-    '将应用到 <b>实时回环系统</b> 与 <b>视频缓存</b> 两个模块：' +
+    '将应用到 <b>直播翻译</b> 与 <b>视频翻译</b> 两个模块：' +
     '<code>' + esc(a ? a.id : "—") + '</code> 负责识别，' +
     '<code>' + esc(m ? m.id : "—") + '</code> 负责翻译。' +
     '当前模式 <b>' + esc(modeLabel) + '</b> · 预设 <b>' + esc(modePresetText(state.mode)) + '</b>。' +
@@ -1748,7 +1749,7 @@ function renderAdvanced(){
   '<div>' +
     '<div class="slider-head"><span>合并批次 <span style="color:#94A3B8">· mt_cap，越大越省调用</span></span></div>' +
     '<span class="dd-host" id="advBatchHost"></span>' +
-    '<div class="hint-line">实时预设 2 段/批，缓存预设 6 段/批</div>' +
+    '<div class="hint-line">直播预设 2 段/批，视频翻译预设 6 段/批</div>' +
   '</div>' +
   '<div>' +
     '<div class="slider-head"><span>术语表 <span style="color:#94A3B8">· 源词=译法</span></span></div>' +
@@ -1758,8 +1759,8 @@ function renderAdvanced(){
 
   createDropdown($("#advBatchHost"), {
     id:"adv-batch",
-    options:[ {value:"1",label:"1 段（逐段，最跟手）"}, {value:"2",label:"2 段（实时预设）"},
-              {value:"4",label:"4 段"}, {value:"6",label:"6 段（缓存预设）"}, {value:"12",label:"12 段（整段合并）"} ],
+    options:[ {value:"1",label:"1 段（逐段，最跟手）"}, {value:"2",label:"2 段（直播预设）"},
+              {value:"4",label:"4 段"}, {value:"6",label:"6 段（视频翻译预设）"}, {value:"12",label:"12 段（整段合并）"} ],
     value:String(p.batch || 2),
     onSelect: function(v, o){
       state.params.batch = Number(v);
@@ -1847,8 +1848,8 @@ function renderStats(){
     statBox("bolt", "当前预设", modePresetText(state.mode), "");
   $("#recStats").innerHTML =
     statBox("rows", "总记录", String(BABEL_UI.records.length), "条") +
-    statBox("wave", "实时回环", String(BABEL_UI.records.filter(function(r){ return r.src === "loopback"; }).length), "条") +
-    statBox("film", "视频缓存", String(BABEL_UI.records.filter(function(r){ return r.src === "cache"; }).length), "条") +
+    statBox("wave", "直播翻译", String(BABEL_UI.records.filter(function(r){ return r.src === "loopback"; }).length), "条") +
+    statBox("film", "视频翻译", String(BABEL_UI.records.filter(function(r){ return r.src === "cache"; }).length), "条") +
     statBox("clock", "总时长", "6:52:14", "");
   $("#sparkScale").textContent = "0s — 1.6s";
   renderSpark();
@@ -1972,7 +1973,7 @@ function renderPreview(){
 /* ============================================================
    12. 记录表
    ============================================================ */
-const SRC_LABEL = { loopback:"实时回环", cache:"视频缓存" };
+const SRC_LABEL = { loopback:"直播翻译", cache:"视频翻译" };
 const STATE_LABEL = { done:"已完成", run:"运行中", stop:"已停止", fail:"失败" };
 function statusHTML(s){ return '<span class="status ' + s + '">' + esc(STATE_LABEL[s] || s) + '</span>'; }
 function recordsTable(idPrefix){
@@ -2007,7 +2008,7 @@ function mountRecords(host, id){
     };
   };
   createDropdown($("#" + id + "-src-host"), { id:id + "-src-dd", value:"all", onSelect:onFilter("src"), options:[
-    {value:"all",label:"全部来源"}, {value:"loopback",label:"实时回环"}, {value:"cache",label:"视频缓存"} ] });
+    {value:"all",label:"全部来源"}, {value:"loopback",label:"直播翻译"}, {value:"cache",label:"视频翻译"} ] });
   createDropdown($("#" + id + "-dir-host"), { id:id + "-dir-dd", value:"all", onSelect:onFilter("dir"), options:[
     {value:"all",label:"全部语种"}, {value:"en → zh",label:"en → zh"}, {value:"ja → zh",label:"ja → zh"},
     {value:"ko → zh",label:"ko → zh"}, {value:"vi → zh",label:"vi → zh"} ] });
@@ -2125,8 +2126,8 @@ function setRow(label, sub, kind, val){
    14. 视图 / 模式切换
    ============================================================ */
 const VIEW_TITLE = {
-  loopback:{ h:"直播翻译和视频翻译", s:"模块：<b>实时回环系统</b> · 边放边译，输入来自系统回环" },
-  cache:   { h:"直播翻译和视频翻译", s:"模块：<b>视频缓存</b> · 播放器缓存目录批量翻译，追求准确" },
+  loopback:{ h:"直播翻译和视频翻译", s:"模块：<b>直播翻译</b> · 边放边译，输入来自系统回环" },
+  cache:   { h:"直播翻译和视频翻译", s:"模块：<b>视频翻译</b> · 视频翻译缓存（pre_cache）批量翻译，追求准确" },
   models:  { h:"模型管理",           s:"ASR / MT 候选表 · 显存预算 · 可用性与不可用原因 · 归属模块" },
   repo:    { h:"模型仓库",           s:"搜索 / 下载 / 设为默认 / 卸载 · 硬件检测与推荐" },
   overlay: { h:"浮窗控制",           s:"字幕浮窗全参数实时调节 · 改动 300ms 内上屏" },
@@ -2196,7 +2197,7 @@ function renderModeSeg(){
   const seg = $("#modeSeg");
   seg.innerHTML = ["loopback", "cache"].map(function(k){
     const on = state.mode === k;
-    const label = (MODELS.modes[k] && MODELS.modes[k].label) || (k === "loopback" ? "实时回环系统" : "视频缓存");
+    const label = (MODELS.modes[k] && MODELS.modes[k].label) || (k === "loopback" ? "直播翻译" : "视频翻译");
     return '<button class="seg-item' + (on ? " active" : "") + '" type="button" data-mode="' + k + '" ' +
            'aria-pressed="' + on + '">' +
            '<span class="si-ico">' + icon(k === "loopback" ? "wave" : "film", 15) + '</span>' +
@@ -2289,7 +2290,7 @@ function boot(){
   bindNav();
   bindGlobal();
   applyMode("loopback", false);  // 先按内置数据把工作台整条渲染管线跑一遍
-  setView("loopback");           // 默认落地：翻译字幕工作台 · 实时回环系统
+  setView("loopback");           // 默认落地：翻译字幕工作台 · 直播翻译
   renderDataSource();
 
   // 3) 拉模型数据：API → 快照 → 内置；回来后按新注册表重新绑定模式并整页重渲染
@@ -2365,7 +2366,7 @@ function engRender(st){
   py.textContent = st.python || "—";
   py.title = st.python_reason || "";
   const modeEl = document.getElementById("engMode");
-  if (modeEl && st.mode) modeEl.textContent = st.mode === "cache" ? "视频缓存" : "实时回环系统";
+  if (modeEl && st.mode) modeEl.textContent = st.mode === "cache" ? "视频翻译" : "直播翻译";
 
   if (ENGINE.running) engSetChip("running", "浮窗已启动");
   else if (st.exit_code !== null && st.exit_code !== undefined) engSetChip("exited", "已退出 (" + st.exit_code + ")");

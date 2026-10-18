@@ -253,7 +253,8 @@ class LocalMT:
         t0 = time.time()
         self.proc = subprocess.Popen(
             args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            cwd=os.path.dirname(self.bin))
+            cwd=os.path.dirname(self.bin),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         while time.time() - t0 < self.start_timeout:
             if self.proc.poll() is not None:
                 self.last_err = f"llama-server 退出码 {self.proc.returncode}"
