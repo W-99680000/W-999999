@@ -775,6 +775,17 @@ def _auto_main(args):
         if e.key() == Qt.Key_Escape:
             ov.app.quit()
             return
+        # 本地时钟兜底时的手动校正：Home 从当前时刻归零；←/→ ±2s
+        if clock["on"] and e.key() == Qt.Key_Home:
+            clock["base"] = 0.0
+            clock["t0"] = time.monotonic()
+            clock["offset"] = 0.0
+            _log("本地时钟：从当前时刻归零")
+            return
+        if clock["on"] and e.key() in (Qt.Key_Left, Qt.Key_Right):
+            clock["offset"] += (-2.0 if e.key() == Qt.Key_Left else 2.0)
+            _log(f"本地时钟校正: offset={clock['offset']:+.1f}s")
+            return
         _orig_key(e)
 
     ov.w.keyPressEvent = _key
@@ -784,6 +795,12 @@ def _auto_main(args):
         pass
     _log("=" * 44)
     _log("watch --auto 启动")
+    # SMTC 会话可能“有标题/在播，但不上报 position”（夸克部分视频、广告、
+    # 直播回放都会这样）。此时不能只会显示“等待播放位置”，否则用户看到
+    # 的就是视频翻译完全没字幕。用本地时钟先跑起来，并允许 Home/←→ 校正。
+    clock = {"on": False, "base": 0.0, "t0": time.monotonic(),
+             "playing": False, "offset": 0.0, "last_pos": 0.0,
+             "warned": False}
     ov.flash("常驻字幕已启动 —— 有缓存直接出，没缓存自动预翻译", 5.0)
     print("常驻模式：监听系统媒体会话，自动匹配 pre_cache 里的字幕")
     print("        （Ctrl+C 或关浮窗退出）")
@@ -1093,6 +1110,34 @@ def _auto_main(args):
             if not cur["cues"]:
                 return
             pos = tracker.position()
+            # SMTC 没时间线时的兜底：从“最后一次已知位置”起，按墙钟推进；
+            # 暂停冻结；若之前从未有过位置，则从 0 开始（Home 可从当前时刻归零）。
+            if pos is None:
+                now = time.monotonic()
+                if not clock["on"]:
+                    clock.update(on=True, base=clock["last_pos"],
+                                 t0=now, offset=0.0,
+                                 playing=bool(tracker.playing()))
+                    if not clock["warned"]:
+                        clock["warned"] = True
+                        _log("SMTC 不上报时间线 → 启用本地时钟兜底"
+                             "（Home 当前归零 / ←→ ±2s）")
+                _playing = bool(tracker.playing())
+                if _playing:
+                    if not clock["playing"]:
+                        clock["t0"] = now
+                        clock["playing"] = True
+                    pos = clock["base"] + (now - clock["t0"]) + clock["offset"]
+                else:
+                    if clock["playing"]:
+                        clock["base"] += now - clock["t0"]
+                        clock["playing"] = False
+                    pos = clock["base"] + clock["offset"]
+            else:
+                if clock["on"]:
+                    _log("SMTC 时间线恢复，切回系统位置")
+                    clock.update(on=False, warned=False)
+                clock["last_pos"] = float(pos)
             # 进度拖动检测：跳变命中 → 清残留旧条目、强制按新位置重画。
             # 双通道：位置跳变（通用）+ SMTC 锚点级 seek 事件（更早半拍）。
             jumped = _jump.feed(pos)
@@ -1106,11 +1151,8 @@ def _auto_main(args):
                 _log(f"检测到进度拖动 → 重新对齐 pos={pos:.1f}s")
             if pos is None:
                 _status(f"字幕已就绪（{len(cur['cues'])} 条）"
-                        f"　等待播放位置…")
-                if not cur["warned_pos"]:
-                    cur["warned_pos"] = True
-                    _log("警告: 会话不上报时间线（position=None），"
-                         "无法自动同步")
+                        f"　播放器未上报时间线；已启用本地时钟"
+                        f"（Home 归零 / ←→ 校正）")
                 return
             # 位置有了 → 状态提示该撤（它是"等位置"用的，别跟字幕叠着）
             if cur["status"] or cur.get("status_lb"):
