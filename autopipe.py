@@ -412,8 +412,29 @@ class AutoCache:
                      "stage": stage, "srt": None, "url": j.get("url")})
 
     def close(self):
+        """退出必须**杀掉所有正在跑的预翻译子进程**。
+
+        原来只置 _closed 标记：watch 收到停止后正常退出，但它拉起的
+        pretranslate 子进程还活着继续吃 GPU。下一次启动 watch 再拉一个，
+        两个 whisper 抢 8GB 卡 → 新任务 OOM，界面就是“视频翻译整体失效”。
+        """
         with self._lock:
             self._closed = True
+            victims = [(nt, j.get("proc")) for nt, j in self._jobs.items()
+                       if j.get("state") == "running"]
+            for nt, _p in victims:
+                self._jobs[nt]["cancel"] = True
+        for nt, proc in victims:
+            if proc is None:
+                continue
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            try:
+                self.log(f"[autopipe] 退出清理：已杀预翻译子进程 {proc.pid}")
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

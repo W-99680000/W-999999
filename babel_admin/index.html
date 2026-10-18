@@ -607,7 +607,17 @@ td.muted{color:var(--ink-3)}
   body.embed .main{overflow:visible}
   body.embed .main-inner{max-width:none;padding:10px 16px 24px}
   body.embed .page-head{display:none}
-  body.embed .apply-strip{display:none}
+  /* 内嵌模式也必须能“应用/热切换”：之前把 apply-strip 隐藏了，选完模型没按钮可点 */
+  body.embed .apply-strip{
+    display:flex !important; margin-top:10px; padding:10px 12px;
+    background:rgba(79,140,255,.09) !important;
+    border-color:rgba(79,140,255,.25) !important;
+    border-radius:12px;
+  }
+  body.embed .apply-text{color:var(--ink-2) !important; font-size:12px}
+  body.embed .apply-text b{color:var(--ink) !important}
+  body.embed .apply-text code{background:rgba(0,0,0,.28) !important;
+    color:#9fd0ff !important; border-color:rgba(255,255,255,.10) !important}
   body.embed .card{background:rgba(255,255,255,.045);border-color:rgba(255,255,255,.09);
     box-shadow:none;color:var(--ink)}
   body.embed .card-desc,body.embed .field-note,body.embed .hint-line{color:var(--ink-2)}
@@ -698,6 +708,47 @@ td.muted{color:var(--ink-3)}
   }
   body.embed .speed-box{background:rgba(255,255,255,.05) !important;
     border-color:rgba(255,255,255,.10) !important}
+  /* 折叠「高级参数」：白底+浅字，整条看不清 */
+  body.embed details.adv{
+    background:rgba(255,255,255,.045) !important;
+    border-color:rgba(255,255,255,.10) !important;
+    color:var(--ink) !important;
+  }
+  body.embed details.adv > summary{color:var(--ink) !important}
+  body.embed details.adv > summary:hover{background:rgba(255,255,255,.06) !important}
+  body.embed details.adv .ad-sum,
+  body.embed details.adv .ad-caret{color:var(--ink-2) !important}
+  body.embed details.adv .adv-body{color:var(--ink) !important}
+  body.embed details.adv .adv-body *{color:inherit}
+  body.embed .toast{
+    background:#0f1728 !important;
+    border-color:rgba(79,140,255,.55) !important;
+    color:var(--ink) !important;
+  }
+  body.embed .toast *{color:inherit !important}
+  body.embed .toast .t-ico{color:#7fe3b0 !important}
+  /* 同传记录表头 / 设置里的 kbd 值块也是白底浅字（实测 rgb(248,252,250)） */
+  body.embed table th,
+  body.embed thead th{
+    background:rgba(255,255,255,.06) !important;
+    color:var(--ink) !important;
+    border-color:rgba(255,255,255,.10) !important;
+  }
+  body.embed .kbd{
+    background:rgba(255,255,255,.08) !important;
+    color:var(--ink) !important;
+    border-color:rgba(255,255,255,.14) !important;
+  }
+  body.embed .kbd *{color:inherit !important}
+  body.embed .status{
+    background:rgba(255,255,255,.07) !important;
+    color:var(--ink) !important;
+    border-color:rgba(255,255,255,.14) !important;
+  }
+  body.embed .status.fail{background:rgba(255,90,110,.16) !important;
+    color:#ffb3be !important; border-color:rgba(255,90,110,.35) !important}
+  body.embed .status.ok{background:rgba(34,197,94,.14) !important;
+    color:#8ef0b6 !important; border-color:rgba(34,197,94,.30) !important}
 </style>
 </head>
 <body>
@@ -2503,6 +2554,7 @@ function engRender(st){
   if (!st) return;
   const _em = st.mode || (typeof state !== "undefined" && state.mode) || "loopback";
   engModeUI(_em);
+  ENGINE.mode = _em;                 // restart 要用真实引擎模式，不是界面视图
   ENGINE.running = !!st.running;
   const pid = st.pid;
   document.getElementById("btnEngStart").disabled = ENGINE.running || ENGINE.busy;
@@ -2582,14 +2634,21 @@ async function engAction(action){
   if (action === "restart") engSetChip("starting", "重启中…");
   engPoll();
   try {
-    const _mode = (typeof state !== "undefined" && state.mode) || "loopback";
+    // restart 必须沿用**引擎当前模式**（ENGINE.mode），不能用界面正在看的
+    // state.mode：模型页默认显示 loopback，用户点“应用到视频翻译”时
+    // state.mode 还是 loopback，restart 会把 watch 换成直播引擎 ——
+    // 现象就是“视频翻译整体失效”。start 才用界面选择的模式。
+    const _engMode = (typeof ENGINE !== "undefined" && ENGINE.mode) || "";
+    const _mode = (action === "restart" && _engMode)
+      ? _engMode
+      : ((typeof state !== "undefined" && state.mode) || "loopback");
     const extra = (_mode === "loopback" && document.getElementById("engNoSrt").checked)
       ? ["--no-srt"] : [];
     // **wait:false** —— 首次启动要冷加载模型（实测 177 秒），HTTP 一次
     // 等到底会让浏览器请求挂 3 分钟，界面上看着就是"点了没反应"。
     // 改成立刻返回 + 1.5 秒轮询：日志逐行滚出来，用户能看见它在动。
     const j = await engineCall("POST", {
-      action: action, mode: (typeof state !== "undefined" && state.mode) || "loopback",
+      action: action, mode: _mode,
       extra: extra, wait: false
     });
     if (j.engine) engRender(j.engine);

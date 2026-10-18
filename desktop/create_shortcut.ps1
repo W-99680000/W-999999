@@ -3,12 +3,14 @@
     为「巴别塔计划」创建桌面 / 开始菜单快捷方式（可重复执行）。
 
 .DESCRIPTION
-    快捷方式的目标不是 python / pythonw，而是 wscript.exe：
+    快捷方式优先指向带嵌入图标的 desktop\BabelPlan.exe（由
+    build\build_exe.ps1 生成）；没有 exe 时退回：
         wscript.exe "<项目>\desktop\BabelPlan.vbs"
     BabelPlan.vbs 再用 pythonw.exe 拉起 app.py。整条链上没有任何一个
     控制台子系统进程，所以双击后不会闪黑窗。
 
-    图标用 desktop\babel.ico，工作目录固定为项目根（app.py 的相对路径
+    图标用 exe 自身（嵌入 babel.ico）；没有 exe 时用 desktop\babel.ico。
+    工作目录固定为项目根（app.py 的相对路径
     都按它自己所在目录推导，但工作目录正确能保证日志/工具行为一致）。
 
     重复执行只会覆盖同名 .lnk，不会产生重复项。
@@ -53,6 +55,7 @@ $ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).ProviderPath
 
 $vbs = Join-Path $ProjectRoot "desktop\BabelPlan.vbs"
 $ico = Join-Path $ProjectRoot "desktop\babel.ico"
+$exe = Join-Path $ProjectRoot "desktop\BabelPlan.exe"
 $wscript = Join-Path $env:SystemRoot "System32\wscript.exe"
 
 if (-not (Test-Path -LiteralPath $vbs -PathType Leaf)) {
@@ -107,12 +110,20 @@ if ($Remove) {
 $shell = New-Object -ComObject WScript.Shell
 foreach ($lnk in $targets) {
     $sc = $shell.CreateShortcut($lnk)
-    $sc.TargetPath = $wscript
-    $sc.Arguments = '"' + $vbs + '"'
-    $sc.WorkingDirectory = $ProjectRoot
-    if (Test-Path -LiteralPath $ico -PathType Leaf) {
-        $sc.IconLocation = $ico + ",0"
+    # 优先用带嵌入图标的 BabelPlan.exe（app 自己的启动键就是巴别塔图标）；
+    # 没构建 exe 时退回 wscript + VBS（同样无黑窗）。
+    if (Test-Path -LiteralPath $exe -PathType Leaf) {
+        $sc.TargetPath = $exe
+        $sc.Arguments = ""
+        $sc.IconLocation = $exe + ",0"
+    } else {
+        $sc.TargetPath = $wscript
+        $sc.Arguments = '"' + $vbs + '"'
+        if (Test-Path -LiteralPath $ico -PathType Leaf) {
+            $sc.IconLocation = $ico + ",0"
+        }
     }
+    $sc.WorkingDirectory = $ProjectRoot
     $sc.Description = $Description
     $sc.WindowStyle = 1          # 1 = 普通窗口（wscript 本来就不显示窗口）
     $sc.Save()
@@ -120,7 +131,7 @@ foreach ($lnk in $targets) {
 }
 
 Write-Host ""
-Write-Host "目标：$wscript `"$vbs`""
+Write-Host "目标：$(if (Test-Path -LiteralPath $exe) { $exe } else { $wscript + ' ' + $vbs })"
 Write-Host "图标：$ico"
 Write-Host "工作目录：$ProjectRoot"
 Write-Host ""

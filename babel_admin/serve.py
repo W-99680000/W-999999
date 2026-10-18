@@ -972,7 +972,13 @@ class Handler(BaseHTTPRequestHandler):
             # POST：{ "action": "start"|"stop"|"restart", "mode": "loopback",
             #         "wait": true, "extra": ["--no-srt"] }
             act = str(req.get("action") or "start").lower()
-            mode = str(req.get("mode") or "loopback")
+            # restart 必须保留上一次的模式：热切换模型时如果默认回 loopback，
+            # 正在跑的视频翻译（watch/cache）会被悄悄换成直播翻译 ——
+            # 用户看到的就是“视频翻译整体失效了”。
+            mode = str(req.get("mode") or "")
+            if not mode:
+                mode = (ENGINE.mode if act == "restart" and ENGINE.mode
+                        else "loopback")
             if act in ("start", "restart"):
                 if act == "restart":
                     ENGINE.stop(hard=bool(req.get("hard")))

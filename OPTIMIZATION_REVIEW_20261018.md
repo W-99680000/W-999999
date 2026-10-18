@@ -1033,3 +1033,62 @@ watch 模式同样无子进程/无 conhost。
 | 搜索 | tools/test_model_search.py 10/0 |
 | 图标 | 标题栏截图可见图标、WM_GETICON 非 0 |
 | 回归 | check_admin_html 29/0、check_console_html 22/0、models 41/0 |
+
+
+---
+
+## 32. 视频翻译失效 / 模型热切换 / 白色高亮 / App 自身图标（2026-10-18）
+
+### 32.1 视频翻译“整体失效”的两个根因
+
+1. **热切换把 watch 换成 loopback**：
+   - 经典模型页 `engAction("restart")` 发的是 `state.mode`（模型页默认
+     loopback），serve 重启默认也 loopback；
+   - 用户点“应用到视频翻译”时，引擎被重启成直播引擎，watch 浮窗消失，
+     看起来就是“视频翻译整体失效”。
+   - 修复：UI 重启沿用 `ENGINE.mode`（真实引擎模式，engRender 里记录）；
+     serve 在 restart 未显式给 mode 时保留 `ENGINE.mode`。
+2. **退出 watch 不杀预翻译子进程**：
+   - `AutoCache.close()` 原来只置 `_closed`，pretranslate 子进程继续吃
+     GPU；热重启后再拉一个 whisper，8GB 卡互抢 → 新任务 OOM
+     “全部完成：0/1”。
+   - 修复：close 时杀掉所有 running 子进程；watch 正常退出即清理。
+
+### 32.2 模型/功能热切换
+
+- 内嵌模型页之前把 `.apply-strip` 隐藏了：选完模型**没有应用按钮**。
+- 现在 embed 模式显示 apply-strip（深色适配），选中模型→“应用到视频
+  翻译/两个都用”会写注册表并重启引擎，且保持当前模式。
+- 实测：cache 运行 → 选 qwen-mt-lite → 应用到视频翻译 → 新引擎
+  `mode=cache`，旧 pretranslate 已杀，watch 重新匹配字幕。
+
+### 32.3 白色高亮看不清
+
+用“合成背景亮度 + 文字亮度”审计 5 个内嵌页，修掉所有白底浅字：
+
+- 折叠“高级参数”整条白底；
+- toast（模型数据已加载/已应用…）白底；
+- 同传记录表头 `<th>`；
+- 设置页 `.kbd` 值块；
+- `.status.fail` “失败”标签。
+审计结果：models/repo/records/overlay/settings 全部 0 处白底浅字。
+
+### 32.4 App 自身图标（不是桌面快捷方式图标）
+
+- 用户要求的是“app 本身那个启动键”的图标，不是再加桌面图标。
+- 新增 `desktop/app_launcher.py`，用 PyInstaller 打成
+  `desktop/BabelPlan.exe`（`--icon desktop/babel.ico`，嵌入 exe 图标）；
+- `create_shortcut.ps1` 优先把快捷方式指向这个 exe（IconLocation=exe）；
+- app 窗口同时保留 `webview.start(icon=babel.ico)` + WM_SETICON +
+  AppUserModelID，任务栏/标题栏/Alt-Tab 都显示巴别塔图标。
+
+### 32.5 验证
+
+| 项 | 结果 |
+|---|---|
+| 视频翻译 | 匹配缓存 63→68 条、位置对齐、`watch_overlay_state` 有字幕 |
+| 热切换 | 浏览器请求 `{"action":"restart","mode":"cache"}`，重启后仍 cache |
+| 自动预翻译清理 | 热重启后旧 pretranslate 进程消失，只剩新任务 |
+| 白色高亮 | 5 个内嵌页审计 0 处白底浅字 |
+| 图标 | 桌面/开始菜单快捷方式 Target=desktop\\BabelPlan.exe、Icon=exe,0 |
+| 回归 | check_admin_html 29/0、check_console_html 22/0、model_search 10/0 |
