@@ -570,7 +570,7 @@ panel.bat
    watch 启动 1 秒后自己退出（日志先 `lastWindowClosed` 再 `watch 退出`）。
    现在关掉这个默认行为，退出只认 Esc / Ctrl+C（单文件模式同样处理）。
 
-验证：`python bench/_verify_hysteresis.py`（16 项，含缓存标题匹配 13/13）；
+验证：`python bench/eval_asr.py`（WER/CPS 基线）、`python tools/soak_test.py --seconds 600`（稳定性）、`python bench/_verify_hysteresis.py`（16 项，含缓存标题匹配 13/13）；
 `watch.bat --no-pretranslate` 实测 10 秒内标题零漂移；B 站已缓存网址
 走 pretranslate 缓存命中 **0.5 秒**返回；半截缓存续跑实测：4 条 → 10 条，
 `watch.log` 出现"字幕增量：8 条（覆盖到 0.8 分钟）"，watch 持续存活。

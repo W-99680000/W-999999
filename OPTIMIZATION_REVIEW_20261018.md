@@ -655,3 +655,46 @@ AlignAtt/SimulStreaming 需 cross-attention 且推荐 ≥10GB 显存 → 只列 
 | 长片 A/B（386s） | 内部 32→12s、总 46→26s、cue 56→52 |
 | `tools/soak_test.py --seconds 90` | PASS（31 批、+1MB、0 Traceback、exit 0） |
 | 回归 | quality gates 25/0、admin 28/0、watchdog 7/0 |
+
+
+---
+
+## 23. 准确性基线（WER/CPS）+ 10 分钟稳定性 soak（2026-10-18 第六轮）
+
+### 23.1 `bench/eval_asr.py`：ASR 准确性与字幕可读性基线
+
+样本 `samples/loopback_test.wav` 是 Windows TTS 合成的已知文本（15 词 × 2 遍），
+参照文本已知可算 WER；同时用 `build_cues` 算每条字幕 CPS（字符/秒）。
+
+| 模型 | 模式 | WER | 识别耗时 | cue CPS P50 / P90 | CPS>20 占比 |
+|---|---|---|---|---|---|
+| medium | 顺序 | **0.000** | 0.9s | 10.14 / 10.53 | 0% |
+| medium | 批推 | **0.000** | 0.6s | 8.33 / 9.49 | 0% |
+| large-v3 | 顺序 | **0.000** | 1.1s | 10.63 / 11.64 | 0% |
+| large-v3 | 批推 | **0.000** | 0.9s | 8.37 / 10.20 | 0% |
+
+- 数字词归一（one↔1）后 WER 才真实：不归一会被格式差异白算 0.333。
+- 基线写 `work/asr_eval.json`，改模型/切句后可直接 A/B。
+- TTS 合成样本，真实素材 WER 需人工标注集（路线图保留）。
+
+### 23.2 10 分钟 soak（直播引擎）
+
+`python tools/soak_test.py --seconds 600`：
+
+```
+ready 4s · 600s 全程 alive · 216 批
+RSS 846.4 → 848.0MB（+1.6MB）
+Traceback 0 · 优雅退出 exit 0 · ASR P50 0.55s
+PASS
+```
+
+配合 watchdog（强杀→自动重启）与 `--seconds 28800` 8h 入口，稳定性从
+"冒烟"升级到"10 分钟实测"。
+
+### 23.3 验证
+
+| 项 | 结果 |
+|---|---|
+| `bench/eval_asr.py`（新） | WER 0.000（4 组）；CPS P50 8.3–10.6；>20 占 0% |
+| `tools/soak_test.py --seconds 600` | PASS（216 批、+1.6MB、0 Traceback、exit 0） |
+| 回归 | quality gates 25/0、wiring 20/0、admin 28/0、watchdog 7/0 |

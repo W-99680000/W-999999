@@ -32,6 +32,8 @@
 | 视频缓存命中 | 0.5s 返回 | `pre translate` 缓存命中实测 |
 | 视频半截缓存续跑 | 4→10 条，热重载 | `watch.log` 实测 |
 | 管理端启动引擎→ready | ~6s（含模型加载） | `tools/test_engine_control.py` |
+| ASR WER（TTS 样本） | medium/large-v3 = **0.000**；批推同为 0.000 | `bench/eval_asr.py` |
+| 字幕 CPS（TTS 样本） | 顺序 P50 10.1 / P90 10.5；批推 8.3 / 9.5；>20 占比 0% | `bench/eval_asr.py` |
 | 自检 | live 174/0、engine-control 20/0、registry 41/0、wiring 20/0 | 各 selftest |
 
 > 注：当前指标还没覆盖"音频说出→上屏"的真端到端延迟与 ASR/MT 质量；第 2 节先补采集。
@@ -83,6 +85,11 @@
 - 视频翻译按"当前播放位置优先"的分块排序（需改 SRT 写入顺序/让 watch 容错乱序）；
 - 多人声/音乐场景的源分离（人声增强）预处理器；
 - 多屏/远程字幕（手机端查看）。
+
+- 准确性/可读性基线 ✅ `bench/eval_asr.py`：TTS 样本 WER 0.000（medium/
+  large-v3、顺序/批推四组）；cue CPS P50 8.3–10.6 / P90 9.5–11.6，
+  CPS>20 占比 0%；基线写 `work/asr_eval.json`。真实素材 WER 与 CPS 强制
+  （>20 时切句）仍在路线图。
 
 ## 4. 稳定性测试矩阵
 

@@ -60,7 +60,8 @@ BENCH = ["bench_latency.py", "bench_localagree.py", "bench_fastest.py",
          "_verify_hotreload.py", "_verify_incremental.py",
          "_verify_rolling.py", "_cmp_chunk_full.py", "_prestore_vs_live.py",
          "_verify_quality_gates.py",  # 质量闸/SRT 真实时长回归
-         "_bench_batched_asr.py"]     # 顺序 vs 批推理基准
+         "_bench_batched_asr.py",      # 顺序 vs 批推理基准
+         "eval_asr.py"]                # WER + CPS 基线
 TOOLS = ["test_pipeline.py", "test_borrowed.py", "test_drag2.py", "test_loopback3.py", "test_vietnamese.py",
          "test_mymemory.py", "test_google_free.py", "test_google_sustained.py",
          "compare_vi_paths.py", "compare_vi_models.py", "compare_vi3.py",
