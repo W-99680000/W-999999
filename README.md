@@ -36,6 +36,10 @@
 | **直播翻译** | `loopback` | 抓系统音频（WASAPI 回环），实时识别 + 翻译，浮窗/直播字幕 | `start.bat`、桌面版 |
 | **视频翻译** | `cache` | 整片预翻译成双语 SRT 缓存，播放时按播放位置显示 | `watch.bat`、`cache.bat` |
 
+**视频翻译长片默认用 faster-whisper 批推理**（`--asr-batch 8`，首块/短块仍流式）：
+386s 实测内部耗时 32s→12s（2.7×）、总耗时 46s→26s；批推的粗 segment 会按
+词间静音 gap 重切并补回标点。想要最接近流式的切分可用 `--asr-batch 0` 关闭。
+
 **桌面版（推荐给普通用户）**：运行一次
 `powershell -ExecutionPolicy Bypass -File desktop\install.ps1`
 （`-Autostart` 开机托盘常驻，`-Uninstall` 卸载），之后双击「巴别塔计划」图标即可 ——

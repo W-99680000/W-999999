@@ -429,6 +429,68 @@ def _split_long(start, end, text):
     return [(a, b, x) for a, b, x in out if x]
 
 
+def _mk_pseudo_seg(words, mark=""):
+    """把一组 word 包成 segment 形状（start/end/text/words），给 build_cues 用。
+
+    mark：在最后一个 word 上补标点。批解码常丢标点，而 _seg_sentences
+    是从 word 重建文本的，所以必须补在 word 上才能被后续断句看到。
+    """
+    from types import SimpleNamespace
+    ws = [SimpleNamespace(word=getattr(w, "word", ""),
+                          start=float(w.start), end=float(w.end))
+          for w in words]
+    if not ws:
+        return None
+    txt = re.sub(r"\s+", " ", "".join(w.word for w in ws)).strip()
+    if not txt:
+        return None
+    if mark and txt and not txt.rstrip().endswith(tuple("。！？!?.;；,，")):
+        ws[-1].word = ws[-1].word.rstrip() + mark
+        txt = txt.rstrip() + mark
+    return SimpleNamespace(start=ws[0].start, end=ws[-1].end,
+                           text=txt, words=ws)
+
+
+def split_batched_segments(segs, gap=0.75, max_seg=8.0, min_run=1.5):
+    """批推理的粗 segment → 按词间静音 gap 重切（无标点也能切出句子感）。"""
+    out = []
+    for seg in segs:
+        words = list(getattr(seg, "words", None) or [])
+        if not words:
+            out.append(seg)
+            continue
+        cur = []
+        for w in words:
+            if not cur:
+                cur = [w]
+                continue
+            gap_t = float(w.start) - float(cur[-1].end)
+            dur = float(cur[-1].end) - float(cur[0].start)
+            if (gap_t >= gap and dur >= min_run) or dur >= max_seg:
+                # 停顿 ≥1.2s 视为句末，否则按句中断开补逗号
+                mark = "。" if gap_t >= 1.2 else "，"
+                ps = _mk_pseudo_seg(cur, mark=mark)
+                if ps is not None:
+                    out.append(ps)
+                cur = [w]
+            else:
+                cur.append(w)
+        ps = _mk_pseudo_seg(cur)
+        if ps is not None:
+            out.append(ps)
+    return out
+
+
+def shape_batched_cues(cues):
+    """把 build_cues 之后仍然过长的 cue 按 MAX_CUE_DUR/MAX_CUE_CHARS 再切。"""
+    out = []
+    for c in cues:
+        for st, en, txt in _split_long(c.start, c.end, c.text):
+            out.append(Cue(st, en, txt))
+    _min_duration_fixup(out)
+    return out
+
+
 def build_cues(segments):
     """句 → cue：合并到过读得完的上限，拆开过长的。"""
     sents = []
@@ -879,15 +941,22 @@ def process(src, args):
         # 首屏从"整块识别完+整块翻译完"提前到"头一批译完"。
         got_any = False
         _chunk_audio = audio[int(a * sr):int(b * sr)]
+        _batched_ok = False
         if _asr_pipe is not None and (b - a) >= 60:
-            _segs, _info = transcribe_batched(
-                _asr_pipe, _chunk_audio, lang=(args.lang or None),
-                prompt=prompt, tag=tag, batch_size=_asr_batch)
-            info_box["language"] = getattr(_info, "language", None)
-            info_box["language_probability"] = getattr(
-                _info, "language_probability", 0.0)
-            _cue_iter = iter(build_cues(_segs))
-        else:
+            try:
+                _segs, _info = transcribe_batched(
+                    _asr_pipe, _chunk_audio, lang=(args.lang or None),
+                    prompt=prompt, tag=tag, batch_size=_asr_batch)
+                info_box["language"] = getattr(_info, "language", None)
+                info_box["language_probability"] = getattr(
+                    _info, "language_probability", 0.0)
+                _segs2 = split_batched_segments(_segs)
+                _cue_iter = iter(shape_batched_cues(build_cues(_segs2)))
+                _batched_ok = True
+            except Exception as _e:
+                print(f"  ！批推理失败（{type(_e).__name__}: {_e}），"
+                      f"本块回退流式识别")
+        if not _batched_ok:
             _cue_iter = iter_chunk_cues(
                 model, _chunk_audio,
                 lang=(args.lang or None), prompt=prompt,
@@ -1003,9 +1072,9 @@ def build_parser():
                     help="一次调用合并翻译的条数（默认 8；失败自动退回逐条）")
     ap.add_argument("--mt-local", action="store_true",
                     help="用本地 HY-MT 翻译（完全离线）")
-    ap.add_argument("--asr-batch", type=int, default=0,
-                    help="faster-whisper 批推理 batch（0=关；建议 8，"
-                         "长片提速约 2.9×，segment 会变粗）")
+    ap.add_argument("--asr-batch", type=int, default=8,
+                    help="faster-whisper 批推理 batch（0=关；默认 8，"
+                         "长块提速约 2.9×；短块/首块仍走流式；失败自动回退）")
     ap.add_argument("--terms", action="append", default=[],
                     help="术语：'源词=译法' 或术语表文件（仅 --mt-local 生效）")
     ap.add_argument("--force", action="store_true", help="忽略缓存重跑")

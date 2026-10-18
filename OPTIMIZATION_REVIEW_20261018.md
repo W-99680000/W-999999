@@ -621,3 +621,37 @@ AlignAtt/SimulStreaming 需 cross-attention 且推荐 ≥10GB 显存 → 只列 
 | `tools/test_watchdog.py`（新） | 7/0（强杀→新 pid→ready→干净停止） |
 | `desktop/install.ps1 -DryRun` | 安装/卸载动作输出正确（BOM 后解析通过） |
 | 质量回归（上轮） | quality gates 25/0、admin 28/0、selftest 174/0 |
+
+
+---
+
+## 22. 视频批推理默认化 + cue 整形 + soak 冒烟（2026-10-18 第五轮）
+
+### 22.1 批推理默认 `--asr-batch 8`（长块）
+
+- 批推粗 segment 先用**词间静音 gap（≥0.75s）** 重切成近似句子，断句处按
+  gap 大小补 `，`/`。`（批解码常丢标点）；仍超长的 cue 用 `_split_long`
+  按 `MAX_CUE_DUR/MAX_CUE_CHARS` 整形。
+- 120s 真实音频：流式 cues=19（max 10.67s） vs 批推+gap 切 cues=16
+  （max 8.18s、带标点）；识别 12.30s→4.27s（2.88×）。
+- 386s 长片 A/B：`--asr-batch 0` → 内部 32s / 总 46s / 56 条；
+  默认 8 → 内部 **12s** / 总 **26s** / 52 条；各 120s 块批推 1.5–1.9s
+  （约 60–80× 实时）。首块（30s）仍流式，首屏不受影响。
+- 安全网：批推/整形异常时本块打印原因并**回退流式**，长片不中断。
+
+### 22.2 soak 冒烟（`tools/soak_test.py`）
+
+- 隐藏启动引擎，`winsound` 循环播放样本（系统声音→WASAPI 环回），
+  每 15s 采样 RSS/存活/Traceback，结束时写停止哨兵。
+- 90s 实测：ready 4s、**31 批**、RSS 846.4→847.4MB（+1.0MB）、
+  Traceback 0、exit 0、ASR P50 0.52s → **PASS**。
+- 可直接 `--seconds 28800` 跑 8h；加 `--json` 出机器可读报告。
+
+### 22.3 验证
+
+| 项 | 结果 |
+|---|---|
+| 批推 cue 质量（120s） | 2.88×，cue 19→16，max 10.67→8.18s，补标点 |
+| 长片 A/B（386s） | 内部 32→12s、总 46→26s、cue 56→52 |
+| `tools/soak_test.py --seconds 90` | PASS（31 批、+1MB、0 Traceback、exit 0） |
+| 回归 | quality gates 25/0、admin 28/0、watchdog 7/0 |

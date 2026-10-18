@@ -140,6 +140,11 @@ o_speech_prob/vg_logprob 组合、
   与 `bench/_verify_quality_gates.py` 回归；远端文本过滤与阈值 A/B 待做。
 - P0-2' ✅ 静音句尾提前发批 `--flush-min`（默认 0.6s，0=关）：样本实测
   12 批里 2 批由 natural 提前触发；ASR P50 0.571s / P90 0.909s。
+- P1-2 ✅ 视频长片默认批推理（`--asr-batch 8`，长块 60s+）：386s 内部
+  32s→12s（2.7×）、总耗时 46→26s；粗 segment 按词间 gap 重切 + 补标点，
+  cue 56→52（接近流式）；批推异常自动回退流式。
+- 稳定性 ✅ `tools/soak_test.py`（直播 90s 冒烟：31 批、RSS +1MB、
+  Traceback 0、exit 0、ASR P50 0.52s；可 `--seconds 28800` 跑 8h）。
 - 度量：`metrics_live.jsonl` 增 `flush` 与三类拒段计数，
   `tools/quality_report.py` 直接出分布。
 
