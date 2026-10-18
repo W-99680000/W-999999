@@ -1315,3 +1315,30 @@ check_admin_html 新增 3 项（按引擎模式初始化 / 只提交 dirty 槽�
 | 稳定性 | meta.complete=true 不再反复触发续跑 |
 | 排版 | 551 条 cue，124 条两行；字号/宽度/行距/贴底已调 |
 | 回归 | check_admin 34/0、check_console 20/0、subtitle_layout 9/0 |
+
+
+---
+
+## 39. 字幕排版多方案（2026-10-18）
+
+用户要求：保留现有排版，另给多套可选方案，最好有“像读小说”的阅读感。
+
+新增「浮窗 → 排版方案」四张卡，点一下立即下发（同时写直播/watch 命令）：
+
+| 方案 | 关键参数 | 观感 |
+|---|---|---|
+| 标准字幕（默认） | 20px / 1100 宽 / 1 条 / 行距1.3 / 居中 / 无底 | 最像播放器字幕 |
+| 双语对照 | 18px / 1200 宽 / 2 条 / inline / 原文 0.72 | 译文+原文同排，紧凑 |
+| **小说阅读** | 17px / **860 窄栏** / **4 条上下文** / **行距1.8** / **左对齐** / 半透明深色阅读底 / 宋体 | 像阅读器一样连续看几行 |
+| 极简大字 | 22px / 仅译文 / 1 条 / 无原文 | 大字、干净 |
+
+实现：
+- 浮窗新增 `font_family` 可配置（Microsoft YaHei UI / SimSun / KaiTi / …），
+  serve 白名单与 watch_overlay 样式均支持；
+- 方案是一组 `changes`，复用现有命令协议，不新增后台状态；
+- 小说阅读用 `max_lines=4 + line_height=1.8 + bg_alpha=0.55`，保留上几句，
+  形成阅读面板；仍底部贴底、可随时切回标准。
+
+验证：`check_console_html` 21/0；API 实测小说方案写入 watch_overlay.json
+（font_size 17/width 860/max_lines 4/line_height 1.8/SimSun），再切回标准；
+桌面截图 work/desktop_novel.png。

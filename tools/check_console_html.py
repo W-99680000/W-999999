@@ -49,6 +49,8 @@ def main() -> int:
                 "/api/admin-config"):
         chk(f"调用 {api}", api in s, api)
     chk("经典后台入口 /admin", 'href="/admin"' in s)
+    chk("字幕排版方案（标准/双语/小说/极简）",
+        s.count('data-ov-preset=') >= 4 and 'OV_PRESETS' in s)
     chk("模型页含管理/仓库子标签",
         'data-mtab="models"' in s and 'data-mtab="repo"' in s)
     chk("完整浮窗参数入口", 'data-goto="ovadv"' in s)

@@ -118,6 +118,8 @@ _OVERLAY_BOOL = {"show_original", "edit_mode", "theme_dark_video",
                  "show_idle_hint"}
 _OVERLAY_ENUM = {"layout": {"inline", "stacked", "zh_only"},
                  "text_align": {"center", "left", "right"}}
+_OVERLAY_FONTS = {"Microsoft YaHei UI", "SimSun", "KaiTi",
+                  "Segoe UI", "Georgia", "Consolas"}
 _OVERLAY_ACTIONS = {"recenter", "toggle", "reset"}
 
 
@@ -168,6 +170,9 @@ def _validate_overlay(changes: dict) -> tuple[bool, str]:
         elif k in _OVERLAY_ENUM:
             if v not in _OVERLAY_ENUM[k]:
                 return False, f"{k} 只能是 {sorted(_OVERLAY_ENUM[k])}（收到 {v!r}）"
+        elif k == "font_family":
+            if v not in _OVERLAY_FONTS:
+                return False, f"font_family 只能是 {sorted(_OVERLAY_FONTS)}（收到 {v!r}）"
         else:
             return False, f"字段 {k!r} 不在浮窗白名单里"
     return True, "ok"

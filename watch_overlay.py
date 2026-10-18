@@ -396,6 +396,10 @@ class QtOverlay:
         lv = d.get("layout")
         if lv in ("inline", "stacked", "zh_only"):
             out["layout"] = lv
+        ff = d.get("font_family")
+        if ff in ("Microsoft YaHei UI", "SimSun", "KaiTi",
+                  "Segoe UI", "Georgia", "Consolas"):
+            out["font_family"] = ff
         tav = d.get("text_align")
         if tav in ("left", "center", "right"):
             out["text_align"] = tav
@@ -492,14 +496,15 @@ class QtOverlay:
         字号统一交给 _render_html 的内联样式。
         背景与边框改成自绘（见 _paint），所以这里也不设。
         """
+        _ff = self.st.get("font_family") or "Microsoft YaHei UI"
         self.w.setStyleSheet(f"""
             QLabel#zh {{
                 color: {self.st['text_color']};
-                font-family: "Microsoft YaHei UI", "Microsoft YaHei";
+                font-family: "{_ff}", "Microsoft YaHei UI", "Microsoft YaHei";
             }}
             QLabel#en {{
                 color: {self.st['original_text_color']};
-                font-family: "Segoe UI", "Microsoft YaHei UI";
+                font-family: "{_ff}", "Segoe UI", "Microsoft YaHei UI";
             }}
         """)
         self.w.setObjectName("root")
