@@ -1575,31 +1575,6 @@ def _install_kill_switch(cmd_file=None):
     return stop
 
 
-def _watch_parent_gone():
-    """watch_player 拉起的"实时兜底"引擎：父进程没了就自己退。
-
-    为什么需要：watch 被硬杀（任务管理器 / Stop-Process）时 finally 不执行，
-    terminate() 也来不及，会留下第二个实时引擎（还占着麦克风/远端 ASR）。
-    watch_player 通过环境变量 BABEL_WATCH_PARENT 把父 pid 传进来，这里每轮
-    主循环轮询一次；普通 start.bat 启动没有这个变量，行为不变。
-    """
-    pp = os.environ.get("BABEL_WATCH_PARENT")
-    if not pp:
-        return False
-    try:
-        import ctypes
-        k32 = ctypes.windll.kernel32
-        h = k32.OpenProcess(0x00100000, False, int(pp))     # SYNCHRONIZE
-        if not h:
-            return True
-        try:
-            return k32.WaitForSingleObject(h, 0) == 0       # WAIT_OBJECT_0
-        finally:
-            k32.CloseHandle(h)
-    except Exception:
-        return False
-
-
 def run(args):
     import startup_stats as SS
     SS.mark("启动")
@@ -2275,7 +2250,7 @@ def run(args):
             while True:
                 if ov:
                     ov.pump()
-                if stop.is_set() or _watch_parent_gone():
+                if stop.is_set():
                     print("  收到停止信号，退出流式循环")
                     break
                 blk = cap.read(timeout=0.25)
@@ -2519,7 +2494,7 @@ def run(args):
                                             _asr_job["segs"], lang=_lang)
             # 每轮都显示已译好的批次；不能等下一个 ASR 批触发才显示
             _drain_count()
-            if stop.is_set() or _watch_parent_gone():
+            if stop.is_set():
                 print("  收到停止信号，退出主循环")
                 break
     except KeyboardInterrupt:
