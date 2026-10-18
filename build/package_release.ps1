@@ -73,7 +73,8 @@ $dirs = @{
     "docs"        = @("DESKTOP.md", "QUALITY_ROADMAP.md", "RESEARCH_20261018_streaming_translation.md")
     "tools"       = @("doctor.py", "quality_report.py", "check_admin_html.py",
                       "test_engine_control.py", "soak_test.py", "test_watchdog.py",
-                      "test_watch_control.py", "check_qwen_terms.py")
+                      "test_watch_control.py", "test_overlay_control.py",
+                      "check_qwen_terms.py")
     "bench"       = @("eval_asr.py", "_verify_quality_gates.py", "_verify_hysteresis.py",
                       "_bench_batched_asr.py")
     "samples"     = @("e2e_speech.wav", "loopback_test.wav", "jfk.wav", "streaming_msgs.json")

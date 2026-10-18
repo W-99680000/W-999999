@@ -109,6 +109,9 @@ STATE = os.path.join(_HERE, "watch_overlay_state.json")
 # watch 用独立文件：control_cmd.json 是给回环那份浮窗用的，
 # 共用会让面板的一次调整同时改到两个浮窗。
 CMD_PATH = os.path.join(_HERE, "watch_cmd.json")
+# 兼容旧后台：旧版浮窗控制面板只写 control_cmd.json（直播浮窗的）。
+# watch 也看这份，取两边 _ts 最新的命令。
+CMD_FALLBACK = os.path.join(_HERE, "control_cmd.json")
 
 
 def default_settings():
@@ -406,22 +409,28 @@ class QtOverlay:
 
     # ── 与控制面板的通信（文件协议，见 control_panel.py）────────
     def _read_cmd(self):
-        """看控制面板有没有发新命令。返回 changes 字典或 None。
+        """看控制面板有没有发新命令（watch_cmd 优先，兼容 control_cmd）。
 
-        协议：面板往 control_cmd.json 写 {"_ts": 时间戳, "_changes": {...}}。
-        我们比对 _ts 是否变过（不比对内容 —— 面板可能把同一个值再发一次，
-        那也应该重绘，因为浮窗可能被别的途径改过）。
+        协议：{"_ts": 时间戳, "_changes": {...}}，300ms 轮询。
+        两份文件都看，取 _ts 最新的那份；旧版后台只写 control_cmd 也能
+        让 watch 生效（不需要重启后台）。
         """
-        try:
-            with open(CMD_PATH, encoding="utf-8") as f:
-                j = json.load(f)
-        except Exception:
+        best_ts, best_ch = None, None
+        for p in (CMD_PATH, CMD_FALLBACK):
+            try:
+                with open(p, encoding="utf-8") as f:
+                    j = json.load(f)
+            except Exception:
+                continue
+            ts = j.get("_ts")
+            if ts is None:
+                continue
+            if best_ts is None or ts > best_ts:
+                best_ts, best_ch = ts, (j.get("_changes") or {})
+        if best_ts is None or best_ts == self._cmd_ts:
             return None
-        ts = j.get("_ts")
-        if ts is None or ts == self._cmd_ts:
-            return None
-        self._cmd_ts = ts
-        return j.get("_changes") or {}
+        self._cmd_ts = best_ts
+        return best_ch
 
     def apply_cmd(self, ch):
         """应用面板发来的改动。特殊动作以 _action 为键。"""

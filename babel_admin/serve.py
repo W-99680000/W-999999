@@ -92,6 +92,11 @@ INDEX = os.path.join(HERE, "index.html")
 OVERLAY_SETTINGS = os.path.join(ROOT, "overlay_qt.json")
 OVERLAY_STATE = os.path.join(ROOT, "overlay_state.json")
 OVERLAY_CMD = os.path.join(ROOT, "control_cmd.json")
+# watch（视频翻译）浮窗是独立一套文件：设置/状态/命令都分开，
+# 见 watch_overlay.py 头部说明（两边共用会互相冲掉设置）。
+WATCH_SETTINGS = os.path.join(ROOT, "watch_overlay.json")
+WATCH_STATE = os.path.join(ROOT, "watch_overlay_state.json")
+WATCH_CMD = os.path.join(ROOT, "watch_cmd.json")
 ADMIN_CFG = os.path.join(ROOT, "work", "admin_qt.json")
 STARTUP_STATS = os.path.join(ROOT, "work", "startup_stats.json")
 LIVE_SRT = os.path.join(ROOT, "live.srt")
@@ -122,16 +127,22 @@ def _read_json_file(p: str, default=None):
         return default if default is not None else {}
 
 
-def _write_overlay_cmd(changes: dict) -> None:
+def _write_overlay_cmd(changes: dict, path: str = "") -> None:
     """浮窗命令协议（与 admin_qt._write_cmd / control_panel.write_cmd 相同）：
-    浮窗每 300ms 轮询 control_cmd.json，读到 _ts 变就应用 _changes。"""
-    cur = _read_json_file(OVERLAY_CMD, {})
-    cur["_ts"] = time.time()
-    cur["_changes"] = changes
-    tmp = OVERLAY_CMD + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(cur, f, ensure_ascii=False)
-    os.replace(tmp, OVERLAY_CMD)
+    浮窗每 300ms 轮询命令文件，读到 _ts 变就应用 _changes。
+
+    path 为空时同时写 control_cmd.json（直播浮窗）与 watch_cmd.json
+    （视频翻译浮窗）—— 面板不知道用户此刻看的是哪种浮窗，两套都发最稳；
+    两个浮窗的协议相同，只是文件隔离。"""
+    targets = [path] if path else [OVERLAY_CMD, WATCH_CMD]
+    for p in targets:
+        cur = _read_json_file(p, {})
+        cur["_ts"] = time.time()
+        cur["_changes"] = changes
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cur, f, ensure_ascii=False)
+        os.replace(tmp, p)
 
 
 def _validate_overlay(changes: dict) -> tuple[bool, str]:
@@ -733,13 +744,31 @@ class Handler(BaseHTTPRequestHandler):
                 rc = R.check()
             return self._json({"ok": rc == 0, "log": buf.getvalue()}, 200 if rc == 0 else 500)
         if path == "/api/overlay":
-            # 浮窗设置 + 实时状态（设置页的浮窗控制台用它）
-            s = _read_json_file(OVERLAY_SETTINGS, {})
-            st = _read_json_file(OVERLAY_STATE, {})
-            ts = s.get("_app_ts")
-            return self._json({"settings": s, "state": st,
-                               "online": bool(isinstance(ts, (int, float))
-                                              and time.time() - ts < 30)})
+            # 浮窗设置 + 实时状态（设置页的浮窗控制台用它）。
+            # 直播（overlay_qt）与视频翻译（watch_overlay）各有一套文件；
+            # 取"最近活跃/在线"的那个，附带 target 告诉前端调的是哪边。
+            live_s = _read_json_file(OVERLAY_SETTINGS, {})
+            live_st = _read_json_file(OVERLAY_STATE, {})
+            watch_s = _read_json_file(WATCH_SETTINGS, {})
+            watch_st = _read_json_file(WATCH_STATE, {})
+            now = time.time()
+
+            def _online(settings, state):
+                ts = settings.get("_app_ts") or state.get("ts") or 0
+                return isinstance(ts, (int, float)) and now - ts < 30
+
+            live_on = _online(live_s, live_st)
+            watch_on = _online(watch_s, watch_st)
+            live_ts = live_s.get("_app_ts") or 0
+            watch_ts = watch_s.get("_app_ts") or watch_st.get("ts") or 0
+            use_watch = bool(watch_on and (not live_on or watch_ts >= live_ts))
+            if use_watch:
+                return self._json({"settings": watch_s, "state": watch_st,
+                                   "online": watch_on,
+                                   "target": "watch"})
+            return self._json({"settings": live_s, "state": live_st,
+                               "online": live_on,
+                               "target": "loopback"})
         if path == "/api/live":
             # 快速同传页的实时字幕（解析 live.srt 尾部）
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
@@ -914,11 +943,12 @@ class Handler(BaseHTTPRequestHandler):
             if not ok:
                 return self._json({"ok": False, "error": why}, 400)
             try:
-                _write_overlay_cmd(changes)
+                _write_overlay_cmd(changes)      # 直播 + watch 两套都发
             except Exception as e:
                 return self._json({"ok": False,
-                                   "error": f"写入 control_cmd.json 失败：{e}"}, 500)
-            return self._json({"ok": True, "sent": sorted(changes.keys())})
+                                   "error": f"写入浮窗命令失败：{e}"}, 500)
+            return self._json({"ok": True, "sent": sorted(changes.keys()),
+                               "targets": ["loopback", "watch"]})
 
         if path == "/api/model-repo":
             # { "action": "download"|"cancel"|"default"|"uninstall",

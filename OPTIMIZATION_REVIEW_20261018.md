@@ -804,3 +804,42 @@ watch 报到 ready
 
 回归：`test_engine_control.py` 20/0（直播模式未受影响）、
 `check_registry_wiring` 20/0、`check_admin_html` 28/0。
+
+
+---
+
+## 26. 修复：浮窗控制面板对视频翻译（watch）浮窗全部失效（2026-10-18）
+
+### 26.1 根因
+
+- 直播浮窗（overlay_qt）与视频翻译浮窗（watch_overlay）是**两套文件**：
+  - 直播：设置 overlay_qt.json / 状态 overlay_state.json / 命令 control_cmd.json
+  - watch：设置 watch_overlay.json / 状态 watch_overlay_state.json / 命令 watch_cmd.json
+- `babel_admin/serve.py` 的 `/api/overlay` 只读写直播那一套：
+  POST 只写 control_cmd.json，GET 只读 overlay_qt.json/state。
+- 现在视频翻译页启动的是 watch，所以面板每一个调控都写进了 watch 根本
+  不看的文件 —— 表现就是"全部失效"。
+
+### 26.2 修复
+
+1. POST `/api/overlay`：校验后**同时写** control_cmd.json 与 watch_cmd.json
+   （两浮窗协议相同，只是文件隔离）。
+2. GET `/api/overlay`：读两套设置/状态，按"在线且最近活跃"的那个返回，
+   并附 `target: "loopback"|"watch"`，面板不再拿错一侧的值。
+3. `watch_overlay._read_cmd()` 兼容回退：同时看 watch_cmd.json 与
+   control_cmd.json，取 `_ts` 最新的命令 —— 即使后台还是旧版本（只写
+   control_cmd），重启一次 watch 后调控也能生效。
+
+### 26.3 验证
+
+- `tools/test_overlay_control.py`（新，隔离临时文件 + 本地 HTTP）：
+  **10/0** —— POST 两份都写、GET target=watch 且返回 watch 设置、
+  坏字段仍 400。
+- 真机端到端（不动用户会话）：在 8771 用新 serve 起临时服务，
+  POST font_size=33/opacity=0.8 → 正在运行的 watch 在 2s 内应用
+  （watch_overlay.json 变成 33/0.8）、GET 返回 target=watch；
+  随后已恢复原值（font 24/opacity 0.92），用户 app/watch 进程未重启。
+- 注意：当前正在跑的 `app.py` 里还是旧 serve 代码 —— **重启一次 App**
+  后 GET/面板显示才是 watch 的真实设置；watch 本身重启后即带兼容回退。
+
+回归：check_admin_html 28/0、wiring 20/0、watch control 9/0。
