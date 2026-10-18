@@ -589,8 +589,98 @@ td.muted{color:var(--ink-3)}
   *{animation-duration:.001ms !important;transition-duration:.001ms !important}
 }
 </style>
+<style id="babel-embed-style">
+  /* 被新后台 iframe 内嵌时：隐藏经典侧栏/标题，套用深色底，只保留内容区 */
+  body.embed{
+    --bg:#070b14; --bg-2:#0b1220; --card:#101827;
+    --line:rgba(255,255,255,.09); --line-2:rgba(255,255,255,.12);
+    --ink:#e8eefb; --ink-2:#8b9ab6; --ink-3:#5f6d86;
+    --green:#4f8cff; --green-2:#38d6f5; --green-deep:#cfe3ff;
+    --green-soft:rgba(79,140,255,.12); --green-sel:rgba(79,140,255,.16);
+    --green-line:rgba(79,140,255,.28);
+    --slate-bg:rgba(255,255,255,.05); --slate-line:rgba(255,255,255,.10);
+    --amber-bg:rgba(255,191,71,.10); --amber-line:rgba(255,191,71,.30);
+    background:#070b14 !important;
+  }
+  body.embed .app{display:block;height:auto;min-height:100vh}
+  body.embed .sidebar{display:none !important}
+  body.embed .main{overflow:visible}
+  body.embed .main-inner{max-width:none;padding:10px 16px 24px}
+  body.embed .page-head{display:none}
+  body.embed .apply-strip{display:none}
+  body.embed .card{background:rgba(255,255,255,.045);border-color:rgba(255,255,255,.09);
+    box-shadow:none;color:var(--ink)}
+  body.embed .card-desc,body.embed .field-note,body.embed .hint-line{color:var(--ink-2)}
+  body.embed .toolbar{background:rgba(255,255,255,.03);border-color:rgba(255,255,255,.09)}
+  body.embed table,body.embed .stat-grid,body.embed .opt-card{color:var(--ink)}
+  body.embed .btn{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.12);color:var(--ink)}
+  body.embed .btn.primary{background:linear-gradient(135deg,#4f8cff,#38d6f5);color:#06111f;border:none}
+  body.embed .seg,body.embed .toolbar-top .seg{background:rgba(255,255,255,.05)}
+  body.embed .dd-trigger,body.embed input,body.embed select{background:rgba(255,255,255,.05);
+    color:var(--ink);border-color:rgba(255,255,255,.12)}
+  body.embed .nav-item,body.embed .badge,body.embed .chip{color:var(--ink-2)}
+  body.embed .logstrip{background:rgba(0,0,0,.25);border-color:rgba(255,255,255,.08);color:#9fb0cc}
+  body.embed .placeholder-note{background:rgba(79,140,255,.07);border-color:rgba(79,140,255,.16)}
+  body.embed ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18)}
+  /* 经典组件里有不少写死的浅色底：统一压成深色，保证嵌入后可读 */
+  body.embed .card,
+  body.embed .model-card,
+  body.embed .opt-card,
+  body.embed .stat-box,
+  body.embed .speed-box,
+  body.embed .logstrip,
+  body.embed .dd-trigger,
+  body.embed .dd-menu,
+  body.embed .btn,
+  body.embed .chip,
+  body.embed .tag-input,
+  body.embed .search input,
+  body.embed .seg,
+  body.embed .toast,
+  body.embed .placeholder-note,
+  body.embed .apply-strip,
+  body.embed .repo-table th,
+  body.embed .repo-table td,
+  body.embed .records-table th,
+  body.embed .records-table td,
+  body.embed .hw-card,
+  body.embed .pick-card,
+  body.embed .model-slot {
+    background:rgba(255,255,255,.05) !important;
+    color:var(--ink) !important;
+    border-color:rgba(255,255,255,.10) !important;
+    box-shadow:none !important;
+  }
+  body.embed .opt-card:hover,
+  body.embed .btn:hover { background:rgba(255,255,255,.09) !important; }
+  body.embed .opt-card.selected { background:rgba(79,140,255,.14) !important;
+    border-color:#4f8cff !important; }
+  body.embed .seg-item.active { background:rgba(79,140,255,.22) !important;
+    color:#fff !important; }
+  body.embed .card *,
+  body.embed .opt-card *,
+  body.embed .model-card *,
+  body.embed .stat-box * { color:inherit; }
+  body.embed .logstrip, body.embed pre { background:rgba(0,0,0,.28) !important;
+    color:#9fb0cc !important; }
+  body.embed .stat-box .st-num,
+  body.embed .card-head h2,
+  body.embed .opt-card .oc-name { color:var(--ink) !important; }
+  body.embed .meta-pill,
+  body.embed .opt-badge {
+    background:rgba(255,255,255,.08) !important;
+    border-color:rgba(255,255,255,.16) !important;
+    color:var(--ink) !important;
+  }
+  body.embed .meta-pill b, body.embed .meta-pill span { color:inherit !important; }
+  body.embed .oc-vendor, body.embed .oc-note { color:var(--ink-2) !important; }
+  body.embed .oc-note.bad { color:#ffb3be !important; }
+</style>
 </head>
 <body>
+<script>
+  (function(){try{var q=new URLSearchParams(location.search);if(q.get('embed')==='1'){document.body.classList.add('embed');}}catch(e){}})();
+</script>
 <div class="app">
   <!-- ================= 侧边栏 ================= -->
   <aside class="sidebar">
@@ -2950,6 +3040,13 @@ window.__onView = function(view){
 document.addEventListener("DOMContentLoaded", function(){
   repoBind();
   adminCfgInit();
+  try{
+    var q = new URLSearchParams(location.search);
+    if (q.get("embed") === "1"){
+      var v = q.get("view");
+      if (v && typeof setView === "function") setView(v);
+    }
+  }catch(e){}
 });
 })();
 </script>

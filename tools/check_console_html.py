@@ -49,6 +49,12 @@ def main() -> int:
                 "/api/admin-config"):
         chk(f"调用 {api}", api in s, api)
     chk("经典后台入口 /admin", 'href="/admin"' in s)
+    for page, label in (("models", "模型管理"), ("repo", "模型仓库"),
+                        ("records", "同传记录"), ("ovadv", "浮窗高级"),
+                        ("cfgadv", "高级设置")):
+        chk(f"高级页 {label}（{page}）", f'data-page="{page}"' in s, page)
+    chk("高级页内嵌经典后台（embed=1&view=）",
+        "embed=1&view=" in s and 'class="advframe"' in s)
     chk("无外部网络资源",
         not re.search(r'(src|href)="https?://', s), "发现外链")
 

@@ -922,3 +922,26 @@ watch 模式同样无子进程/无 conhost。
 | 新界面 `/` | check_console_html 15/0（无回归） |
 | 旧后台静态 | check_admin_html 28/0 |
 | 临时服务 start/stop | start→pythonw，stop→running=false 且不复活 |
+
+
+---
+
+## 29. 经典后台功能并入新后台（2026-10-18）
+
+用户要求：经典后台的功能整合进新后台。做法：新后台左侧新增「高级」分组，
+用**同源 iframe 内嵌经典后台对应视图**（经典后台支持 `?embed=1&view=...`
+模式：隐藏侧栏/页头、套用深色样式），保证功能 100% 一致、不用二选一。
+
+- 新增入口：模型管理、模型仓库、同传记录、浮窗高级（完整浮窗参数）、
+  高级设置（后台守护/接口/路径）。
+- 经典后台 embed 模式：`body.embed` 隐藏侧栏、去页头、深色适配
+  （卡片/统计/模型卡/表格/输入/弹层/日志条等统一深色，模型卡片的小
+  pill 也已修正对比度）。
+- 新后台侧栏导航改为可滚动（10 项），iframe 懒加载，首次点开才请求。
+- 保留 `/admin` 经典入口作为兜底。
+
+验证（Edge/Playwright，临时服务）：
+- 5 个高级页 iframe 全部加载出内容；页面标题正确；10 项导航；
+  0 pageerror。
+- 截图：`work/console_adv_models.png`、`work/console_adv2_ovadv.png`。
+- check_console_html 扩到检查高级页/内嵌参数（全部通过）。

@@ -40,7 +40,8 @@
   }
   .brand-name{font-size:15px;font-weight:700;letter-spacing:.3px}
   .brand-sub{font-size:11px;color:var(--dim2);margin-top:2px}
-  .nav{display:flex;flex-direction:column;gap:4px}
+  .nav{display:flex;flex-direction:column;gap:4px;overflow-y:auto;overflow-x:hidden;padding-right:2px;min-height:0}
+  .nav::-webkit-scrollbar{width:5px}
   .nav-item{
     display:flex;align-items:center;gap:12px;width:100%;padding:11px 12px;
     border:1px solid transparent;background:transparent;color:var(--dim);
@@ -208,6 +209,7 @@
   }
   .muted{color:var(--dim2)}
   .spacer{flex:1}
+  .advframe{width:100%;height:calc(100vh - 130px);border:1px solid var(--line);border-radius:16px;background:#0b1220;display:block}
   .toast{
     position:fixed;left:50%;bottom:30px;transform:translate(-50%,20px);opacity:0;pointer-events:none;
     background:rgba(18,26,43,.96);border:1px solid var(--line);color:var(--txt);
@@ -245,6 +247,30 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="11" rx="2.4"/><path d="M7 20h10M12 16v4"/></svg>
         <span>浮窗</span>
       </button>
+      <div class="nav-group">
+        <div class="nav-label">高级</div>
+        <button class="nav-item" data-page="models">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3.2 7.4 3.9v9.8L12 20.8 4.6 16.9V7.1z"/><path d="m4.6 7.1 7.4 3.9 7.4-3.9M12 11v9.8"/></svg>
+          <span>模型管理</span>
+        </button>
+        <button class="nav-item" data-page="repo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.2" y="6.2" width="17.6" height="11.6" rx="2.4"/><path d="M7.4 6.2V3.6M12 6.2V3.6M16.6 6.2V3.6"/></svg>
+          <span>模型仓库</span>
+        </button>
+        <button class="nav-item" data-page="records">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.2" y="4.4" width="17.6" height="15.2" rx="2.6"/><path d="M3.2 9.6h17.6M3.2 14.6h17.6M9 9.6v10"/></svg>
+          <span>同传记录</span>
+        </button>
+        <button class="nav-item" data-page="ovadv">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="11" rx="2.4"/><path d="M7 20h10M12 16v4"/></svg>
+          <span>浮窗高级</span>
+        </button>
+        <button class="nav-item" data-page="cfgadv">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 0 0-.13-1.3l2-1.5-2-3.4-2.3.9a7 7 0 0 0-2.2-1.3L14 3h-4l-.37 2.4a7 7 0 0 0-2.2 1.3l-2.3-.9-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .45.05.88.13 1.3l-2 1.5 2 3.4 2.3-.9a7 7 0 0 0 2.2 1.3L10 21h4l.37-2.4a7 7 0 0 0 2.2-1.3l2.3.9 2-3.4-2-1.5c.08-.42.13-.85.13-1.3z"/></svg>
+          <span>高级设置</span>
+        </button>
+      </div>
+      <div class="nav-group" hidden>
       <button class="nav-item" data-page="settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 0 0-.13-1.3l2-1.5-2-3.4-2.3.9a7 7 0 0 0-2.2-1.3L14 3h-4l-.37 2.4a7 7 0 0 0-2.2 1.3l-2.3-.9-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .45.05.88.13 1.3l-2 1.5 2 3.4 2.3-.9a7 7 0 0 0 2.2 1.3L10 21h4l.37-2.4a7 7 0 0 0 2.2-1.3l2.3.9 2-3.4-2-1.5c.08-.42.13-.85.13-1.3z"/></svg>
         <span>设置</span>
@@ -410,6 +436,23 @@
       </div>
     </section>
 
+    <!-- 高级页：内嵌经典后台对应视图（保证功能 100% 一致） -->
+    <section class="page" id="page-models">
+      <iframe class="advframe" data-adv="models" title="模型管理"></iframe>
+    </section>
+    <section class="page" id="page-repo">
+      <iframe class="advframe" data-adv="repo" title="模型仓库"></iframe>
+    </section>
+    <section class="page" id="page-records">
+      <iframe class="advframe" data-adv="records" title="同传记录"></iframe>
+    </section>
+    <section class="page" id="page-ovadv">
+      <iframe class="advframe" data-adv="overlay" title="浮窗高级"></iframe>
+    </section>
+    <section class="page" id="page-cfgadv">
+      <iframe class="advframe" data-adv="settings" title="高级设置"></iframe>
+    </section>
+
     <!-- 设置 -->
     <section class="page" id="page-settings">
       <div class="card">
@@ -437,7 +480,7 @@
   var $ = function(s){ return document.querySelector(s); };
   var $$ = function(s){ return Array.prototype.slice.call(document.querySelectorAll(s)); };
   var App = { page:"home", engine:null, ovLive:null, ovWatch:null, live:[], cfg:{}, busy:false };
-  var PAGE_TITLE = { home:"工作台", live:"直播翻译", video:"视频翻译", overlay:"浮窗控制", settings:"设置" };
+  var PAGE_TITLE = { home:"工作台", live:"直播翻译", video:"视频翻译", overlay:"浮窗控制", models:"模型管理", repo:"模型仓库", records:"同传记录", ovadv:"浮窗高级", cfgadv:"高级设置", settings:"设置" };
 
   function toast(msg){
     var el = $("#toast"); el.textContent = msg; el.classList.add("show");
@@ -472,6 +515,11 @@
       b.classList.toggle("active", b.getAttribute("data-page") === page);
     });
     $$(".page").forEach(function(p){ p.classList.toggle("active", p.id === "page-"+page); });
+    // 高级页：内嵌经典后台对应视图，首次进入时再加载
+    var _af = document.querySelector("#page-"+page+" .advframe");
+    if (_af && !_af.getAttribute("src")){
+      _af.setAttribute("src", "/admin?embed=1&view=" + encodeURIComponent(_af.getAttribute("data-adv")));
+    }
     $("#pageTitle").textContent = PAGE_TITLE[page] || "工作台";
     refreshAll();
   }
