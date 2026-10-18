@@ -555,13 +555,13 @@ class QtOverlay:
             return (f'<span style="color:{self.st["text_color"]}; '
                     f'font-size:{fs}px; '
                     f'-webkit-text-stroke:{ow:.2f}px {oc}; text-shadow:0 2px 4px rgba(0,0,0,0.85);">'
-                    f'{escape(zh)}{extra}</span>')
+                    f'{escape(zh).replace(chr(10), "<br>")}{extra}</span>')
 
         def en_div(span_style=""):
             return (f'<span style="color:{self.st["original_text_color"]}; '
                     f'font-size:{fs_o}px; {span_style}'
                     f'-webkit-text-stroke:{ow * 0.8:.2f}px {oc}; text-shadow:0 1px 3px rgba(0,0,0,0.8);">'
-                    f'{escape(en)}</span>')
+                    f'{escape(en).replace(chr(10), "<br>")}</span>')
 
         if layout == "inline":
             # ── 两列布局，但要先判断"放不放得下" ──────────────────

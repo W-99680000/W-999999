@@ -323,12 +323,19 @@ def _start_server() -> bool:
     _SERVER["serve"] = serve
     log("· 8770 没有可用服务，本进程启动一个")
 
-    try:
-        serve.R.export_web()            # 先把模型快照刷成最新的
-        log("· 模型快照已导出（model_registry_web.json）")
-    except Exception as e:
-        log(f"！快照导出失败（界面仍可打开，模型表可能偏旧）："
-            f"{type(e).__name__}: {e}")
+    # 模型快照导出会探测本机模型/设备，冷启动时可能要几秒到几十秒。
+    # **不能阻塞窗口**：先起服务、开窗，导出放后台线程；页面打开后
+    # /api/models 会实时探测，快照只是 file:// 兜底。
+    def _export_snapshot():
+        try:
+            serve.R.export_web()
+            log("· 模型快照已就绪（后台，model_registry_web.json）")
+        except Exception as e:
+            log(f"！后台快照导出失败（界面仍可打开，模型表可能偏旧）："
+                f"{type(e).__name__}: {e}")
+    threading.Thread(target=_export_snapshot, daemon=True,
+                     name="babel-export").start()
+    log("· 模型快照后台刷新中（不阻塞窗口）")
 
     try:
         httpd = _QuietHTTPServer((HOST, PORT), serve.Handler)

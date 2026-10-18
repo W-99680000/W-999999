@@ -111,6 +111,35 @@ def _to_sec(m):
             + int(m.group(3)) + int(m.group(4)) / 1000.0)
 
 
+def _merge_two_lines(cues):
+    """相邻两条短 cue 合成一条两行字幕。
+
+    为什么：切短后如果每条都单独一闪，观感是“碎句”；标准字幕是
+    **一条字幕最多两行、停留 2~7 秒**。这里把间隔很短的相邻两条合成
+    一条，两行分别来自两条 cue；只合并一对，不会堆成 4 行。
+    字幕内容不变，只是排版更像人工字幕。
+    """
+    out = []
+    i = 0
+    while i < len(cues):
+        st, en, zh, src = cues[i]
+        if i + 1 < len(cues):
+            nst, nen, nzh, nsrc = cues[i + 1]
+            gap = nst - en
+            dur = nen - st
+            zlen = len((zh + nzh).replace("\n", ""))
+            slen = len((src + nsrc).replace("\n", ""))
+            if (gap <= 0.35 and dur <= 7.0 and zlen <= 46 and slen <= 52
+                    and "\n" not in zh and "\n" not in nzh):
+                out.append((st, nen, (zh + "\n" + nzh).strip(),
+                            (src + "\n" + nsrc).strip()))
+                i += 2
+                continue
+        out.append((st, en, zh, src))
+        i += 1
+    return out
+
+
 def parse_srt(path):
     """返回 [(start, end, zh, src)]。我们的 srt 第一行是中文、第二行原文；
     也兼容只有一行（当原文）的普通 srt。"""
@@ -138,7 +167,7 @@ def parse_srt(path):
     pretty = []
     for st, en, zh, src in cues:
         pretty.extend(_split_cue_display(st, en, zh, src))
-    return pretty
+    return _merge_two_lines(pretty)
 
 
 def no_url_backoff(tried, nt, now=None, max_tries=AUTO_NOURL_MAX_TRIES,
@@ -792,15 +821,20 @@ def _auto_main(args):
             meta = json.load(open(srt_path + ".meta.json", encoding="utf-8"))
         except Exception:
             meta = {}
-        if not meta.get("complete"):
-            return True
-        dur = tracker.duration()
+        # **complete=true 就是完整缓存**：不要再按“最后一条离片尾差几秒”
+        # 反复判半截。视频平台经常把片尾卡/黑屏算进时长，旧逻辑会在
+        # 每次 watch 启动都触发一次“续跑预翻译”，白占 GPU/磁盘，表现为
+        # 视频翻译偶发卡顿、启动变慢。
+        if meta.get("complete"):
+            return False
         try:
             cues = parse_srt(srt_path)
         except Exception:
             return True
         if not cues:
             return True
+        # meta 没有 complete（旧缓存/中断）：用最后一条是否到片尾兜底
+        dur = tracker.duration()
         if dur and cues[-1][1] < float(dur) - 5.0:
             return True
         return False

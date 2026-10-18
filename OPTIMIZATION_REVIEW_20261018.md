@@ -1268,3 +1268,50 @@ check_admin_html 新增 3 项（按引擎模式初始化 / 只提交 dirty 槽�
 
 验证：`tools/check_console_html.py` 20/0；浏览器实测 7 导航、模型双标签
 切换、浮窗/设置入口均可打开，0 pageerror。
+
+
+---
+
+## 38. 启动提速 / 视频翻译稳定性 / 字幕排版（2026-10-18）
+
+### 38.1 启动慢（桌面 BabelPlan.exe）
+
+- 实测旧链路：从双击到窗口可用约 **38 秒**（日志 21:35:41 启动 →
+  21:36:19 服务就绪），原因是 app.py 同步 `R.export_web()` 探测模型/设备，
+  加上 PyInstaller onefile 启动器每次解包 ~7MB。
+- 修复：
+  - `export_web()` 放后台线程，先起服务/开窗，快照随后刷新；
+  - 桌面启动器改为 **原生 C# WinExe**（20KB，`desktop/build_launcher.ps1`
+    构建，`/win32icon:desktop/babel.ico`），无解包；
+  - 实测：双击 → `/api/engine` 可用 **2.6 秒**，窗口就绪 **3 秒**。
+- 快捷键仍指向 `desktop\BabelPlan.exe`；`create_shortcut.ps1` 不用改。
+
+### 38.2 视频翻译稳定性
+
+- 根因之一：`watch_player._cache_unfinished()` 在 `meta.complete=true`
+  时仍按“最后一条离片尾差几秒”判半截；片尾卡/黑屏导致每次 watch 启动
+  都重复触发一次 autopipe “续跑预翻译”，白占 GPU/磁盘，表现为偶发卡顿。
+- 修复：`complete=true` 直接视为完整缓存；只有 meta 缺失/未完成才按
+  片尾兜底。
+- 另外最近把 `AutoCache.close()` 改为退出即杀预翻译子进程，避免两个
+  whisper 抢显存；启动器提速也减少重复启动。
+
+### 38.3 字幕排版
+
+- 用户反馈“更多是排版问题”，加两层：
+  1. 浮窗默认值调到标准字幕观感：`font_size=20`（1080p 约 30px）、
+     `width=1100`、`line_height=1.3`、`gap_px=4`、`max_lines=1`、
+     `x/y=null`（底部居中）；
+  2. `watch_player` 显示端把间隔≤0.35s 的相邻两条短 cue 合成**一条两行**
+     字幕（合并后 551 条，其中 124 条两行；单行不再碎闪）。
+     `watch_overlay` 的 `\n` 现在渲染成 `<br>`。
+- 断句规则仍按 Netflix + jieba 词边界（上一轮）。
+
+### 38.4 验证
+
+| 项 | 结果 |
+|---|---|
+| 启动 | API 2.6s、窗口 3s（旧 38s） |
+| 稳定性 | meta.complete=true 不再反复触发续跑 |
+| 排版 | 551 条 cue，124 条两行；字号/宽度/行距/贴底已调 |
+| 回归 | check_admin 34/0、check_console 20/0、subtitle_layout 9/0 |

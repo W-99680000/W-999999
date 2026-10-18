@@ -98,6 +98,8 @@ EXTRA_DIRS = {
         "make_icon.py",           # 生成 babel.ico（复用 app.py 的画法）
         "create_shortcut.ps1",    # 桌面 / 开始菜单快捷方式
         "babel.ico",              # 快捷方式与 exe 图标
+        "launcher_native.cs",     # 原生 C# 启动器源码（20KB，秒开）
+        "build_launcher.ps1",     # 构建 desktop\BabelPlan.exe（内嵌图标）
     ],
     "build": [
         "build_exe.ps1",          # PyInstaller 打包脚本
