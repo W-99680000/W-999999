@@ -81,7 +81,8 @@ TOOLS = ["test_pipeline.py", "test_borrowed.py", "test_drag2.py", "test_loopback
 # 真实素材，属于本地测试资产，不进仓库。
 # streaming_msgs.json 是流式协议的真实消息序列（96KB），
 # streaming_asr_remote 的离线合并验证要用它 —— README 里也引用了。
-SAMPLES = ["e2e_speech.wav", "streaming_msgs.json", "loopback_test.wav"]
+SAMPLES = ["e2e_speech.wav", "streaming_msgs.json",
+           "loopback_test.wav", "jfk.wav"]
 
 #: 桌面启动 / 打包 / 文档：按**文件清单**同步，不整目录复制。
 #: 为什么列清单而不是 `shutil.copytree`：build/ 里会出现 PyInstaller 的
@@ -99,6 +100,7 @@ EXTRA_DIRS = {
     ],
     "build": [
         "build_exe.ps1",          # PyInstaller 打包脚本
+        "package_release.ps1",   # 分发 zip（portable）
         "babel.spec",             # one-folder / windowed 打包定义
     ],
     "docs": [

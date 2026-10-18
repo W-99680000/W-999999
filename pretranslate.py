@@ -491,6 +491,29 @@ def shape_batched_cues(cues):
     return out
 
 
+def fit_cues_cps(cues, max_cps=20.0):
+    """CPS 超标的 cue：用与下一条之间的静音间隙延长显示时间（不改文本）。
+
+    注意：**切开字幕不会降低 CPS**（字符/总时长不变，只是摊到两条上）。
+    真正能降 CPS 的只有 ① 延长显示（借用句间静音）② 压缩译文；
+    这里做 ①，压缩留给人审/下一阶段。仍超标就保持原样，交给
+    bench/eval_asr.py 的 CPS 指标暴露。
+    """
+    if max_cps is None or max_cps <= 0 or not cues:
+        return cues
+    for i, c in enumerate(cues):
+        dur = max(0.01, c.end - c.start)
+        n = len(re.sub(r"\s+", "", c.text or ""))
+        if n <= 0 or n / dur <= max_cps:
+            continue
+        need = n / max_cps                  # 达标所需的显示时长
+        limit = (cues[i + 1].start - 0.02) if i + 1 < len(cues) else c.end
+        new_end = min(limit, c.start + need)
+        if new_end > c.end:
+            c.end = new_end
+    return cues
+
+
 def build_cues(segments):
     """句 → cue：合并到过读得完的上限，拆开过长的。"""
     sents = []
@@ -905,6 +928,11 @@ def process(src, args):
     def _flush(_p=srt_path, _c=cues, _d=done):
         # 每译完一批就重写 srt —— 这就是"先翻译一部分就显示"
         _min_duration_fixup(_c)          # 幂等，中间态也没有一闪而过的短条
+        # CPS 超标：用与下一条之间的静音间隙延长显示（幂等；不改文本/索引）
+        try:
+            fit_cues_cps(_c, float(getattr(args, "cps_max", 20.0) or 0))
+        except Exception:
+            pass
         write_srt(_p, _c, _d)
 
     try:
@@ -1072,6 +1100,9 @@ def build_parser():
                     help="一次调用合并翻译的条数（默认 8；失败自动退回逐条）")
     ap.add_argument("--mt-local", action="store_true",
                     help="用本地 HY-MT 翻译（完全离线）")
+    ap.add_argument("--cps-max", type=float, default=20.0,
+                    help="字幕 CPS 上限（字符/秒；0=关）。超标的 cue 用相邻"
+                         "静音间隙延长显示（切句不降 CPS，压缩译文留后续）")
     ap.add_argument("--asr-batch", type=int, default=8,
                     help="faster-whisper 批推理 batch（0=关；默认 8，"
                          "长块提速约 2.9×；短块/首块仍走流式；失败自动回退）")

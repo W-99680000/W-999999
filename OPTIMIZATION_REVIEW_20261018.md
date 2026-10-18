@@ -698,3 +698,66 @@ PASS
 | `bench/eval_asr.py`（新） | WER 0.000（4 组）；CPS P50 8.3–10.6；>20 占 0% |
 | `tools/soak_test.py --seconds 600` | PASS（216 批、+1.6MB、0 Traceback、exit 0） |
 | 回归 | quality gates 25/0、wiring 20/0、admin 28/0、watchdog 7/0 |
+
+
+---
+
+## 24. 真实语音 WER + CPS 方案修正 + 分发打包（2026-10-18 第七轮）
+
+### 24.1 真实语音 WER：`samples/jfk.wav`
+
+从 whisper.cpp 官方仓库取 JFK 11s 真实语音（人工已知原文）：
+
+    "And so my fellow Americans, ask not what your country can do for you,
+     ask what you can do for your country."
+
+`bench/eval_asr.py --audio samples/jfk.wav --ref "..."` 实测：
+
+| 模型 | 模式 | WER | cue CPS P50/P90 | CPS>20 |
+|---|---|---|---|---|
+| medium | 顺序 | **0.000** | 8.12 / 8.82 | 0% |
+| medium | 批推 | **0.000** | 8.85 / 9.20 | 0% |
+| large-v3 | 顺序 | **0.000** | 8.29 / 9.01 | 0% |
+| large-v3 | 批推 | **0.000** | 7.13 / 14.52 | 0% |
+
+加上 TTS 样本（30 词）四组 WER 0.000，准确性与批推理回归都有了真实基线。
+
+### 24.2 CPS 方案修正（重要）
+
+**切开字幕不会降低 CPS** —— 字符数/总时长不变，只是摊到多条上。实测
+"切成多条"后每段 CPS 依旧 ~42。正确做法只有：
+① 用句间静音间隙延长显示；② 压缩译文。本轮实现 ①：
+`pretranslate.fit_cues_cps()`（幂等），在每批落盘前对全局 cues 尝试用
+`next.start - 0.02` 的间隙延长；无间隙的密集语音保持原样（不丢文本），
+由 `bench/eval_asr.py` 的 CPS 指标暴露。`--cps-max 20`（0=关）。
+- 单测：8 项（有间隙→达标、不越下一条、无间隙不诈切、合规不动、0=关）。
+- 集成：386s 长片 52 条，SRT 重叠 0。
+
+### 24.3 分发打包 `build/package_release.ps1`
+
+- 显式白名单组装 `build/_release/BabelPlan/`（41 个根文件 + babel_admin/
+  desktop/build/docs/tools/bench/samples），排除日志/状态/pre_cache/模型；
+  生成 `快速开始.txt` 后压成 `BabelPlan-<日期>.zip`。
+- 实测：**71 个文件 / 4.89MB → zip 2.4MB**；无 `*.log/*.srt/*.bak/state` 泄漏；
+  `build/_release/` 已进 .gitignore（生成物不提交）。
+- 目标机仍需 Python 3.10+（`pip install -r requirements.txt`），模型首次运行下载/复用缓存。
+
+### 24.4 15 分钟 soak（更长时间实测）
+
+`python tools/soak_test.py --seconds 900`：
+
+```
+ready 4s · 900s 全程 alive · 325 批 · ASR P50 0.54s
+RSS 845.5 → 848.2MB（+2.7MB）
+Traceback 0 · 优雅退出 exit 0
+PASS
+```
+
+比上一轮 10min（216 批 / +1.6MB）更长；RSS 增长仍是个位数 MB 级，
+无泄漏迹象。8h 入口保持 `--seconds 28800`。
+
+### 24.5 样本来源
+
+`samples/jfk.wav` 取自 whisper.cpp 官方仓库 samples/（11s JFK 公开演讲，
+仅用于本地 WER 回归；原文见 §24.1）。`samples/loopback_test.wav` 与
+`e2e_speech.wav` 是仓库原有 TTS 样本。

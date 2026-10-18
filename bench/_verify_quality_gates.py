@@ -102,6 +102,26 @@ otr = LT.LLMTranslator("https://example.com", "deepseek-chat", "k",
 chk("非 qwen-mt 不带 options",
     "translation_options" not in otr._payload("hi", "Simplified Chinese"))
 
+print("\n三b、CPS 间隙延长（切句不降 CPS）")
+import pretranslate as PT
+_LONG = "this is a very long subtitle line that definitely exceeds twenty chars per second"
+c1 = PT.Cue(0.0, 2.0, _LONG)
+c2 = PT.Cue(4.0, 6.0, "next")
+cps_before = len(re.sub(r"\s+", "", c1.text)) / 2.0
+PT.fit_cues_cps([c1, c2], max_cps=20.0)
+cps_after = len(re.sub(r"\s+", "", c1.text)) / (c1.end - c1.start)
+chk("有静音间隙时延长到 CPS 达标", cps_after <= 20.01, (cps_before, cps_after))
+chk("不越过下一条开始时间", c1.end <= 4.0, c1.end)
+d1 = PT.Cue(0.0, 2.0, _LONG)
+d2 = PT.Cue(2.0, 4.0, "next")
+PT.fit_cues_cps([d1, d2], max_cps=20.0)
+chk("无间隙（密集语音）时无法降低，保持原样（不丢文本）",
+    abs((d1.end - d1.start) - 2.0) < 1e-6)
+chk("合规短句不动", (lambda x: x.end == 2.0)(
+    PT.fit_cues_cps([PT.Cue(0.0, 2.0, "短句。")], max_cps=20.0)[0]))
+chk("max_cps=0 关闭", (lambda x: x.end == 2.0)(
+    PT.fit_cues_cps([PT.Cue(0.0, 2.0, _LONG)], max_cps=0)[0]))
+
 print("\n四、幻觉过滤")
 for s_, want in (("不能理解,怎麼理解,怎麼理解,怎麼理解,怎麼理解,怎麼理解。", True),
                  ("왕코, 왕코, 왕코, 왕코, 왕코, 왕코.", True),

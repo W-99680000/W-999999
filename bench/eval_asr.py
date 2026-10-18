@@ -64,8 +64,8 @@ def edit_dist(a, b):
     return prev[-1]
 
 
-def load_wav():
-    with wave.open(WAV, "rb") as w:
+def load_wav(path=WAV):
+    with wave.open(path, "rb") as w:
         n, ch, rate = w.getnframes(), w.getnchannels(), w.getframerate()
         raw = w.readframes(n)
     import numpy as np
@@ -98,16 +98,27 @@ def cps_of_cues(cues):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--models", default="medium,large-v3")
+    ap.add_argument("--audio", default=WAV,
+                    help="任意 16k/单声道 wav（非默认样本时必须配 --ref）")
+    ap.add_argument("--ref", default="",
+                    help="参照原文（词序列，标点可留；数字词会归一）")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
-    if not os.path.isfile(WAV):
-        print("缺样本:", WAV)
+    if not os.path.isfile(a.audio):
+        print("缺样本:", a.audio)
         return 1
-    audio = load_wav()
+    audio = load_wav(a.audio)
     dur = len(audio) / 16000
-    reps = max(1, int(round(dur / UNIT_SEC)))
-    ref = words(" ".join([UNIT] * reps))
-    print(f"样本 {dur:.1f}s，参照 {len(ref)} 词（{reps} 遍 TTS 文本）")
+    if a.audio != WAV:
+        if not a.ref:
+            print("非默认样本必须给 --ref 参照文本")
+            return 2
+        ref = words(a.ref)
+        print(f"样本 {dur:.1f}s，参照 {len(ref)} 词（--ref）")
+    else:
+        reps = max(1, int(round(dur / UNIT_SEC)))
+        ref = words(" ".join([UNIT] * reps))
+        print(f"样本 {dur:.1f}s，参照 {len(ref)} 词（{reps} 遍 TTS 文本）")
 
     import pretranslate as P
     from faster_whisper import BatchedInferencePipeline
@@ -134,6 +145,8 @@ def main() -> int:
         wer_seq = edit_dist(hyp, ref) / max(1, len(ref))
         cues_seq = P.build_cues(segs)
         cps_seq = cps_of_cues(cues_seq)
+        cues_seq_shaped = P.fit_cues_cps(list(cues_seq), max_cps=20.0)
+        cps_seq_shaped = cps_of_cues(cues_seq_shaped)
         # 批推
         t0 = time.time()
         pipe = BatchedInferencePipeline(model=model)
@@ -147,6 +160,8 @@ def main() -> int:
         bcues = P.shape_batched_cues(
             P.build_cues(P.split_batched_segments(bsegs)))
         cps_bat = cps_of_cues(bcues)
+        bcues_shaped = P.fit_cues_cps(list(bcues), max_cps=20.0)
+        cps_bat_shaped = cps_of_cues(bcues_shaped)
 
         def cps_stats(cps):
             return {"p50": round(pct(cps, .5) or 0, 2),
@@ -157,18 +172,26 @@ def main() -> int:
         m = {
             "seq": {"wer": round(wer_seq, 4), "time_s": round(t_seq, 2),
                     "words": len(hyp), "cues": len(cues_seq),
-                    "cps": cps_stats(cps_seq)},
+                    "cps": cps_stats(cps_seq),
+                    "cps_shaped": cps_stats(cps_seq_shaped),
+                    "cues_shaped": len(cues_seq_shaped)},
             "batch": {"wer": round(wer_bat, 4), "time_s": round(t_bat, 2),
                       "words": len(bhyp), "cues": len(bcues),
-                      "cps": cps_stats(cps_bat)},
+                      "cps": cps_stats(cps_bat),
+                      "cps_shaped": cps_stats(cps_bat_shaped),
+                      "cues_shaped": len(bcues_shaped)},
         }
         report["models"][name] = m
         print(f"  顺序 WER {wer_seq:.3f}（{len(hyp)} 词，{t_seq:.1f}s）"
               f" CPS P50 {m['seq']['cps']['p50']} / P90 {m['seq']['cps']['p90']}"
-              f" >20 {m['seq']['cps']['over_20_pct']}%")
+              f" >20 {m['seq']['cps']['over_20_pct']}%"
+              f" → 切句后 {m['seq']['cps_shaped']['over_20_pct']}%"
+              f"（{m['seq']['cues_shaped']} 条）")
         print(f"  批推 WER {wer_bat:.3f}（{len(bhyp)} 词，{t_bat:.1f}s）"
               f" CPS P50 {m['batch']['cps']['p50']} / P90 {m['batch']['cps']['p90']}"
-              f" >20 {m['batch']['cps']['over_20_pct']}%")
+              f" >20 {m['batch']['cps']['over_20_pct']}%"
+              f" → 切句后 {m['batch']['cps_shaped']['over_20_pct']}%"
+              f"（{m['batch']['cues_shaped']} 条）")
 
     out = os.path.join(HERE, "work", "asr_eval.json")
     try:

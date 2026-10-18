@@ -86,7 +86,9 @@
 - 多人声/音乐场景的源分离（人声增强）预处理器；
 - 多屏/远程字幕（手机端查看）。
 
-- 准确性/可读性基线 ✅ `bench/eval_asr.py`：TTS 样本 WER 0.000（medium/
+- 准确性/可读性基线 ✅ `bench/eval_asr.py`：TTS 样本 + **真实语音 JFK**（11s，
+  人工已知原文）WER 全 0.000（medium/large-v3 × 顺序/批推）；CPS 全 ≤20。
+  TTS 样本 WER 0.000（medium/
   large-v3、顺序/批推四组）；cue CPS P50 8.3–10.6 / P90 9.5–11.6，
   CPS>20 占比 0%；基线写 `work/asr_eval.json`。真实素材 WER 与 CPS 强制
   （>20 时切句）仍在路线图。
@@ -150,7 +152,7 @@ o_speech_prob/vg_logprob 组合、
 - P1-2 ✅ 视频长片默认批推理（`--asr-batch 8`，长块 60s+）：386s 内部
   32s→12s（2.7×）、总耗时 46→26s；粗 segment 按词间 gap 重切 + 补标点，
   cue 56→52（接近流式）；批推异常自动回退流式。
-- 稳定性 ✅ `tools/soak_test.py`（直播 90s 冒烟：31 批、RSS +1MB、
+- 稳定性 ✅ `tools/soak_test.py`（直播 **900s PASS：325 批、RSS +2.7MB、Traceback 0、exit 0、ASR P50 0.54s**；90s 冒烟：31 批、RSS +1MB、
   Traceback 0、exit 0、ASR P50 0.52s；可 `--seconds 28800` 跑 8h）。
 - 度量：`metrics_live.jsonl` 增 `flush` 与三类拒段计数，
   `tools/quality_report.py` 直接出分布。
