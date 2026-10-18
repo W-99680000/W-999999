@@ -1095,6 +1095,25 @@ class LruTtlCache:
         return len(self.d)
 
 
+def parse_terms(items):
+    """解析 --mt-terms：文件（每行 源=目标）或直接 "源=目标"。"""
+    terms = []
+    for it in (items or []):
+        if os.path.isfile(it):
+            try:
+                for ln in open(it, encoding="utf-8"):
+                    ln = ln.strip()
+                    if ln and not ln.startswith("#") and "=" in ln:
+                        a, b = ln.split("=", 1)
+                        terms.append((a.strip(), b.strip()))
+            except OSError:
+                pass
+        elif "=" in it:
+            a, b = it.split("=", 1)
+            terms.append((a.strip(), b.strip()))
+    return [(a, b) for a, b in terms if a and b]
+
+
 class Translator:
     """按语言对自动选路。
 
@@ -1507,6 +1526,37 @@ class _UnusedTkOverlay:
         raise RuntimeError("tkinter 浮窗已废弃，请用 overlay_qt.QtOverlay")
 
 
+def srt_hold_for(dur, max_hold=6.0, min_hold=1.0):
+    """一条字幕按"真实语音时长"估结束时间，而不是固定 6 秒。
+
+    原来 SrtWriter 每条都写 st+6.0s：短句"嗯"停 6 秒、长句没说完就断。
+    现在用该段音频的真实长度：hold = 语音时长 * 1.15 + 0.35s（读的余量），
+    再夹在 [min_hold, max_hold] 内。没有时长信息时退回 max_hold。
+    """
+    if dur is None or dur <= 0:
+        return max_hold
+    return max(min_hold, min(max_hold, float(dur) * 1.15 + 0.35))
+
+
+def batch_flush_reason(batch_dur, waited, natural, max_batch, max_wait,
+                       flush_min):
+    """返回本批该发的理由；None=还没到发的时候。
+
+    natural=True 表示 Segmenter 刚吐出一个"自然句尾"（静音切出来的段，
+    不是顶到 max_seg 的强制切分）。静音边界提前发批能明显降低首字延迟：
+    短句说完就送识别，不必再等 max_batch/max_wait。
+    """
+    if batch_dur <= 0:
+        return None
+    if batch_dur >= max_batch:
+        return "max_batch"
+    if waited >= max_wait:
+        return "max_wait"
+    if natural and flush_min and batch_dur >= flush_min:
+        return "natural"
+    return None
+
+
 class SrtWriter:
     """把字幕持续写入 .srt，供播放器实时加载。
 
@@ -1516,7 +1566,8 @@ class SrtWriter:
 
     写法：每来一条字幕就重写整个文件（字幕总量小，重写最安全——
     播放器对"边写边追加"的支持不一致，整文件替换最兼容）。
-    时间轴用收到字幕的墙钟时间，每条显示 6 秒。
+    时间轴用收到字幕的墙钟时间；每条按真实语音时长估结束（见
+    srt_hold_for），没有时长信息时退回固定 hold。
     """
 
     def __init__(self, path, hold=6.0, keep=80):
@@ -1534,19 +1585,39 @@ class SrtWriter:
         s = int(t % 60); ms = int((t - int(t)) * 1000)
         return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
-    def add(self, en, zh):
+    def add(self, en, zh, dur=None):
+        """dur：该条字幕对应的真实语音时长（秒）；None=退回固定 hold。
+
+        防重叠：SRT 播放器不允许同一时间两条字幕叠着；上一条还没到期就
+        来新条时，把上一条的结束截到新条开始（至少留 0.4s 可见时间）。
+        原来固定 hold=6s 时，连续说话的 SRT 全是重叠段，很多播放器只显示
+        第一条 —— 这也是"字幕像是漏了"的一个来源。
+        """
         if not en:
             return
+        st = time.time() - self.t0
+        hold = srt_hold_for(dur, self.hold)
         with self._lock:
-            self.items.append((time.time() - self.t0, en, zh or ""))
+            self.items.append((st, en, zh or "", hold))
+            # 截断上一条（若已过期则不动）
+            for k in range(len(self.items) - 2, -1, -1):
+                p_st, p_en, p_zh, p_hold = self.items[k]
+                if p_st + p_hold <= st:
+                    break
+                new_hold = max(0.4, st - p_st)
+                if new_hold < p_hold:
+                    self.items[k] = (p_st, p_en, p_zh, new_hold)
+                break
             self.items = self.items[-self.keep:]
             self._write()
 
     def _write(self):
         out = []
-        for i, (st, en, zh) in enumerate(self.items, 1):
+        for i, it in enumerate(self.items, 1):
+            st, en, zh = it[0], it[1], it[2]
+            hold = it[3] if len(it) > 3 else self.hold
             out.append(f"{i}")
-            out.append(f"{self._fmt(st)} --> {self._fmt(st + self.hold)}")
+            out.append(f"{self._fmt(st)} --> {self._fmt(st + hold)}")
             if zh:
                 out.append(en)
                 out.append(zh)
@@ -1720,6 +1791,11 @@ def run(args):
         def _build(_k=want_key):
             try:
                 _nt = Translator(_k or "auto", args.dst)
+                if _live_terms and getattr(_nt, "llm", None) is not None:
+                    try:
+                        _nt.llm.set_terms(_live_terms)
+                    except Exception:
+                        pass
                 _tr_cache[_k] = _nt
                 print(f"  → 译器 {_k or 'auto'} 后台构建完成"
                       f"（{_nt.mode}），下一批生效")
@@ -1735,29 +1811,26 @@ def run(args):
     # 结果还没出来，万一不是英语就把非英语喂给了 en→zh 模型 → 垃圾。
     # 用 auto 起步（Google + sl=auto，判错也无所谓），等检测结果出来
     # 再按 _pick_offline_source 决定是否切到 argos。
+    # 术语表：本地 HY-MT 与远端 Qwen-MT 都吃同一份（P0-1）
+    _live_terms = parse_terms(getattr(args, "mt_terms", None))
+    if _live_terms:
+        print(f"  术语表 {len(_live_terms)} 条（本地/远端 MT 同用）")
     # 本地翻译（可选）：启动 llama-server 子进程并挂到单例上
     if getattr(args, "mt_local", False) and not LOCAL_MT:
         try:
             from local_mt import from_args as _local_from_args
-            _terms = []
-            for _it in (getattr(args, "mt_terms", None) or []):
-                if os.path.isfile(_it):
-                    for _ln in open(_it, encoding="utf-8"):
-                        _ln = _ln.strip()
-                        if _ln and not _ln.startswith("#") and "=" in _ln:
-                            _a, _b = _ln.split("=", 1)
-                            _terms.append((_a.strip(), _b.strip()))
-                elif "=" in _it:
-                    _a, _b = _it.split("=", 1)
-                    _terms.append((_a.strip(), _b.strip()))
-            if _terms:
-                print(f"  术语表 {len(_terms)} 条")
+            _terms = _live_terms
             _lm = _local_from_args(model=args.mt_local_model, terms=_terms)
             if _lm is not None:
                 LOCAL_MT.append(_lm)
         except Exception as _e:
             print(f"  本地翻译加载失败: {type(_e).__name__} {_e}")
     tr = Translator(args.lang or "auto", args.dst)
+    if _live_terms and getattr(tr, "llm", None) is not None:
+        try:
+            tr.llm.set_terms(_live_terms)
+        except Exception as _e:
+            print(f"  术语表挂到远端 MT 失败: {type(_e).__name__} {_e}")
     _tr_key[0] = args.lang if args.lang else None
     _tr_cache[_tr_key[0]] = tr               # 初始译器也进缓存
     print(f"翻译: {tr.mode}　短句表 {len(tr.book)} 条")
@@ -2157,6 +2230,7 @@ def run(args):
         print(f"QTimer 建立失败: {type(e).__name__}")
 
     pending, pend_since = [], None
+    _natural_flush = False        # 刚出现自然句尾（静音切出来的段）
     t_all = time.time()
 
     # ── 翻译并行化所需的状态（分块路线用） ──────────────────────
@@ -2186,6 +2260,7 @@ def run(args):
     # 为什么攒单元而不只合并批内段：qwen-mt 每次调用 0.57s 是**固定开销**，
     # 而一批通常只有一个语义单元 —— 只在批内合并等于没省。
     mt_units = []
+    mt_unit_durs = []              # 与 mt_units 等长：该单元的真实音频秒数
     mt_first_t = None
     _ph_seg = np.zeros(int(0.5 * TARGET_RATE), dtype=np.float32)
 
@@ -2227,17 +2302,19 @@ def run(args):
             _missing_since.pop(_next_show[0], None)
             _next_show[0] += 1
             # segs_k 的元素是 (段音频, 原文)；zh_k 是等长译文列表
-            _pairs = [(txt, zh) for (seg, txt), zh in zip(segs_k, zh_k) if txt]
+            _pairs = [(txt, zh,
+                      (len(seg) / TARGET_RATE if seg is not None else 0.0))
+                     for (seg, txt), zh in zip(segs_k, zh_k) if txt]
             for seg, txt in segs_k:
                 if txt:
                     dur = len(seg) / TARGET_RATE if seg is not None else 0.0
                     print(f"[{shown + 1:>3}] 段{dur:4.1f}s | 原: {txt[:52]}")
             shown += len(_pairs)
             if srt:
-                for txt, zh in _pairs:
-                    srt.add(txt, zh)
+                for txt, zh, _dur in _pairs:
+                    srt.add(txt, zh, dur=_dur)
             if ov and _pairs:
-                for txt, zh in _pairs:
+                for txt, zh, _dur in _pairs:
                     if zh:
                         print(f"      译: {zh[:52]}")
                 # **一次涌入多段时合并成一条显示。** 合并翻译攒批后一次
@@ -2247,11 +2324,11 @@ def run(args):
                 if len(_pairs) >= 3:
                     _SENT = getattr(ov, "PENDING_KEEP_OLD",
                                     "\x00PENDING_KEEP_OLD\x00")
-                    _mj = " ".join(t for t, _ in _pairs)
-                    _zj = " ".join(z for _, z in _pairs if z)
+                    _mj = " ".join(t for t, _z, _d in _pairs)
+                    _zj = " ".join(z for _t, z, _d in _pairs if z)
                     ui_q.put((_mj, _zj if _zj else _SENT))
                 else:
-                    for txt, zh in _pairs:
+                    for txt, zh, _dur in _pairs:
                         if zh:
                             ui_q.put((txt, zh))
                         else:
@@ -2424,7 +2501,7 @@ def run(args):
 
     def _mt_maybe_flush():
         """把攒好的语义单元提交给翻译线程（攒够 / 窗口到期）。"""
-        nonlocal mt_units, mt_first_t
+        nonlocal mt_units, mt_unit_durs, mt_first_t
         if not mt_units:
             return
         _now = time.time()
@@ -2436,12 +2513,20 @@ def run(args):
                 mt_first_t = _now
             return
         _units = mt_units[:]
+        _durs = mt_unit_durs[:]
         mt_units = []
+        mt_unit_durs = []
         mt_first_t = None
         _tr_now = tr                  # 快照：批边界可能换译器
         _bno = _seq_in[0]
         _seq_in[0] += 1
-        _segs_b = [(_ph_seg, u) for u in _units]
+        # 占位段按真实音频时长造：显示/SRT 只读 len(seg)/TARGET_RATE，
+        # 原来的固定 0.5s 会让每条字幕都只停 1 秒（SRT 时间轴失真）。
+        _segs_b = [(np.zeros(int(max(0.2, _d) * TARGET_RATE),
+                             dtype=np.float32), _u)
+                   for _u, _d in zip(_units, _durs)]
+        if len(_segs_b) != len(_units):          # 防御：长度对不上退回旧法
+            _segs_b = [(_ph_seg, u) for u in _units]
 
         def _do_batch(_bno, _units, _segs, _tr):
             """一次调用译多个语义单元（分隔符格式）。"""
@@ -2487,6 +2572,7 @@ def run(args):
         _flush = (args.mt_cap <= 0 or _is_natural or _pt >= args.mt_cap)
         if mt_pending and _flush:
             mt_units.append(" ".join(t for _s, t in mt_pending))
+            mt_unit_durs.append(_pt)     # 真实音频秒数（SRT 结束时间用）
             mt_pending = []
         _mt_maybe_flush()
         _n_shown = _drain_count()
@@ -2511,7 +2597,11 @@ def run(args):
                 lang=th.last_lang,
                 lang_p=round(float(th.last_lang_prob or 0.0), 3),
                 gate=(round(_gt, 1) if _gt is not None else None),
-                rejected=(getattr(_g, "rejected", 0) if _g else 0))
+                rejected=(getattr(_g, "rejected", 0) if _g else 0),
+                rejected_hallu=getattr(th, "rejected_hallu", 0),
+                rejected_lowq=getattr(th, "rejected_lowq", 0),
+                rejected_remote=getattr(th, "rejected_remote", 0),
+                flush=job.get("flush", ""))
         except Exception:
             pass
 
@@ -2528,11 +2618,17 @@ def run(args):
                     pending.append(s)
                     if pend_since is None:
                         pend_since = time.time()
-            # 触发条件：攒够时长 或 等够时间（ASR 在飞时只攒不发）
+                    # 自然句尾：没顶到 max_seg 的段是静音切出来的
+                    if len(s) / TARGET_RATE < args.max_seg - 0.05:
+                        _natural_flush = True
+            # 触发条件：攒够时长 / 等够时间 / 静音句尾提前发（ASR 在飞
+            # 时只攒不发）。静音提前发能砍掉短句的首字延迟。
             batch_dur = sum(len(x) for x in pending) / TARGET_RATE
             waited = (time.time() - pend_since) if pend_since else 0
-            due = bool(pending) and (batch_dur >= args.max_batch
-                                     or waited >= args.max_wait)
+            _flush_why = batch_flush_reason(
+                batch_dur, waited, _natural_flush, args.max_batch,
+                args.max_wait, getattr(args, "flush_min", 0.6))
+            due = _flush_why is not None
             # 翻译窗口到期：**每一轮**都检查（原来只在有 ASR 批时评估，
             # 0.35s 窗口会在两次切段之间白白错过 —— 实测 14 批只出 2~3 条）
             _mt_maybe_flush()
@@ -2540,8 +2636,10 @@ def run(args):
                 _lang = None if args.detect else (args.lang or None)
                 n_batch += 1
                 _asr_job = {"segs": pending, "dur": batch_dur,
-                            "nb": n_batch, "t0": time.time()}
+                            "nb": n_batch, "t0": time.time(),
+                            "flush": _flush_why}
                 pending, pend_since = [], None
+                _natural_flush = False
                 _asr_fut = _asr_pool.submit(th.transcribe_batch,
                                             _asr_job["segs"], lang=_lang)
             # 每轮都显示已译好的批次；不能等下一个 ASR 批触发才显示
@@ -2567,7 +2665,13 @@ def run(args):
             if _tail_all:
                 _joined = " ".join(_tail_all)
                 if _joined:
-                    done_q.put((_seq_in[0], [(_ph_seg, _joined)], [tr(_joined)]))
+                    _tail_dur = (sum(len(_s) / TARGET_RATE
+                                     for _s, _x in mt_pending)
+                                 + sum(mt_unit_durs))
+                    _tail_seg = np.zeros(int(max(0.2, _tail_dur) * TARGET_RATE),
+                                         dtype=np.float32)
+                    done_q.put((_seq_in[0], [(_tail_seg, _joined)],
+                                [tr(_joined)]))
                     _seq_in[0] += 1
         except Exception:
             pass
@@ -3200,6 +3304,9 @@ def build_parser():
                     help="攒够多少秒音频就转写（摊薄固定开销）")
     ap.add_argument("--max-wait", type=float, default=1.2,
                     help="最多等多少秒就转写（防积压）")
+    ap.add_argument("--flush-min", type=float, default=0.6,
+                    help="静音句尾提前发批的最小音频秒数（0=关闭；"
+                         "短句说完立即送识别，降低首字延迟）")
     # ── 远端识别（解决本地 CPU 的 2 秒固定成本）─────────────────
     # 本地实测（_bench_bottleneck.py）：一次 transcribe 固定 ~2.0 秒，
     # 与音频长短无关，参数/线程/compute_type 都动不了它。

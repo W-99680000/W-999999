@@ -80,6 +80,18 @@ def main() -> int:
         "shown_total": sum(shown),
         "rejected_total": sum(rej),
     }
+    # 发批原因分布 + 三类拒段（累计值取最后一条，不求和）
+    flush = {}
+    for r in batches:
+        k = r.get("flush") or "-"
+        flush[k] = flush.get(k, 0) + 1
+    last = batches[-1] if batches else {}
+    out["flush"] = flush
+    out["rejected"] = {
+        "hallucination": last.get("rejected_hallu"),
+        "low_quality": last.get("rejected_lowq"),
+        "remote_empty": last.get("rejected_remote"),
+    }
     if a.json:
         print(json.dumps(out, ensure_ascii=False, indent=1))
         return 0
@@ -93,6 +105,11 @@ def main() -> int:
           f"P90 {out['asr_s']['p90']:.3f}s　max {out['asr_s']['max']:.3f}s")
     print(f"上屏段数: 本批合计 {out['shown_total']}　"
           f"噪声门拒段 {out['rejected_total']}")
+    print("发批原因: " + "　".join(f"{k}={v}" for k, v in
+                                   sorted(out["flush"].items())))
+    rj = out["rejected"]
+    print(f"累计拒段: 幻觉 {rj['hallucination']}　"
+          f"低质量 {rj['low_quality']}　远端空 {rj['remote_empty']}")
     for s in out["startups"]:
         print(f"启动: mode={s['mode']} model={s.get('model')} "
               f"就绪 {s.get('ready_s')}s")

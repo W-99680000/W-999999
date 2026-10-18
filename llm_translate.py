@@ -218,6 +218,14 @@ class LLMTranslator:
         self.base = self.base.replace("//localhost:", "//127.0.0.1:")
         # qwen-mt 不接受 system 角色（实测 400），构造时置 True
         self.no_system = bool(no_system)
+        # ── Qwen-MT 官方 translation_options（术语干预/领域提示）──
+        # 只对 qwen-mt* 生效：其它 OpenAI 兼容端点不认这个字段。
+        # 字段格式来自官方文档（阿里云 Model Studio, 2026-10-11）。
+        self.terms = []          # [(源, 目标), ...]
+        self.domains = ""        # 英文领域提示（可为空）
+        self.no_options = False  # 服务端不认 translation_options 时降级
+        self.option_fails = 0
+        self.options_ok = 0
         self.ok = bool(self.base and self.model)
         self.calls = self.fails = 0
         self.t_last = 0.0
@@ -277,8 +285,84 @@ class LLMTranslator:
                                  raw.decode("utf-8", "replace")[:150]))
         return json.loads(raw.decode("utf-8", "replace"))
 
+    # ── Qwen-MT translation_options ─────────────────────────
+    # 官方文档：translation_options 支持 source_lang / target_lang /
+    # terms[{source,target}] / domains。source_lang 可给英文名或代码，
+    # 未知用 "auto"；显式给源语言能提升准确率。
+    _LANG_NAMES = {
+        "en": "English", "zh": "Chinese", "zh-cn": "Chinese",
+        "zh-tw": "Traditional Chinese", "ja": "Japanese",
+        "ko": "Korean", "vi": "Vietnamese", "th": "Thai",
+        "ru": "Russian", "es": "Spanish", "fr": "French",
+        "de": "German", "pt": "Portuguese", "id": "Indonesian",
+        "ms": "Malay", "ar": "Arabic", "hi": "Hindi",
+    }
+
+    @classmethod
+    def _lang_name(cls, v):
+        """把 "vi" / "Vietnamese" / "Simplified Chinese" 归一成官方值。"""
+        if not v:
+            return ""
+        t = str(v).strip()
+        low = t.lower().replace("_", "-")
+        if low in cls._LANG_NAMES:
+            return cls._LANG_NAMES[low]
+        if low in ("simplified chinese", "chinese (simplified)"):
+            return "Chinese"
+        return t
+
+    def _is_qwen_mt(self):
+        return (self.kind == "openai"
+                and (self.model or "").lower().startswith("qwen-mt"))
+
+    def set_terms(self, terms):
+        """设置术语表；支持 [(src,tgt)] 或 [{"source","target"}]。"""
+        out = []
+        for it in (terms or []):
+            if isinstance(it, dict):
+                a = (it.get("source") or "").strip()
+                b = (it.get("target") or "").strip()
+            else:
+                try:
+                    a, b = it[0], it[1]
+                except Exception:
+                    continue
+                a, b = str(a).strip(), str(b).strip()
+            if a and b:
+                out.append((a, b))
+        # 官方限制：整条请求 8192 输入 token，术语别无限堆
+        self.terms = out[:200]
+
+    def set_domains(self, text):
+        self.domains = (text or "").strip()[:1000]
+
+    def _options(self, text, target, source=None):
+        opts = {
+            "source_lang": self._lang_name(source) or "auto",
+            "target_lang": self._lang_name(target) or "Chinese",
+        }
+        if self.terms:
+            opts["terms"] = [{"source": a, "target": b}
+                             for a, b in self.terms]
+        if self.domains:
+            opts["domains"] = self.domains
+        return opts
+
+    def _qwen_body(self, text, target, source=None):
+        # messages 只能一条 user，content 只放待译文本（官方口径）。
+        # 不再把 "Translate the following…" 塞进 content —— 那是给通用
+        # LLM 的写法，qwen-mt 的翻译指令应放 translation_options。
+        return {"model": self.model, "stream": False,
+                "temperature": self.temperature, "max_tokens": 220,
+                "messages": [{"role": "user", "content": text}],
+                "translation_options": self._options(text, target, source)}
+
     # ── 请求体 ───────────────────────────────────────────────
     def _payload(self, text, target, source=None):
+        # Qwen-MT：官方 translation_options（术语/领域/源语言锁定）。
+        # 失败过一次（服务端不认该字段）就永久降级，不再反复 400。
+        if self._is_qwen_mt() and not self.no_options:
+            return self._qwen_body(text, target, source)
         # **qwen-mt 只接受 user / assistant 角色，发 system 会 400。**
         # 实测报错：Role must be in [user, assistant].
         # 这是翻译专用模型的特性 —— 翻译指令本身就该写在 user 里，
@@ -339,15 +423,34 @@ class LLMTranslator:
         t0 = time.time()
         # 两次尝试：连接类失败很常见（服务端空闲断连、代理抽风）。
         # 丢掉旧连接重建再试一次；两次都失败才算真失败。
+        tried_fallback = False
         for attempt in (0, 1):
             try:
                 j = self._post_once(body, hdr)
                 self.calls += 1
                 self.t_last = time.time() - t0
+                if self._is_qwen_mt() and not self.no_options:
+                    self.options_ok += 1
                 return _clean(self._extract(j))
-            except Exception:
+            except Exception as e:
                 self._drop_conn()
                 self._reconnects += 1
+                # Qwen-MT 服务端不认 translation_options（400/422）：
+                # 降级回原来的 prompt 风格，重试一次并永久记住。
+                msg = str(e)
+                if (self._is_qwen_mt() and not self.no_options
+                        and not tried_fallback
+                        and ("HTTP 4" in msg
+                             or "translation_options" in msg)):
+                    tried_fallback = True
+                    self.no_options = True
+                    self.option_fails += 1
+                    print(f"  ！qwen-mt 不接受 translation_options"
+                          f"（{msg[:90]}），已降级为普通 prompt"
+                          f"（术语注入失效）", flush=True)
+                    body = json.dumps(self._payload(text, target, source),
+                                      ensure_ascii=False).encode("utf-8")
+                    continue
                 if attempt == 1:
                     self.fails += 1
                     return ""
@@ -367,9 +470,14 @@ class LLMTranslator:
     def status(self):
         if not self.ok:
             return "LLM=未配置"
+        extra = ""
+        if self.terms:
+            extra += f"　术语 {len(self.terms)}"
+        if self.option_fails:
+            extra += "　选项降级"
         return (f"LLM={self.kind}:{self.model}　调用 {self.calls}"
                 f"　失败 {self.fails}　重连 {self._reconnects}"
-                f"　上次 {self.t_last:.2f}s")
+                f"　上次 {self.t_last:.2f}s{extra}")
 
 
 def from_env_or_args(base_url=None, model=None, kind=None):

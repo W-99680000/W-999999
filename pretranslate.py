@@ -589,6 +589,13 @@ def make_translator(dst, src_hint=None, mt_local=False, terms=None):
         if lm is not None:
             M.LOCAL_MT.append(lm)
     tr = M.Translator("auto", dst)
+    # 术语表同样接给远端 Qwen-MT（P0-1）：本地 HY-MT 在 from_args 里已吃，
+    # 这里补远端 LLM 的 translation_options.terms。
+    if terms and getattr(tr, "llm", None) is not None:
+        try:
+            tr.llm.set_terms(terms)
+        except Exception as e:
+            print(f"  术语表挂到远端 MT 失败：{type(e).__name__} {e}")
     if src_hint:
         tr.src_hint = src_hint
     print(f"  翻译后端：{tr.mode}　源语言提示 {src_hint or '无'}")

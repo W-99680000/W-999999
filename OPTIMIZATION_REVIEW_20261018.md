@@ -490,3 +490,60 @@ AlignAtt/SimulStreaming 需 cross-attention 且推荐 ≥10GB 显存 → 只列 
 | doctor.py | 退出码 0 |
 | 消费级启动（wscript→pythonw） | 2s API ready、无 conhost 子进程、单实例第二进程退出、日志正常 |
 | metrics 基线 | 启动 4.4s、ASR P50 0.61s / P90 0.93s、4.25× |
+
+---
+
+## 19. 质量/实时性落地：Qwen-MT 术语 + SRT 真实时间轴 + 静音提前发批（2026-10-18 第二轮）
+
+### 19.1 P0-1：Qwen-MT 官方 translation_options（术语注入）
+
+- 依据官方文档（阿里云 Model Studio，2026-10-11）：OpenAI 兼容端点把
+  	ranslation_options 顶层放进请求体；messages 只能一条 user，content 就是
+  待译文本；字段 source_lang/target_lang/terms[{source,target}]/domains。
+- llm_translate.py 实现：set_terms()/set_domains()、qwen-mt 走
+  「纯文本 + translation_options」、服务端 400/422 时自动降级回原 prompt
+  风格（只降一次并打印日志），status() 显示术语数与降级状态。
+- 接线：直播翻译与视频翻译的 --mt-terms 都挂到远端 MT（原来只喂本地 HY-MT）。
+- **实测 A/B**（	ools/check_qwen_terms.py，真实 API）：
+  - 无术语：up主 → "UP主"；带术语 up主=创作者：→ "创作者"，Bilibili→哔哩哔哩；
+  - 术语命中 2/2，	ranslation_options 被接受 4/4，无降级、4 次调用 0 失败。
+
+### 19.2 P0-2：SRT 时间轴真实时长 + 防重叠
+
+- 发现翻译单元用 _ph_seg = np.zeros(0.5s) 占位，SrtWriter 又固定 hold=6s：
+  结果每条字幕实际只停 1 秒（0.5*1.15+0.35 被下限夹到 1.0），且连续说话时
+  SRT 段大量重叠（很多播放器只显示第一条）。
+- 修复：
+  1. 翻译单元携带真实音频时长 mt_unit_durs，提交时用等长占位段让
+     len(seg)/16000 就是真实秒数；
+  2. SrtWriter.add(en, zh, dur) → srt_hold_for = clamp(dur*1.15+0.35, 1, 6)；
+  3. 新条把上一条结束截到新条开始（至少 0.4s），SRT 不再重叠。
+- 实测同一段样本：spans [2.455, 1.182, 1.500, 4.260]，边界首尾相接、无重叠。
+
+### 19.3 P0-2'：静音句尾提前发批（实时性）
+
+- 新增 --flush-min 0.6（默认，0=关闭）：Segmenter 吐出自然句尾（长度
+  < max_seg，即静音切出的段）且已够 flush_min 秒，就跳过 max_batch/max_wait
+  立即送 ASR。
+- 指标新增 lush 字段；样本 12 批分布：max_batch=6, natural=2（2 批由
+  静音提前触发），ASR P50 0.571s / P90 0.909s / 吞吐 4.4×。
+
+### 19.4 指标与报告
+
+- metrics_live.jsonl 每批新增：lush、ejected_hallu/lowq/remote
+  （累计拒段），	ools/quality_report.py 打出发批原因分布与三类拒段。
+- 调研报告 §2 增加「复核更正与落地状态」：澄清幻觉闸门/ASR-MT 并行
+  **本仓库已实现**（原调研判断有误），并标注 P0-1 已实现、P0-2 部分实现。
+
+### 19.5 验证
+
+| 项 | 结果 |
+|---|---|
+| ench/_verify_quality_gates.py（新） | 25 通过 / 0 失败 |
+| 	ools/check_qwen_terms.py（真实 API A/B） | 术语 2/2、选项接受 4/4 |
+| live_subtitle_v2.py --selftest | 174 通过 / 0 失败 |
+| ench/_verify_hysteresis.py | 16 通过 / 0 失败 |
+| 	ools/check_registry_wiring.py | 20 通过 / 0 失败（新参数 39 个） |
+| 	ools/check_admin_html.py | 28 通过 / 0 失败 |
+| 	ools/doctor.py | 退出码 0 |
+| 直播 E2E 样本 | SRT 4 条、spans [2.455,1.182,1.5,4.26]、无重叠；指标 natural=2 |

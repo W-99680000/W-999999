@@ -130,6 +130,19 @@ o_speech_prob/vg_logprob 组合、
 - **P2-2 浮窗可读性**：对比度 ≥4.5:1（大字 3:1），不透明度下限。
 - **P2-4 缓存一致性**：meta 加模型/参数指纹，避免新旧模型拼接续跑。
 
+**本轮落地（2026-10-18 第二轮）**：
+
+- P0-1 ✅ Qwen-MT `translation_options`（术语/语言锁定）接入直播与视频两条
+  路线；实测 A/B 术语命中 2/2，服务端接受 4/4，无降级。
+- P0-2 ◐ SRT 结束时间已用真实音频时长（修掉翻译单元 0.5s 占位段导致的
+  "每条 1 秒"问题），并做防重叠截断；CPS/行数/词级对齐待做。
+- P0-3 ✅ 已有段级质量闸 + 复读过滤，本轮补指标暴露（幻觉/低质量/远端空）
+  与 `bench/_verify_quality_gates.py` 回归；远端文本过滤与阈值 A/B 待做。
+- P0-2' ✅ 静音句尾提前发批 `--flush-min`（默认 0.6s，0=关）：样本实测
+  12 批里 2 批由 natural 提前触发；ASR P50 0.571s / P90 0.909s。
+- 度量：`metrics_live.jsonl` 增 `flush` 与三类拒段计数，
+  `tools/quality_report.py` 直接出分布。
+
 **暂不做**：把直播模块换 SimulStreaming/AlignAtt 原版 —— 需要模型内部
 cross-attention（faster-whisper 不提供）且推荐 ≥10GB 显存（本机 8GB）；
 先按上面 P0/P1 拿到确定收益，再决定是否做 POC。

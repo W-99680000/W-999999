@@ -71,6 +71,27 @@
 > 每条都写清：现状 → 做法 → 预期收益 → 实现成本 → 风险 → 验证方法（可测指标）。
 > 「预期收益」里的数字，凡是带来源编号的是引用，凡是没标的都是【推断】，必须实测。
 
+> **2026-10-18 复核更正与落地状态（Lead 实测）**
+>
+> - **P0-1 已实现**：`llm_translate.py` 现在按官方口径发
+>   `translation_options`（`source_lang/target_lang/terms`），`messages` 只放
+>   待译文本；直播与视频两条路线都把 `--mt-terms` 接到远端 Qwen-MT。
+>   实测 A/B：不开术语时 "up主"→"UP主"，开术语后→"创作者"（2/2 命中），
+>   `translation_options` 被接受 4/4，无降级。
+> - **P0-2 部分实现**：SRT 结束时间已改为真实音频时长（翻译单元携带真实
+>   时长，不再用固定 0.5s 占位段），并做防重叠截断；CPS/行数/词级对齐
+>   （Netflix 规范）仍未做，留在下一轮。
+> - **P0-3 复核更正**：本仓库**并非**"缺输出侧过滤"——`live_subtitle_v2.py`
+>   已有段级质量闸（`no_speech_prob/avg_logprob/compression_ratio`）和
+>   `is_hallucination()` 复读过滤。真正缺的是：远端 ASR 文本没走同一道
+>   复读过滤、拒段指标没暴露、阈值未按素材 A/B。本轮已补指标暴露与
+>   `bench/_verify_quality_gates.py` 回归，远端过滤与阈值调优列入下一轮。
+> - **P1-1 复核更正**：本仓库已有 ASR 后台线程 + 翻译异步线程池 +
+>   按批序显示（`_asr_pool`/`_th_pool`/`_order`），并非"ASR→MT 串行"。
+>   还缺的是队列深度/GPU 争用度量与极端并发下的 A/B。
+>
+> 下文的"现状"保留调研时的判断；以上为准。
+
 ### P0（本周可做，收益确定、改动局部）
 
 #### P0-1 术语表接到 Qwen-MT 的术语干预字段
@@ -95,7 +116,9 @@
 
 #### P0-3 幻觉硬闸门
 
-- **现状**：`streaming_asr.py` 已开 `vad_filter=True`、`temperature=0.0`、`condition_on_previous_text=False`，并留了噪声实验注释（RMS=0.05 噪声下不开 VAD 会输出 "You"，`no_speech_prob=0.771`）。缺的是**输出侧**的后置过滤。
+- **现状（复核后修正）**：段级质量闸与 `is_hallucination()` 已在
+  `live_subtitle_v2.py` 实现（三信号判废 + 复读过滤）；缺的是远端 ASR
+  文本的同款过滤、指标暴露与按素材的阈值 A/B。
 - **做法**：每批 ASR 输出加四道闸：① `no_speech_prob > 0.6` 且 `avg_logprob < -1.0` → 丢弃；② 与本批 confirmed 文本的词级重复率 > 0.8 → 丢弃；③ 同一短语连续重复 ≥3 次 → 截断；④ 连续 N 秒无 VAD 语音 → 不送 ASR（连推理都省）。
 - **预期收益**：【论文 19】Whisper 约 1% 转写出现完全不存在的整句，且非人声占比越高越严重——直播场景里静音/音乐/游戏音效占比很高，这条是刚需；项目自己的噪声实验也印证了同类失效模式。
 - **实现成本**：0.5 人日（纯后处理，不动模型）。
@@ -106,7 +129,8 @@
 
 #### P1-1 ASR 与 MT 双缓冲流水线（overlap）
 
-- **现状**：一批 ASR 完成后才发 MT，再上屏；端到端 ≈ ASR + MT + 排队。`OPTIMIZATION_REVIEW_20261018.md` §3 已把 ASR 移出 UI 主线程，但 ASR→MT 仍是串行。
+- **现状（复核后修正）**：ASR 已在后台线程、翻译在独立线程池并带
+  按批序显示，流水线已 overlap；还缺队列深度/GPU 争用的度量与极端并发 A/B。
 - **做法**：ASR worker 产出 `(batch_id, text, t_end)` 立即入 MT 队列；MT worker 用上一批 confirmed 文本做 context（`llm_translate.py` 已支持 `context`）；显示层按 `batch_id` 顺序提交，允许「先出原文、译文到达后就地替换」。
 - **预期收益**：【推断】若 ASR 0.6 s、MT 0.4 s，理论上端到端从 ~1.0 s 降到 ~0.7 s（省掉较小的一侧）；实际受 GPU 争用影响，需实测。
 - **实现成本**：2–4 人日（并发、顺序保证、取消/丢弃过期批）。
