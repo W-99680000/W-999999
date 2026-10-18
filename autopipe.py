@@ -91,8 +91,12 @@ def run_pretranslate(src, dst="zh", on_progress=None, on_target=None,
                        抢一张卡，全卡死）。
     """
     env = dict(os.environ, PYTHONIOENCODING="utf-8", HF_HUB_OFFLINE="1")
+    _src_lang = (os.environ.get("BABEL_SOURCE_LANG") or "auto").strip().lower()
+    _extra = list(extra_args or [])
+    if _src_lang and _src_lang != "auto" and "--lang" not in _extra:
+        _extra += ["--lang", _src_lang]
     cmd = [_py_exe(), "-u", os.path.join(HERE, "pretranslate.py"),
-           src, "--to", dst] + list(extra_args or [])
+           src, "--to", dst] + _extra
     try:
         proc = subprocess.Popen(
             cmd, cwd=HERE, env=env, stdout=subprocess.PIPE,

@@ -1233,12 +1233,12 @@ const BABEL_UI = {
                   { id:"cuda:0", name:"NVIDIA GeForce RTX 4070 Laptop GPU", total_mb:8188, role:"translation" } ],
   /* 模式预设：实时=快，视频翻译=准 */
   presets: {
-    loopback: { toolbar:{ input:"desktop", lang:"en→zh", fontSize:"20px", chunk:"2s", vprofile:"跟随系统音量" },
+    loopback: { toolbar:{ input:"desktop", lang:"auto→zh", fontSize:"20px", chunk:"2s", vprofile:"跟随系统音量" },
                 asr:{ id:"local:medium", beam:"1（贪心）", vad:"DSP 门限 −38 dBFS" },
                 mt:{ id:"remote:qwen-mt-flash", batch:2, temperature:0.10, top_p:0.60, top_k:20, repeat_penalty:1.05 },
                 glossary:["巴别塔计划","浮窗","同传"],
                 summary:"低延迟 · 识别 beam=1 · 翻译批次 2 段 · temperature 0.10" },
-    cache:    { toolbar:{ input:"file", lang:"en→zh", fontSize:"22px", chunk:"16s", vprofile:"文件声道（原始）" },
+    cache:    { toolbar:{ input:"file", lang:"auto→zh", fontSize:"22px", chunk:"16s", vprofile:"文件声道（原始）" },
                 asr:{ id:"local:large-v3", beam:"5（beam search）", vad:"silero-vad 静音切分" },
                 mt:{ id:"remote:qwen-mt-flash", batch:6, temperature:0.10, top_p:0.60, top_k:20, repeat_penalty:1.05 },
                 glossary:["巴别塔计划","浮窗","同传","时间轴","停顿时长"],
@@ -1838,7 +1838,14 @@ function onToolbarChange(id, v, o){
     state.toolbar.lang = v;
     const note = document.querySelector("#tb-lang") ? document.querySelector("#tb-lang").parentNode.parentNode.querySelector(".field-note") : null;
     if (note) note.textContent = v.replace("→", " → ");
-    toast("语言方向已设为 " + label);
+    const _src = (v.split("→")[0] || "auto").trim().toLowerCase();
+    apiPost2("/api/language", { source:_src }).then(function(j){
+      if (!j.ok){ toast("语言方向保存失败", j.error || "", "warn"); return; }
+      toast("语言方向已设为 " + label + "，重启引擎生效…");
+      if (ENGINE.running) engAction("restart");
+    }).catch(function(e){
+      toast("语言方向保存失败", String(e), "warn");
+    });
   } else if (id === "tb-chunk"){
     state.toolbar.chunk = v;
     toast((state.mode === "loopback" ? "识别块长" : "分段粒度") + "已设为 " + label);
@@ -2568,6 +2575,12 @@ function syncModeFromEngine(){
     }).catch(function(){});
 }
 
+function apiPost2(u, body){
+  return fetch(u, {method:"POST", headers:{"Content-Type":"application/json"},
+                   body:JSON.stringify(body || {})})
+    .then(function(r){ return r.json(); });
+}
+
 function boot(){
   // 1) 先把两张同传记录表挂好（模型管理视图里那份从模板克隆）
   const slot = $("#recordsCardSlot");
@@ -2596,6 +2609,12 @@ function boot(){
     renderRecords();
     setView(state.view);
     syncModeFromEngine();
+    fetch("/api/language", { cache:"no-store" }).then(function(r){ return r.json(); })
+      .then(function(j){
+        if (!j) return;
+        state.toolbar.lang = (j.source || "auto") + "→" + (j.target || "zh");
+        renderToolbar();
+      }).catch(function(){});
     if (info.kind === "builtin"){
       toast("模型数据用内置假数据", "API 与快照都不可用（file:// 直接打开时正常）", "warn");
     } else if (state.bindAnomaly && state.bindAnomaly.length){

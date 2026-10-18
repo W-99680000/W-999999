@@ -99,6 +99,8 @@ OVERLAY_CMD = os.path.join(ROOT, "control_cmd.json")
 WATCH_SETTINGS = os.path.join(ROOT, "watch_overlay.json")
 WATCH_STATE = os.path.join(ROOT, "watch_overlay_state.json")
 WATCH_CMD = os.path.join(ROOT, "watch_cmd.json")
+LANGUAGE_FILE = os.path.join(ROOT, "work", "language.json")
+_LANGS = {"auto", "en", "ja", "ko", "vi", "zh"}
 ADMIN_CFG = os.path.join(ROOT, "work", "admin_qt.json")
 STARTUP_STATS = os.path.join(ROOT, "work", "startup_stats.json")
 LIVE_SRT = os.path.join(ROOT, "live.srt")
@@ -108,7 +110,7 @@ _OVERLAY_NUM = {
     "font_size", "ref_height", "original_ratio", "opacity", "outline_width",
     "bg_alpha", "border_width", "max_lines", "hold_seconds",
     "max_lines_per_entry", "width", "max_entry_chars", "line_height",
-    "gap_px", "x", "y", "pos",
+    "gap_px", "x", "y", "pos", "line_chars",
 }
 _OVERLAY_COLOR = {
     "text_color", "original_text_color", "outline_color", "bg_color",
@@ -176,6 +178,26 @@ def _validate_overlay(changes: dict) -> tuple[bool, str]:
         else:
             return False, f"字段 {k!r} 不在浮窗白名单里"
     return True, "ok"
+
+
+def _language_cfg() -> dict:
+    d = _read_json_file(LANGUAGE_FILE, {})
+    src = str(d.get("source") or "auto").lower()
+    dst = str(d.get("target") or "zh").lower()
+    if src not in _LANGS:
+        src = "auto"
+    if dst not in _LANGS:
+        dst = "zh"
+    return {"source": src, "target": dst}
+
+
+def _save_language(d: dict) -> None:
+    os.makedirs(os.path.dirname(LANGUAGE_FILE), exist_ok=True)
+    tmp = LANGUAGE_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, LANGUAGE_FILE)
+    os.environ["BABEL_SOURCE_LANG"] = str(d.get("source") or "auto")
 
 
 def _keys_payload() -> dict:
@@ -516,12 +538,16 @@ class Engine:
         # 注册表默认值已经由 live_subtitle_v2._apply_registry 灌进去了，
         # 所以这里**不再重复传 --model**：传了就变成"界面写死一个模型"，
         # 又会和注册表分叉。--mode 只用来记状态与给界面看。
+        _lang = _language_cfg()
         _extra = list(extra or [])
         if mode == "cache":
             # 界面上的「不写 .srt」是直播引擎参数；watch 本来就不写，丢掉
             _extra = [x for x in _extra if x != "--no-srt"]
         cmd += _extra
+        if mode != "cache" and _lang["source"] != "auto":
+            cmd += ["--lang", _lang["source"], "--no-detect"]
         env = (DLLS.env_for_engine() if DLLS else dict(os.environ))
+        env["BABEL_SOURCE_LANG"] = _lang["source"]
         if force:
             env["BABEL_FORCE"] = "1"
         with self.lock:
@@ -861,6 +887,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False,
                                    "error": "hardware_detect 不可用"}, 503)
             return self._json({"ok": True, "report": HW.detect()})
+        if path == "/api/language":
+            return self._json(_language_cfg())
         if path == "/api/keys":
             return self._json(_keys_payload())
         if path == "/api/admin-config":
@@ -1068,6 +1096,19 @@ class Handler(BaseHTTPRequestHandler):
                                    "error": "hardware_detect 不可用"}, 503)
             return self._json({"ok": True, "report": HW.detect(force=True)})
 
+        if path == "/api/language":
+            v = req.get("source")
+            if not isinstance(v, str):
+                return self._json({"ok": False,
+                                   "error": "source 必须是字符串"}, 400)
+            v = v.strip().lower()
+            if v not in _LANGS:
+                return self._json({"ok": False,
+                                   "error": f"不支持的源语言 {v!r}"}, 400)
+            d = _language_cfg()
+            d["source"] = v
+            _save_language(d)
+            return self._json({"ok": True, **d})
         if path == "/api/keys":
             # {dashscope?: "sk-...", hf_token?: "hf_..."}；空串=清除
             try:

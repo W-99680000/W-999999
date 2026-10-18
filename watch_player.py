@@ -52,7 +52,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 PIPE_NAME = r"\\.\pipe\live-subtitle-mpv"
-from subtitle_layout import split_cue as _split_cue_display
+from subtitle_layout import split_cue as _split_cue_raw
+
+
+def _split_cue_display(start, end, zh, src, max_chars=24):
+    return _split_cue_raw(start, end, zh, src, max_chars=max_chars)
 LOG_PATH = os.path.join(HERE, "watch.log")
 
 # 自动预翻译的节流：同一个视频失败后隔多久再试、最多试几次。
@@ -111,7 +115,16 @@ def _to_sec(m):
             + int(m.group(3)) + int(m.group(4)) / 1000.0)
 
 
-def _merge_two_lines(cues):
+def _line_chars_pref(default=24):
+    try:
+        d = json.load(open(os.path.join(HERE, "watch_overlay.json"),
+                           encoding="utf-8"))
+        return max(8, min(60, int(d.get("line_chars", default))))
+    except Exception:
+        return default
+
+
+def _merge_two_lines(cues, line_chars=24):
     """相邻两条短 cue 合成一条两行字幕。
 
     为什么：切短后如果每条都单独一闪，观感是“碎句”；标准字幕是
@@ -129,7 +142,9 @@ def _merge_two_lines(cues):
             dur = nen - st
             zlen = len((zh + nzh).replace("\n", ""))
             slen = len((src + nsrc).replace("\n", ""))
-            if (gap <= 0.35 and dur <= 7.0 and zlen <= 46 and slen <= 52
+            if (gap <= 0.35 and dur <= 7.0
+                    and zlen <= line_chars * 2 + 2
+                    and slen <= line_chars * 2 + 8
                     and "\n" not in zh and "\n" not in nzh):
                 out.append((st, nen, (zh + "\n" + nzh).strip(),
                             (src + "\n" + nsrc).strip()))
@@ -140,10 +155,38 @@ def _merge_two_lines(cues):
     return out
 
 
-def parse_srt(path):
-    """返回 [(start, end, zh, src)]。我们的 srt 第一行是中文、第二行原文；
+def _read_text_retry(path, attempts=6):
+    """读取预翻译正在写的 srt：Windows 上偶发 PermissionError，重试即可。
+
+    预翻译用原子 replace 写盘，但极少数情况下旧文件句柄未释放/杀软扫描
+    会让读端拿到 PermissionError；tick 每 2 秒重读，一次失败不该让浮窗
+    "卡死"或丢掉整批字幕。
+    """
+    last = None
+    for i in range(attempts):
+        try:
+            with open(path, encoding="utf-8-sig", errors="replace") as f:
+                return f.read()
+        except PermissionError as e:
+            last = e
+            time.sleep(0.03)
+        except OSError as e:
+            last = e
+            time.sleep(0.03)
+    if last:
+        raise last
+    return ""
+
+
+def parse_srt(path, line_chars=24):
+    """返回 [(start, end, zh, src)]；line_chars = 单行字幕长度目标。
     也兼容只有一行（当原文）的普通 srt。"""
-    txt = open(path, encoding="utf-8-sig", errors="replace").read()
+    try:
+        txt = _read_text_retry(path)
+    except OSError:
+        # 预翻译正在写盘/杀软短暂锁文件：这一拍先不更新，tick 下一拍再读，
+        # 绝不让一次读失败把整个浮窗 tick 打断（用户看到的就是“卡死”）。
+        return []
     cues = []
     for block in re.split(r"\r?\n\s*\r?\n", txt):
         lines = [l.strip() for l in block.strip().splitlines() if l.strip()]
@@ -166,8 +209,9 @@ def parse_srt(path):
     # 每条约 24 个汉字，避免浮窗/播放器硬折行把中文从词中间劈开。
     pretty = []
     for st, en, zh, src in cues:
-        pretty.extend(_split_cue_display(st, en, zh, src))
-    return _merge_two_lines(pretty)
+        pretty.extend(_split_cue_display(st, en, zh, src,
+                                         max_chars=line_chars))
+    return _merge_two_lines(pretty, line_chars)
 
 
 def no_url_backoff(tried, nt, now=None, max_tries=AUTO_NOURL_MAX_TRIES,
@@ -853,7 +897,7 @@ def _auto_main(args):
         if meta.get("complete"):
             return False
         try:
-            cues = parse_srt(srt_path)
+            cues = parse_srt(srt_path, _line_chars_pref())
         except Exception:
             return True
         if not cues:
@@ -1106,7 +1150,7 @@ def _auto_main(args):
             if cur["srt"]:
                 sig = _file_sig(cur["srt"])
                 if sig and sig != cur.get("sig"):
-                    new_cues = parse_srt(cur["srt"])
+                    new_cues = parse_srt(cur["srt"], _line_chars_pref())
                     if len(new_cues) > len(cur["cues"]):
                         cur.update(cues=new_cues,
                                    starts=[c[0] for c in new_cues],
@@ -1117,6 +1161,17 @@ def _auto_main(args):
                         cur["sig"] = sig
             if not cur["cues"]:
                 return
+            # 单行字幕长度热更新：浮窗设置改了 → 重新切条，无需重启 watch
+            _lc = _line_chars_pref()
+            if _lc != cur.get("line_chars"):
+                cur["line_chars"] = _lc
+                if cur.get("srt"):
+                    _new = parse_srt(cur["srt"], _lc)
+                    if _new:
+                        cur.update(cues=_new, starts=[c[0] for c in _new],
+                                   idx=-2)
+                        _log(f"单行字幕长度 → {_lc} 字，已重新切条"
+                             f"（{len(_new)} 条）")
             pos = tracker.position()
             # SMTC 没时间线时的兜底：从“最后一次已知位置”起，按墙钟推进；
             # 暂停冻结；若之前从未有过位置，则从 0 开始（Home 可从当前时刻归零）。

@@ -354,7 +354,8 @@ class QtOverlay:
                "original_ratio": (0.3, 1.5),
                "line_height": (0.9, 2.5), "gap_px": (0, 80),
                # bg_alpha 允许 0 —— 0 就是"没有框"（现在的默认值）
-               "bg_alpha": (0.0, 1.0)}
+               "bg_alpha": (0.0, 1.0),
+               "line_chars": (8, 60)}
         for k, (lo, hi) in rng.items():
             v = d.get(k)
             if v is None:

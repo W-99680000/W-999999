@@ -434,6 +434,10 @@
           </div>
           <p class="hint" style="margin-top:6px">播放器不上报进度时，看视频进度条把当前时间填进来，字幕从该点开始。</p>
         </div>
+        <div class="field"><label>单行字幕长度 <b id="ovCharsVal">—</b></label>
+          <input type="range" id="ovChars" min="8" max="60" step="1">
+          <p class="hint" style="margin-top:4px">每行最多多少字；越长越少断行，越短越像阅读器。</p>
+        </div>
         <div class="field"><label>字号 <b id="ovFontVal">—</b></label><input type="range" id="ovFont" min="10" max="120" step="1"></div>
         <div class="field"><label>不透明度 <b id="ovOpacityVal">—</b></label><input type="range" id="ovOpacity" min="0.15" max="1" step="0.01"></div>
         <div class="field"><label>最多显示条数 <b id="ovLinesVal">—</b></label><input type="range" id="ovLines" min="1" max="8" step="1"></div>
@@ -675,20 +679,23 @@
     standard: {font_size:20, width:1100, max_lines:1, max_lines_per_entry:2,
                line_height:1.3, gap_px:4, layout:"stacked", text_align:"center",
                show_original:true, bg_alpha:0, font_family:"Microsoft YaHei UI",
-               original_ratio:0.68, hold_seconds:600, max_entry_chars:120},
+               original_ratio:0.68, hold_seconds:600, max_entry_chars:120,
+               line_chars:24},
     bilingual: {font_size:18, width:1200, max_lines:2, max_lines_per_entry:2,
                 line_height:1.2, gap_px:6, layout:"inline", text_align:"center",
                 show_original:true, bg_alpha:0, font_family:"Microsoft YaHei UI",
-                original_ratio:0.72, hold_seconds:600, max_entry_chars:160},
+                original_ratio:0.72, hold_seconds:600, max_entry_chars:160,
+                line_chars:30},
     novel: {font_size:17, width:860, max_lines:4, max_lines_per_entry:3,
             line_height:1.8, gap_px:14, layout:"stacked", text_align:"left",
             show_original:true, bg_alpha:0.55, bg_color:"#0f1728",
             border_width:1, font_family:"SimSun", original_ratio:0.78,
-            hold_seconds:600, max_entry_chars:160},
+            hold_seconds:600, max_entry_chars:160, line_chars:20},
     minimal: {font_size:22, width:1000, max_lines:1, max_lines_per_entry:1,
               line_height:1.2, gap_px:0, layout:"zh_only", text_align:"center",
               show_original:false, bg_alpha:0, font_family:"Microsoft YaHei UI",
-              original_ratio:0.68, hold_seconds:600, max_entry_chars:120}
+              original_ratio:0.68, hold_seconds:600, max_entry_chars:120,
+              line_chars:26}
   };
   $$("#ovPresets [data-ov-preset]").forEach(function(b){
     b.addEventListener("click", function(){
@@ -722,6 +729,7 @@
       else toast(j.error || "对齐失败");
     });
   });
+  bindRange("#ovChars", "line_chars", function(v){ return Math.round(v) + " 字"; });
   bindRange("#ovFont", "font_size", function(v){ return Math.round(v) + " px"; });
   bindRange("#ovOpacity", "opacity", function(v){ return Math.round(v*100) + "%"; });
   bindRange("#ovLines", "max_lines", function(v){ return Math.round(v) + " 条"; });
@@ -767,6 +775,10 @@
     }
     if (s.max_lines != null){
       $("#ovLines").value = s.max_lines; $("#ovLinesVal").textContent = s.max_lines + " 条";
+    }
+    if (s.line_chars != null){
+      $("#ovChars").value = s.line_chars;
+      $("#ovCharsVal").textContent = Math.round(s.line_chars) + " 字";
     }
     $$("#ovLayout button").forEach(function(b){ b.classList.toggle("on", b.getAttribute("data-ov-value") === s.layout); });
     $$("#ovAlign button").forEach(function(b){ b.classList.toggle("on", b.getAttribute("data-ov-value") === s.text_align); });

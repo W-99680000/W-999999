@@ -1376,3 +1376,42 @@ POST /api/overlay {changes:{_action:sync_position,pos:秒}} → watch 把本地�
 base 设到该位置。适用于播放器完全不上报时间线、且用户已经播到中段的情况：
 看播放器进度条填当前时间即可，不用把视频拉回开头。
 实测：发送 pos=600 后 watch.log 出现「手动对齐：本地时钟 base=600.0s」。
+
+
+---
+
+## 41. 语言方向热切换 / 单行字幕长度 / 读 SRT 卡死（2026-10-18）
+
+### 41.1 语言方向默认自动 + 热切换
+
+- 两个模式的预设 	b-lang 默认从 en→zh 改为 **uto→zh**（自动识别）；
+- 后台新增 work/language.json 与 /api/language：
+  - GET 返回 {source,target}，默认 auto；
+  - POST 保存源语言，并写入环境变量 BABEL_SOURCE_LANG；
+- 经典后台选择语言方向后：POST /api/language → 引擎正在跑则
+  engAction(restart) 热重启（保留 mode）；直播引擎重启时加
+  --lang X --no-detect，watch 子进程把 BABEL_SOURCE_LANG 传给
+  autopipe/pretranslate（自动预翻译加 --lang X）；
+- 实测：UI 选「英文→中文」→ POST source=en + 引擎 restart；再选回
+  「自动检测」→ source=auto；没有页面 JS 错误。
+
+### 41.2 单行字幕长度
+
+- 浮窗页新增「单行字幕长度」滑杆（8–60 字）；
+- 字段 line_chars 走既有浮窗命令协议（serve 白名单 + watch_overlay 校验保存）；
+- watch_player 读取 watch_overlay.json.line_chars，切条时传给
+  subtitle_layout.split_cue(max_chars=...)；
+- watch tick 每秒对比，值变了就**重新切条当前 SRT**（不重启 watch）；
+- 实测滑杆 24→30→24，watch.log 出现「单行字幕长度 → 30 字/24 字，
+  已重新切条」；预设也各自带 line_chars（标准24/双语30/小说20/极简26）。
+
+### 41.3 读 SRT 卡死
+
+- watch.log 出现过 	ick 异常: PermissionError ... .zh.srt：预翻译原子写盘
+  瞬间/杀软扫描时，读端偶发 PermissionError，异常打断 tick，用户看到浮窗
+  “卡死”；
+- _read_text_retry 重试 6 次（30ms 间隔）；最终仍失败则这一拍返回空，
+  tick 下一拍再读，**不打断整个浮窗**；_file_sig 本身已吞 OSError。
+
+验证：check_admin 34/0、check_console 21/0；语言接口 GET=auto；
+UI 热切换实测生效；line_chars 实测热重排。
