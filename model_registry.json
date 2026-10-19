@@ -159,8 +159,8 @@
       "accuracy": "ok",
       "cost": "≈0.79元/小时",
       "note": "无 GPU 时的回退；API 不还原大小写，词错比本地多",
-      "available": true,
-      "unavailable_reason": "",
+      "available": false,
+      "unavailable_reason": "没有 API key（~/.dsh/.dashscope 或 DASHSCOPE_API_KEY）",
       "wired": true
     },
     {
@@ -225,8 +225,8 @@
       "quality": "best",
       "cost": "≈0.3元/小时",
       "note": "默认译器。纯翻译引擎、指令免疫；固定开销约 0.57s/次，所以合并批次能摊薄",
-      "available": true,
-      "unavailable_reason": "",
+      "available": false,
+      "unavailable_reason": "没有 API key（~/.dsh/.dashscope 或 DASHSCOPE_API_KEY）",
       "wired": true
     },
     {
@@ -243,8 +243,8 @@
       "quality": "ok",
       "cost": "更低",
       "note": "比 flash 略快，语言略生硬",
-      "available": true,
-      "unavailable_reason": "",
+      "available": false,
+      "unavailable_reason": "没有 API key（~/.dsh/.dashscope 或 DASHSCOPE_API_KEY）",
       "wired": true
     },
     {
@@ -261,8 +261,8 @@
       "quality": "unstable",
       "cost": "更高",
       "note": "实测不稳定（专名会错），别当默认",
-      "available": true,
-      "unavailable_reason": "",
+      "available": false,
+      "unavailable_reason": "没有 API key（~/.dsh/.dashscope 或 DASHSCOPE_API_KEY）",
       "wired": true
     },
     {
