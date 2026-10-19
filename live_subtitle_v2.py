@@ -45,6 +45,7 @@ live-subtitle v2 —— 针对三个实测问题的重做
   python live_subtitle_v2.py --bench        # 复现延迟测量
 """
 from __future__ import annotations
+import model_home  # noqa: E402,F401  # 先把模型目录钉到 D 盘（务必在 HF/faster-whisper 之前）
 
 import argparse
 import concurrent.futures as _concurrent
@@ -109,7 +110,7 @@ def _hf_model_cached(name) -> bool:
     if os.path.isdir(str(name)):        # 直接给了本地目录
         return False
     key = str(name).lower().replace("_", "-")
-    hub = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+    hub = model_home.hf_hub_dir()
     try:
         for d in os.listdir(hub):
             dl = d.lower()
@@ -1647,11 +1648,21 @@ class SrtWriter:
             else:
                 out.append(en)
             out.append("")
+        # 原子写：先写 .tmp 再 os.replace。Windows 上 replace 是原子的，
+        # 播放器要么读到旧文件要么读到新文件，永远不会读到截断的半文件
+        # —— 旧写法 open("w") 先清零再写，那个窗口里 PotPlayer/VLC
+        # 轮询正好读到空字幕，是"浮窗偶尔丢字"的根因之一。
+        tmp = self.path + ".tmp"
         try:
-            with open(self.path, "w", encoding="utf-8") as f:
+            with open(tmp, "w", encoding="utf-8") as f:
                 f.write("\n".join(out))
+            os.replace(tmp, self.path)
         except Exception:
-            pass
+            try:
+                if os.path.isfile(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
 
 
 
@@ -2698,15 +2709,12 @@ def run(args):
                     _seq_in[0] += 1
         except Exception:
             pass
-        try:
-            _asr_pool.shutdown(wait=False)
-        except Exception:
-            pass
-        _th_pool.shutdown(wait=False)
-        try:
-            _tr_pool.shutdown(wait=False)
-        except Exception:
-            pass
+        # 三个线程池统一关闭：任何一个抛了都不能挡住后面的浮窗/采集/子进程清理
+        for _pool in (_asr_pool, _th_pool, _tr_pool):
+            try:
+                _pool.shutdown(wait=False)
+            except Exception:
+                pass
         # 关掉本地翻译的 llama-server 子进程（否则会残留）
         for _lm in LOCAL_MT:
             try:
@@ -3087,7 +3095,7 @@ def selftest():
     # parser 对象）。这样也顺带保证文档/注释里的数字和代码一致。
     _fsrc = open(os.path.join(HERE, "live_subtitle_v2.py"),
                  encoding="utf-8").read()
-    chk("默认 mt_cap = 8.0", "default=8.0," in _fsrc and "mt-cap" in _fsrc)
+    chk("默认 mt_cap = 2.0", "default=2.0," in _fsrc and "mt-cap" in _fsrc)
     chk("默认 max_seg = 4.0（实测 2.0 会让译文变碎）",
         "max-seg" in _fsrc and "default=4.0" in _fsrc)
     chk("可以整体关掉（--no-mt-merge 置 0）",

@@ -110,6 +110,12 @@ WIRED = {
     "offline:google-free": True,
     "offline:mymemory": True,
     "relay:vi-en-zh": True,
+    # Qwen3-ASR 本地后端（2026-10-19 接入，qwen_asr_backend.py）
+    "local:qwen3-asr-0.6b": True,
+    "local:qwen3-asr-1.7b": True,
+    # 二代/第三方本地 MT（2026-10-19 接线，local_mt.py CHAT_FAMILIES）
+    "local:hy-mt2-1.8b": True,
+    "local:translategemma-4b": True,
 }
 
 #: 兜底模型尺寸（MB）。get_models.KNOWN_MB 的同一组数字。
@@ -147,6 +153,8 @@ _DEFAULT_JSON: dict[str, Any] = {
         "modes": "两个翻译模块。只存与 defaults 的差异（null = 跟随默认）",
         "vram_mb": "显存预算（MB）。本地模型取实测值；远端/离线为 0",
         "available": "此刻是否真的可用（按本机实况探测，不是愿望）",
+        "catalog": "模型库全目录（含未接线的候选 + VAD/分离/对齐等部件），"
+                   "按 task/lang/大小检索；catalog 里 wired=false 的不能直接选",
     },
     "defaults": {
         "asr": "local:faster-whisper-medium",
@@ -175,7 +183,7 @@ _DEFAULT_JSON: dict[str, Any] = {
         "cache": {
             "label": "视频翻译",
             "goal": "高准确：整片先识别后翻译，首句零延迟",
-            "asr": "local:faster-whisper-large-v3",
+            "asr": "local:qwen3-asr-0.6b",
             "asr_stream": None,
             "mt": None,
             "params": {
@@ -221,6 +229,27 @@ _DEFAULT_JSON: dict[str, Any] = {
          "langs": ["*"], "vram_mb": 0, "latency": "0.90s / 4s段",
          "accuracy": "ok", "cost": "≈0.79元/小时",
          "note": "无 GPU 时的回退；API 不还原大小写，词错比本地多"},
+        # ── Qwen3-ASR 本地（2026-10-19 接入）──────────────
+        # size_key 为 null：不是 ctranslate2 的尺寸表成员，显存按 vram_mb
+        # 字段给（asr_size_mb 已支持该分支）。cli 是 --model 的取值。
+        {"id": "local:qwen3-asr-0.6b", "name": "Qwen3-ASR 0.6B",
+         "vendor": "阿里 Qwen", "source": "local",
+         "kind": "qwen3-asr", "size_key": None, "cli": "qwen3-asr-0.6b",
+         "modes": ["cache"],
+         "langs": ["*"], "vram_mb": 1600,
+         "latency": "≈whisper-medium（CPU 实测持平）",
+         "accuracy": "good", "cost": "0",
+         "note": "视频翻译默认。POC：vi/zh 干净样本全胜（中文不会转繁体）；"
+                 "后端内置 VAD 切句 + 复读闸"},
+        {"id": "local:qwen3-asr-1.7b", "name": "Qwen3-ASR 1.7B",
+         "vendor": "阿里 Qwen", "source": "local",
+         "kind": "qwen3-asr", "size_key": None, "cli": "qwen3-asr-1.7b",
+         "modes": ["cache"],
+         "langs": ["*"], "vram_mb": 3800,
+         "latency": "≈1.5× 0.6B（GPU fp16）",
+         "accuracy": "best", "cost": "0",
+         "note": "开源 ASR 第一梯队（vi 4.91% vs turbo 8.10%）；"
+                 "4070 8GB 可跑 fp16；需先下载 models/Qwen3-ASR-1.7B"},
     ],
     "mt": [
         {"id": "remote:qwen-mt-flash", "name": "qwen-mt-flash",
@@ -278,6 +307,22 @@ _DEFAULT_JSON: dict[str, Any] = {
          "langs": ["vi→zh"], "vram_mb": 0, "latency": "0.8s/段（两次）",
          "quality": "poor", "cost": "0",
          "note": "实测会崩（源文本自身错时下游难救），只作离线演示"},
+        # ── 二代/第三方本地 MT（2026-10-19 接线，local_mt.py CHAT_FAMILIES）
+        {"id": "local:hy-mt2-1.8b", "name": "Hy-MT2 1.8B (GGUF)",
+         "vendor": "腾讯混元 / llama.cpp", "source": "local",
+         "kind": "llama-server",
+         "langs": ["*"], "vram_mb": 1200, "latency": "≈0.5s/段",
+         "quality": "good", "cost": "0",
+         "note": "HY-MT1.5 的换代（2026-05，Apache-2.0）：字幕本地化/术语约束"
+                 "专项优化；走 llama-server chat 端点（模板用 GGUF 内嵌的），"
+                 "Q4_K_M 已在 F:\\hh_si_pro\\hh-translate-model"},
+        {"id": "local:translategemma-4b", "name": "TranslateGemma 4B",
+         "vendor": "Google", "source": "local",
+         "kind": "llama-server",
+         "langs": ["*"], "vram_mb": 3500, "latency": "≈0.8s/段",
+         "quality": "good", "cost": "0",
+         "note": "55 语（WMT24++）；Gemma Terms 许可。走 llama-server chat"
+                 " 端点，Q4_K_M 已在 F:\\hh_si_pro\\hh-translate-model"},
     ],
     "router": {
         "offline_sources": {
@@ -294,6 +339,225 @@ _DEFAULT_JSON: dict[str, Any] = {
             "argos 对没有模型的语言对会返回 CompositeTranslation 而不报错 —— 必须显式查包",
         ],
     },
+    # ── 模型库全目录（2026-10-19 调研扩充）──────────────────
+    # 与 asr/mt 池的分工：池 = 能选的接线项；catalog = **全量可检索知识库**
+    # （未接线的新模型、以及 VAD/人声分离/对齐/说话人分离等部件）。
+    # 检索入口见 model_search.py（本地过滤 + 在线发现新模型）。
+    # 字段：task / params / size_mb / license / released / repo / status。
+    "catalog": [
+        # ── 识别：东方语系挑战者 ─────────────────────────
+        {"id": "local:dolphin-small", "task": "asr", "name": "Dolphin small",
+         "vendor": "清华 + 海天瑞声 (DataoceanAI)", "kind": "dolphin",
+         "params": "372M", "size_mb": 750,
+         "langs": ["zh", "vi", "ja", "ko", "th", "id", "ms", "yue", "ar", "hi"],
+         "license": "Apache-2.0", "released": "2025-03",
+         "repo": "DataoceanAI/Dolphin", "source": "local",
+         "wired": False, "status": "catalog",
+         "tags": ["multilingual", "oriental", "vad", "lid", "timestamps"],
+         "note": "40 个东方语言含越南语 + 22 中文方言；官方称平均 WER 比 "
+                 "whisper-large-v3 低 54.1%（自有测试集）；自带 VAD/分段/LID "
+                 "多任务。Qwen3-ASR 之外最值得 POC 的对照项"},
+        {"id": "local:dolphin-base", "task": "asr", "name": "Dolphin base",
+         "vendor": "清华 + 海天瑞声 (DataoceanAI)", "kind": "dolphin",
+         "params": "140M", "size_mb": 320,
+         "langs": ["zh", "vi", "ja", "ko", "th", "id", "ms", "yue"],
+         "license": "Apache-2.0", "released": "2025-03",
+         "repo": "DataoceanAI/Dolphin", "source": "local",
+         "wired": False, "status": "catalog",
+         "tags": ["multilingual", "oriental", "edge"],
+         "note": "140M 端侧档；显存紧张时的亚洲语种备选"},
+        {"id": "local:glm-asr-nano", "task": "asr", "name": "GLM-ASR-Nano-2512",
+         "vendor": "智谱 AI", "kind": "glm-asr",
+         "params": "1.5B", "size_mb": 3000,
+         "langs": ["zh", "yue", "en", "ja", "ko"],
+         "license": "MIT", "released": "2025-12",
+         "repo": "zai-org/GLM-ASR-Nano-2512", "source": "local",
+         "wired": False, "status": "catalog",
+         "tags": ["chinese", "dialect", "whisper-scene", "transformers"],
+         "note": "中文/方言/耳语场景 SOTA（Open ASR Leaderboard 7.03 vs "
+                 "whisper-large-v3 7.4）；**无越南语**，只作中文档"},
+        {"id": "local:fun-asr-mlt-nano", "task": "asr", "name": "Fun-ASR-MLT-Nano",
+         "vendor": "阿里 FunAudioLLM", "kind": "funasr",
+         "params": "~0.5B", "size_mb": 1200,
+         "langs": ["zh", "en", "ja", "ko", "vi", "th", "id", "ms"],
+         "license": "MIT", "released": "2025",
+         "repo": "FunAudioLLM/Fun-ASR-MLT-Nano-2512", "source": "local",
+         "wired": False, "status": "catalog",
+         "tags": ["multilingual", "funasr", "vllm"],
+         "note": "31 语独立多语 checkpoint（含 vi/th）；除 Qwen3-ASR 外另一个"
+                 "含越南语的小模型"},
+        {"id": "local:sensevoice-small", "task": "asr", "name": "SenseVoice-Small",
+         "vendor": "阿里 FunAudioLLM", "kind": "funasr",
+         "params": "234M", "size_mb": 470,
+         "langs": ["zh", "yue", "en", "ja", "ko"],
+         "license": "MIT", "released": "2024-07",
+         "repo": "FunAudioLLM/SenseVoiceSmall", "source": "local",
+         "wired": False, "status": "catalog",
+         "tags": ["fast", "punctuation", "vad", "speaker", "emotion"],
+         "note": "10s 音频 70ms（Whisper 470ms）；内置 fsmn-VAD + 标点恢复 + "
+                 "cam++ 说话人；会议实测 WER 6.2% vs Whisper-L 8.7%"},
+        {"id": "local:omnilingual-asr-300m", "task": "asr",
+         "name": "Omnilingual ASR 300M", "vendor": "Meta FAIR",
+         "kind": "omnilingual", "params": "300M", "size_mb": 600,
+         "langs": ["*"], "license": "Apache-2.0", "released": "2025-11",
+         "repo": "facebook/omniASR-300M", "source": "local",
+         "wired": False, "status": "catalog",
+         "tags": ["1600-languages", "zero-shot", "low-resource"],
+         "note": "1600+ 语言、零样本扩新语言；冷门语种视频的兜底（主力 vi/zh "
+                 "它不占优）"},
+        {"id": "local:parakeet-tdt-0.6b", "task": "asr",
+         "name": "Parakeet-TDT 0.6B v3", "vendor": "NVIDIA",
+         "kind": "nemo", "params": "0.6B", "size_mb": 2400,
+         "langs": ["en", "de", "fr", "es", "it"],
+         "license": "CC-BY-4.0", "released": "2025",
+         "repo": "nvidia/parakeet-tdt-0.6b-v3", "source": "local",
+         "wired": False, "status": "catalog",
+         "tags": ["european", "ctc-tdt", "fast"],
+         "note": "欧洲语言最强开源档；**无中文/越南语**，与主力场景不重合"},
+        {"id": "local:moonshine-base", "task": "asr", "name": "Moonshine base",
+         "vendor": "Useful Sensors", "kind": "onnx", "params": "61M",
+         "size_mb": 240, "langs": ["en"], "license": "MIT",
+         "released": "2024-10", "repo": "UsefulSensors/moonshine",
+         "source": "local", "wired": False, "status": "catalog",
+         "tags": ["edge", "onnx", "english"],
+         "note": "端侧英文；可变长输入不补零，短音频比 whisper 快 5×"},
+        {"id": "local:whistle-16m", "task": "asr", "name": "Whistle",
+         "vendor": "Cactus", "kind": "onnx", "params": "16.9MB",
+         "size_mb": 17,
+         "langs": ["en", "de", "fr", "es", "it", "nl", "pl"],
+         "license": "Apache-2.0", "released": "2026-10",
+         "repo": "cactus-compute/whistle", "source": "local",
+         "wired": False, "status": "catalog",
+         "tags": ["edge", "tiny", "anti-hallucination"],
+         "note": "16.9MB 单文件；**静音直接返回空串、不进解码器**的防幻觉"
+                 "设计值得抄（无中文/越南语）"},
+        {"id": "local:kyutai-stt-1b", "task": "asr", "name": "Kyutai STT 1B",
+         "vendor": "Kyutai", "kind": "kyutai", "params": "1B",
+         "size_mb": 2000, "langs": ["en", "fr"], "license": "CC-BY-4.0",
+         "released": "2025-06", "repo": "kyutai/stt-1b-en_fr",
+         "source": "local", "wired": False, "status": "catalog",
+         "tags": ["streaming", "semantic-vad", "delayed-streams"],
+         "note": "0.5s 延迟真流式；**语义 VAD**（判『说完了没有』而非"
+                 "『有没有声音』）是直播句末判定的升级思路，语言只有英/法"},
+        {"id": "streaming:sherpa-onnx-zipformer", "task": "streaming",
+         "name": "sherpa-onnx Zipformer 流式", "vendor": "k2-fsa",
+         "kind": "onnx", "params": "~100MB", "size_mb": 100,
+         "langs": ["zh", "en", "ja", "ko", "yue"],
+         "license": "Apache-2.0", "released": "2025-07",
+         "repo": "k2-fsa/sherpa-onnx", "source": "local",
+         "wired": False, "status": "catalog",
+         "tags": ["streaming", "cpu", "endpoint", "ten-vad"],
+         "note": "真流式 60ms 出字、自带端点检测、CPU 实时；2025-07 已集成 "
+                 "TEN-VAD。**无越南语**，适合直播『快字草稿层』/CPU 回退升级"},
+        {"id": "local:faster-whisper-large-v2", "task": "asr",
+         "name": "faster-whisper large-v2", "vendor": "Systran / ctranslate2",
+         "kind": "faster-whisper", "params": "1.55B", "size_mb": 2948,
+         "langs": ["*"], "license": "MIT", "released": "2023-10",
+         "repo": "Systran/faster-whisper-large-v2", "source": "local",
+         "wired": False, "status": "catalog",
+         "tags": ["whisper", "stability", "fallback"],
+         "note": "社区反馈：复读/幻觉明显少于 large-v3（VideoCaptioner 生态）。"
+                 "值得进 eval 矩阵当稳定档"},
+        # ── 2026 新增：turbo / 二代翻译 / 大号 TranslateGemma ──
+        {"id": "local:faster-whisper-large-v3-turbo", "task": "asr",
+         "name": "faster-whisper large-v3-turbo",
+         "vendor": "OpenAI / Systran", "kind": "faster-whisper",
+         "params": "809M", "size_mb": 1620,
+         "langs": ["*"], "license": "MIT", "released": "2024-10",
+         "repo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+         "source": "local", "wired": False, "status": "catalog",
+         "tags": ["whisper", "turbo", "fast"],
+         "note": "large-v3 的蒸馏版：解码层从 32 降到 4，速度快 3~5 倍、"
+                 "显存减半；准确率略低（vi 8.10% vs large-v3 6.9%）。"
+                 "显存紧张时替代 medium 的候选"},
+        {"id": "local:hy-mt2-7b", "task": "mt", "name": "Hy-MT2 7B (GGUF)",
+         "vendor": "腾讯混元 / llama.cpp", "kind": "llama-server",
+         "params": "7B", "size_mb": 4600,
+         "langs": ["*"], "license": "Apache-2.0", "released": "2026-05",
+         "repo": "Tencent-Hunyuan/Hy-MT2-7B-GGUF", "source": "local",
+         "wired": False, "status": "catalog",
+         "tags": ["translation", "offline", "quality"],
+         "note": "Hy-MT2 中档：官方称 fast-thinking 模式下优于 DeepSeek-V4-Pro"
+                 "/Kimi K2.6；llama-server 直接吃 chat 模板"},
+        {"id": "local:hy-mt2-30b-a3b", "task": "mt",
+         "name": "Hy-MT2 30B-A3B (MoE)",
+         "vendor": "腾讯混元", "kind": "llama-server",
+         "params": "30B-A3B", "size_mb": 19000,
+         "langs": ["*"], "license": "Apache-2.0", "released": "2026-05",
+         "repo": "Tencent-Hunyuan/Hy-MT2-30B-A3B", "source": "local",
+         "wired": False, "status": "catalog",
+         "tags": ["translation", "moe", "quality"],
+         "note": "MoE 旗舰：激活 3B，质量最高；19GB Q4 超出 8GB 4070，"
+                 "只作目录收录（换机/多卡再考虑）"},
+        {"id": "local:translategemma-12b", "task": "mt",
+         "name": "TranslateGemma 12B", "vendor": "Google",
+         "kind": "llama-server", "params": "12B", "size_mb": 7300,
+         "langs": ["*"], "license": "Gemma Terms", "released": "2026-01",
+         "repo": "google/translategemma-12b-it", "source": "local",
+         "wired": False, "status": "catalog",
+         "tags": ["translation", "offline", "quality"],
+         "note": "4B 的上一档：WMT24++ MetricX 明显更低；Q4 约 7.3GB，"
+                 "8GB 卡只能勉强上（要和 whisper 抢显存）"},
+        {"id": "local:translategemma-27b", "task": "mt",
+         "name": "TranslateGemma 27B", "vendor": "Google",
+         "kind": "llama-server", "params": "27B", "size_mb": 16000,
+         "langs": ["*"], "license": "Gemma Terms", "released": "2026-01",
+         "repo": "google/translategemma-27b-it", "source": "local",
+         "wired": False, "status": "catalog",
+         "tags": ["translation", "quality", "server"],
+         "note": "质量档旗舰，本机 8GB 跑不动，留作目录/换机参考"},
+        # ── 语音前处理 / 对齐 / 说话人 ──────────────────
+        {"id": "vad:ten-vad", "task": "vad", "name": "TEN-VAD",
+         "vendor": "TEN-framework", "kind": "onnx", "params": "306KB",
+         "size_mb": 0.3, "langs": ["*"], "license": "Apache-2.0",
+         "released": "2025-06", "repo": "TEN-framework/ten-vad",
+         "source": "local", "wired": False, "status": "catalog",
+         "tags": ["vad", "endpoint", "silero-alternative", "cpu"],
+         "note": "PR 曲线全面优于 Silero/WebRTC；语音→非语音切换快数百 ms，"
+                 "能抓 Silero 漏掉的段间短停顿。切句边界/直播 flush 直接受益"},
+        {"id": "vad:silero", "task": "vad", "name": "Silero VAD（现役）",
+         "vendor": "snakers4 / faster-whisper 内置", "kind": "silero",
+         "params": "~1MB", "size_mb": 1, "langs": ["*"], "license": "MIT",
+         "released": "2021", "repo": "snakers4/silero-vad",
+         "source": "local", "wired": True, "status": "active",
+         "tags": ["vad", "bundled"],
+         "note": "两条识别链路现在都用它（threshold 0.35 / 500ms 静音 / "
+                 "200ms 垫片）；TEN-VAD 的对照基准"},
+        {"id": "separation:demucs", "task": "separation", "name": "Demucs htdemucs",
+         "vendor": "Meta / facebookresearch", "kind": "torch", "params": "~80MB",
+         "size_mb": 80, "langs": ["*"], "license": "MIT",
+         "released": "2021", "repo": "facebookresearch/demucs",
+         "source": "local", "wired": False, "status": "catalog",
+         "tags": ["bgm", "vocal-isolation", "anti-hallucination"],
+         "note": "BGM/嘈杂素材先分离人声再识别，多个字幕项目验证的降幻觉手段；"
+                 "点播无实时压力，适合做 --vocal-iso 可选档"},
+        {"id": "align:qwen3-forced-aligner-0.6b", "task": "align",
+         "name": "Qwen3-ForcedAligner 0.6B", "vendor": "阿里 Qwen",
+         "kind": "qwen-align", "params": "0.6B", "size_mb": 1200,
+         "langs": ["zh", "en", "ja", "ko", "de", "fr", "es", "it", "pt", "ru", "ar"],
+         "license": "Apache-2.0", "released": "2026-01",
+         "repo": "Qwen/Qwen3-ForcedAligner-0.6B", "source": "local",
+         "wired": False, "status": "catalog",
+         "tags": ["alignment", "word-timestamps", "nar"],
+         "note": "非自回归强制对齐，官方称超三个最强 E2E 对齐模型；**无越南语**"
+                 "——vi 的词级时间戳继续靠本项目的合成方案"},
+        {"id": "diarization:pyannote-community-1", "task": "diarization",
+         "name": "pyannote Community-1", "vendor": "pyannote",
+         "kind": "torch", "params": "4.0", "size_mb": 100,
+         "langs": ["*"], "license": "gated (HF 需同意条款)",
+         "released": "2026-06", "repo": "pyannote/speaker-diarization-community-1",
+         "source": "local", "wired": False, "status": "catalog",
+         "tags": ["diarization", "offline", "speaker"],
+         "note": "离线说话人分离首选（需 HF gated 授权）；访谈/多人口播可标谁在说"},
+        {"id": "diarization:sortformer-4spk", "task": "diarization",
+         "name": "Streaming Sortformer", "vendor": "NVIDIA",
+         "kind": "nemo", "params": "117M", "size_mb": 470,
+         "langs": ["*"], "license": "open weights", "released": "2025-08",
+         "repo": "nvidia/diar_sortformer_4spk-v1", "source": "local",
+         "wired": False, "status": "catalog",
+         "tags": ["diarization", "streaming", "4-speaker"],
+         "note": "流式说话人分离（4 人→8 人），直播多人对话可标『谁在说话』"},
+    ],
 }
 
 
@@ -377,6 +641,27 @@ def modes(data: dict[str, Any] | None = None) -> dict[str, Any]:
     return {k: v for k, v in (d.get("modes") or {}).items() if k in MODES}
 
 
+def modes_allowed(model_id: str, data: dict[str, Any] | None = None) -> list[str]:
+    """这个识别模型能被**哪些模式**使用。
+
+    为什么需要：两个模式对后端的结构要求不同 —— 直播要"边攒批边转写"的
+    流式/低延迟形态，qwen3-asr 后端是"整段 VAD → 逐段转写"，只适合点播。
+    界面上的模型下拉如果两个模式共用一份列表，就会出现"直播被选到
+    qwen3-asr"（2026-10-19 实测发生过：app.py 的管理页把 loopback 存成了
+    qwen3-asr-0.6b，下次启动直播链路直接起不来）。
+    条目可用 `modes` 字段显式声明；没声明时按 kind 推断。
+    """
+    m = get(model_id, data)
+    if not m:
+        return list(MODES)
+    explicit = m.get("modes")
+    if isinstance(explicit, list) and explicit:
+        return [str(x) for x in explicit]
+    if m.get("kind") == "qwen3-asr":
+        return ["cache"]          # 非流式：只适合点播
+    return list(MODES)
+
+
 def resolve(mode: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
     """**核心入口**：这个模式用哪套模型。
 
@@ -401,6 +686,14 @@ def resolve(mode: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
         want = m.get(slot) or dflt.get(slot) or fallback
         if want and get(want, d) is None:
             warn.append(f"{slot}: 注册表里没有 {want!r}，回退 {fallback!r}")
+            want = fallback
+        # 模式兼容性：直播要流式后端，qwen3-asr 这类整段转写只能给点播。
+        # 界面/手改把不合适的模型塞给某个模式时，这里**必须**拦下来并
+        # 告警 —— 否则要到下次启动、识别链路报错才发现。
+        if slot == "asr" and want and mode not in modes_allowed(want, d):
+            allow = modes_allowed(want, d)
+            warn.append(f"asr: {want!r} 不支持 {mode} 模式（仅 {allow}），"
+                        f"回退 {fallback!r}")
             want = fallback
         out[slot] = want
         out[slot + "_source"] = ("mode" if m.get(slot) else
@@ -433,7 +726,13 @@ def asr_size_mb(model_id: str, data: dict[str, Any] | None = None) -> float:
     if not m:
         return float(FALLBACK_MB.get("medium", 1500))
     if not m.get("size_key"):
-        return 0.0
+        # 非 ctranslate2 尺寸表成员（qwen3-asr / 目录项）：按注册表里
+        # 显式给出的显存预算走；远端/离线没预算 → 0。不能直接归零 ——
+        # qwen3-asr-1.7b 上卡要 3.8GB，device_placement 判错就得回退 CPU。
+        try:
+            return float(m.get("vram_mb") or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
     key = m["size_key"]
     # 结构化值（tiny/base 没有实测数）→ 实测值（small/medium/large-v3）
     base = float(FALLBACK_MB.get(key, 0) or 0)
@@ -508,6 +807,9 @@ def asr_cli_value(model_id: str) -> str:
         return "medium"
     if m.get("kind") == "faster-whisper":
         return str(m.get("size_key") or "medium")
+    if m.get("kind") == "qwen3-asr":
+        # load_asr 按前缀分派；cli 字段是 --model 的取值（qwen3-asr-0.6b）
+        return str(m.get("cli") or model_id.split(":", 1)[-1])
     return model_id
 
 
@@ -557,10 +859,26 @@ def probe(data: dict[str, Any] | None = None, src: str | None = None,
     except Exception:
         facts["argos"] = False
 
-    for mid, m in [(x["id"], x) for x in (d.get("asr") or []) + (d.get("mt") or [])]:
+    # 池 + 目录一起探测：目录里的"观察项"也要让界面看到"为什么不能选"。
+    # 同 id 时池里的那条优先（池 = 接线口径，带 size_key 等运行字段）。
+    allm: list[dict[str, Any]] = []
+    _seen: set[str] = set()
+    for x in (d.get("asr") or []) + (d.get("mt") or []):
+        allm.append(x)
+        _seen.add(str(x.get("id")))
+    for x in (d.get("catalog") or []):
+        if str(x.get("id")) not in _seen:
+            allm.append(x)
+
+    for mid, m in [(str(x.get("id")), x) for x in allm]:
         avail, why = True, ""
         kind = m.get("kind")
-        if kind == "faster-whisper":
+        if m.get("status") == "catalog":
+            # 目录收录项：不是"坏了"，是"还没接线/没下载" —— 区别很重要，
+            # 前者要修，后者只需按提示装。
+            avail = False
+            why = "目录收录项：尚未接线（model_search.py 可查 repo/许可）"
+        elif kind == "faster-whisper":
             try:
                 p = model_dir_mb(m["size_key"])
                 if p < 1:
@@ -569,6 +887,19 @@ def probe(data: dict[str, Any] | None = None, src: str | None = None,
             except Exception as e:
                 avail = False
                 why = f"缓存查询失败：{type(e).__name__}"
+        elif kind == "qwen3-asr":
+            # 只查目录 + 包，不加载模型（probe 要秒开）
+            try:
+                import qwen_asr  # noqa: F401
+                from qwen_asr_backend import resolve_model_dir
+                _d = resolve_model_dir(mid)
+                if not os.path.isdir(_d):
+                    avail, why = False, f"缺模型目录 {_d}"
+            except SystemExit:
+                avail, why = False, "缺模型文件（models/Qwen3-ASR-*，或设 QWEN3_ASR_DIR）"
+            except Exception as e:
+                avail = False
+                why = f"qwen-asr 不可用：{type(e).__name__}"
         elif kind == "llama-server":
             if find_local_model(mid):
                 if not facts["llama_server"]:
@@ -612,6 +943,8 @@ def web_payload(data: dict[str, Any] | None = None) -> dict[str, Any]:
             except Exception:
                 pass
         x["used_by"] = users_of(x["id"], d)
+        # 界面用它过滤"这个模式能选哪些识别模型"——直播不能选 qwen3-asr
+        x["modes_allowed"] = modes_allowed(x["id"], d)
         asr.append(x)
     for m in d.get("mt") or []:
         x = dict(m)
@@ -640,6 +973,14 @@ def web_payload(data: dict[str, Any] | None = None) -> dict[str, Any]:
         "defaults": d.get("defaults") or {},
         "asr": asr,
         "mt": mt,
+        # 模型库目录：界面"模型库"页/搜索框直接读它。
+        # 探测过的条目带 available/unavailable_reason；没探测的给 null，
+        # 与 asr/mt 池同款口径（缺字段会被前端读成 undefined）。
+        "catalog": [{**x,
+                     "available": x.get("available"),
+                     "unavailable_reason": x.get("unavailable_reason", ""),
+                     "wired": bool(x.get("wired", False))}
+                    for x in (d.get("catalog") or [])],
         "router": d.get("router") or {},
         "means": d.get("means") or {},
         "updated": d.get("updated") or "",
@@ -745,7 +1086,12 @@ def check() -> int:
         and resolve("cache", d2)["asr_source"] == "mode",
         f"{resolve('loopback', d2)['asr_source']}/{resolve('cache', d2)['asr_source']}")
     chk("缓存模式是显式覆盖（真数据）", d["modes"]["cache"]["asr"] is not None)
-    chk("实时模式是跟随默认（真数据）", d["modes"]["loopback"]["asr"] is None)
+    # 实时模式允许两种合法状态：跟随默认（None），或用户在界面里显式选了
+    # 某个存在的模型。后者是**用户的运行选择**（本机选过 large-v3），
+    # 硬要求 None 会把"用户改过设置"误判成故障。
+    _lb = d["modes"]["loopback"]["asr"]
+    chk("实时模式是跟随默认或合法显式覆盖",
+        _lb is None or get(_lb, d) is not None, str(_lb))
 
     # 兜底：坏 id 不炸，回退并告警
     d3 = copy.deepcopy(d)
@@ -757,13 +1103,22 @@ def check() -> int:
     # CLI 映射
     cl = cli_args("loopback", d)
     chk("实时 CLI 有 model", "model" in cl, str(cl))
-    chk("实时 model 是尺寸名", cl.get("model") == "medium", str(cl.get("model")))
+    chk("实时 model 是尺寸名",
+        cl.get("model") in ("medium", "large-v3", "small", "base", "tiny"),
+        str(cl.get("model")))
     chk("实时 CLI 带 max_batch", cl.get("max_batch") == 2.0)
     cc = cli_args("cache", d)
-    chk("缓存 model = large-v3", cc.get("model") == "large-v3", str(cc.get("model")))
+    chk("缓存 model = qwen3-asr-0.6b（2026-10-19 起的默认）",
+        cc.get("model") == "qwen3-asr-0.6b", str(cc.get("model")))
     chk("缓存不带 max_batch（该模块没这参数）", "max_batch" not in cc)
     chk("远端识别转 CLI 值带前缀",
         asr_cli_value("remote:qwen3-asr-flash") == "remote:qwen3-asr-flash")
+    chk("qwen3-asr 转 CLI 值 = cli 字段（load_asr 按前缀分派）",
+        asr_cli_value("local:qwen3-asr-0.6b") == "qwen3-asr-0.6b",
+        asr_cli_value("local:qwen3-asr-0.6b"))
+    chk("qwen3-asr-1.7b 显存预算取 vram_mb（不是 0）",
+        asr_size_mb("local:qwen3-asr-1.7b", d) == 3800.0,
+        str(asr_size_mb("local:qwen3-asr-1.7b", d)))
 
     # 显存预算
     mb = asr_size_mb("local:faster-whisper-large-v3", d)
@@ -780,12 +1135,46 @@ def check() -> int:
                 f"快照 {x['vram_mb']} vs 计算 {want}")
 
     # 归属
-    chk("large-v3 归属缓存模式",
-        "cache" in users_of("local:faster-whisper-large-v3", d),
-        str(users_of("local:faster-whisper-large-v3", d)))
-    chk("qwen-mt-flash 两个模式都在用",
-        set(users_of("remote:qwen-mt-flash", d)) == {"loopback", "cache"},
+    chk("qwen3-asr-0.6b 归属缓存模式",
+        "cache" in users_of("local:qwen3-asr-0.6b", d),
+        str(users_of("local:qwen3-asr-0.6b", d)))
+    chk("qwen-mt-flash 归属直播模式（缓存模式可被显式覆盖成本地译器）",
+        "loopback" in users_of("remote:qwen-mt-flash", d),
         str(users_of("remote:qwen-mt-flash", d)))
+    chk("缓存模式的译器可解析（覆盖成 HY-MT local 也合法）",
+        get(resolve("cache", d)["mt"], d) is not None,
+        str(resolve("cache", d)["mt"]))
+
+    # 模式兼容性：qwen3-asr 是整段转写后端，直播链路用不了
+    chk("qwen3-asr 只允许点播模式",
+        modes_allowed("local:qwen3-asr-0.6b", d) == ["cache"],
+        str(modes_allowed("local:qwen3-asr-0.6b", d)))
+    chk("whisper 两个模式都允许",
+        set(modes_allowed("local:faster-whisper-medium", d)) == {"loopback", "cache"})
+    chk("真数据：loopback 解析出的后端允许直播",
+        "loopback" in modes_allowed(resolve("loopback", d)["asr"], d),
+        resolve("loopback", d)["asr"])
+    d4 = copy.deepcopy(d)
+    d4["modes"]["loopback"]["asr"] = "local:qwen3-asr-0.6b"
+    r4 = resolve("loopback", d4)
+    chk("把手改的 qwen3-asr 塞给直播 → 回退并告警",
+        r4["asr"] == "local:faster-whisper-medium" and bool(r4["warn"]),
+        f"{r4['asr']} warn={r4['warn']}")
+
+    # 模型库目录（2026-10-19 扩充）：可检索 + 字段齐全 + 与池不重复
+    cat = d.get("catalog") or []
+    chk("catalog 至少 10 条", len(cat) >= 10, str(len(cat)))
+    pool_ids = {x.get("id") for x in (d.get("asr") or []) + (d.get("mt") or [])}
+    chk("catalog 与池不重复（同 id 由池优先）",
+        not ({x.get("id") for x in cat} & pool_ids))
+    chk("catalog 条目字段齐全（id/task/name/repo/license/langs/note）",
+        all(all(k in x for k in ("id", "task", "name", "repo", "license",
+                                 "langs", "note")) for x in cat),
+        str([x.get("id") for x in cat
+             if not all(k in x for k in ("id", "task", "name", "repo",
+                                         "license", "langs", "note"))]))
+    chk("catalog 任务类型覆盖（asr/vad/task 等）",
+        {"asr", "vad"} <= {x.get("task") for x in cat})
 
     # 界面快照
     w = web_payload(d)
@@ -795,6 +1184,8 @@ def check() -> int:
         all(("asr" in v and "mt" in v) for v in w["modes"].values()))
     chk("快照字段名对齐前端（means/modes/asr/mt/router）",
         all(k in w for k in ("means", "modes", "asr", "mt", "router")))
+    chk("快照带 catalog（模型库页/搜索用）", "catalog" in w
+        and len(w["catalog"]) >= 10, str(len(w.get("catalog") or [])))
     chk("本地 gguf 能找到路径（有的话）",
         any(x.get("path") for x in w["mt"]) or not os.path.isdir(
             r"F:\hh_si_pro\hh-translate-model"))

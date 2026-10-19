@@ -700,12 +700,38 @@ def _read_console() -> bytes:
         return _read_index()          # 新界面缺失时退回经典后台
 
 
+_SNAP_CACHE = {"ts": 0.0, "data": None}
+_SNAP_TTL = 2.0          # 界面 1-2s 轮询，缓存 2s 把高频轮询的 CPU/IO 降到接近 0
+
+
+def _invalidate_snapshot():
+    """写注册表后调一下，让下一次 _snapshot() 立刻现算。"""
+    _SNAP_CACHE["ts"] = 0.0
+
+
 def _snapshot(data: dict | None = None) -> dict:
     """界面要的全部数据，**一次给完**（省往返，也避免界面拿到半更新状态）。
 
     统一走 `R.probe(src=R.PATH)`：注册表路径以模块当前值为准，
     这样测试把 `R.PATH` 指到临时副本时，读、校验、写三处用的是同一个文件。
+
+    带 2s TTL 缓存：前端每 1-2s 拉一次，没必要每次都重新 probe + 扫注册表
+    + 算 pending/wired。写注册表的接口走完后调 _invalidate_snapshot() 失效。
+    注意：ts 存的是 fresh **完成之后**的时刻 —— probe 本身可能花数秒，
+    若存请求开始时刻，缓存写入时就已"过期"了。
     """
+    if data is not None:
+        return _snapshot_fresh(data)
+    now = time.time()
+    if _SNAP_CACHE["data"] is not None and now - _SNAP_CACHE["ts"] < _SNAP_TTL:
+        return _SNAP_CACHE["data"]
+    w = _snapshot_fresh(None)
+    _SNAP_CACHE["ts"] = time.time()    # fresh 完成后的时刻
+    _SNAP_CACHE["data"] = w
+    return w
+
+
+def _snapshot_fresh(data: dict | None = None) -> dict:
     d = data if data is not None else R.probe(src=R.PATH)
     w = R.web_payload(d)
     w["registry_path"] = R.PATH
@@ -924,6 +950,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/export":
             p = R.export_web()
+            _invalidate_snapshot()
             return self._json({"ok": True, "path": p, "snapshot": _snapshot()})
 
         if path == "/api/select":
@@ -942,6 +969,7 @@ class Handler(BaseHTTPRequestHandler):
             data["updated"] = time.strftime("%Y-%m-%d")
             R.save(data)
             R.export_web()
+            _invalidate_snapshot()
             return self._json({"ok": True, "changed": {target: value},
                                "why": why, "snapshot": _snapshot()})
 
@@ -998,6 +1026,7 @@ class Handler(BaseHTTPRequestHandler):
             data["updated"] = time.strftime("%Y-%m-%d")
             R.save(data)
             R.export_web()
+            _invalidate_snapshot()
             return self._json({"ok": True, "changed": changes,
                                "snapshot": _snapshot()})
 

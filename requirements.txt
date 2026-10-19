@@ -13,6 +13,13 @@ winsdk>=1.0.0b10 ; sys_platform == "win32"   # SMTC 系统媒体会话（watch_p
 yt-dlp>=2024.1             # 网页视频拉音频（pretranslate，B 站有官方 API 兜底）
 PyAV>=11                   # 本地视频免 ffmpeg 解码（pretranslate）
 jieba>=0.42                # 中文词边界（字幕断句/断行；未装也能跑）
+pysubs2>=1.9               # 第三方排版：ASS/SSA 样式字幕（subtitle_typeset.py）
+
+# ── Qwen3-ASR（可选，本地 LLM 系识别）─────────────────────
+#   pip install qwen-asr          # 依赖 torch
+#   注意 torch 必须是 CUDA 版（+cu126），CPU 版会在 device="cuda" 时报
+#   AssertionError("Torch not compiled with CUDA enabled")
+#   pip install torch==2.13.0+cu126 --index-url https://download.pytorch.org/whl/cu126
 
 # ── 消费级桌面壳（双击图标、托盘常驻、无黑窗）──────────────
 pywebview>=4.4             # 原生窗口（Win10/11 自带 Edge WebView2）

@@ -52,6 +52,7 @@ streaming_asr —— 流式识别（LocalAgreement-2），按同传论文的做�
   但**尾部会落后于实时**，这是硬件决定的，不是实现问题
 """
 from __future__ import annotations
+import model_home  # noqa: E402,F401  # 先把模型目录钉到 D 盘（务必在 HF/faster-whisper 之前）
 
 import re
 import threading

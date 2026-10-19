@@ -68,3 +68,5 @@ build/_release/
 # icon launcher build artifact
 /desktop/BabelPlan.exe
 
+# 运行时字幕产物（不进仓库）
+live.ass

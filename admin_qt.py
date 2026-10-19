@@ -18,6 +18,7 @@
 启动：  python admin_qt.py        （用带 PyQt5 的解释器）
 """
 from __future__ import annotations
+import model_home  # noqa: E402,F401  # 先把模型目录钉到 D 盘（务必在 HF/faster-whisper 之前）
 
 import json
 import os

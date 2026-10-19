@@ -17,6 +17,7 @@
     直接运行本文件 → 检查并安装缺失的 argos 模型
     import 本模块   → 什么都不做，只用 model_dir_mb()
 """
+import model_home  # noqa: E402,F401  # 先把模型目录钉到 D 盘（务必在 HF/faster-whisper 之前）
 import glob
 import os
 import ssl
@@ -45,7 +46,7 @@ def model_dir_mb(model_name: str) -> float:
     调用方 import 本模块去拿 —— 于是顺带触发了整段安装流程。
     现在：先查 HuggingFace 缓存，查不到再按 KNOWN_MB 给保守值。
     """
-    base = os.path.expanduser("~/.cache/huggingface/hub")
+    base = model_home.hf_hub_dir()
     total = 0
     for pat in (f"models--*--faster-whisper-{model_name}",
                 f"models--*--whisper-{model_name}"):

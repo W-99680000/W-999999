@@ -37,6 +37,7 @@
     python watch_player.py --auto                   # 常驻：有缓存自动出字幕
 """
 from __future__ import annotations
+import model_home  # noqa: E402,F401  # 先把模型目录钉到 D 盘（务必在 HF/faster-whisper 之前）
 
 import argparse
 import bisect
@@ -70,6 +71,12 @@ AUTO_MAX_TRIES = 3
 # 这期间历史一落盘就自动接上，不用用户手动重开）。
 AUTO_NOURL_COOLDOWN = 45.0
 AUTO_NOURL_MAX_TRIES = 20
+# 换片确认窗口：新标题要连续稳定这么多拍（tick=10Hz，8 拍≈0.8s）才当真。
+# 为什么需要：SMTC 标题会瞬时跳变 —— 视频里插广告、播放器标题 marquee
+# 滚动、B 站连播换 P 时旧标题残留一拍。没有防抖的话，一次抖动就触发
+# "换片"分支：预翻译子进程被杀（3~6GB 显存任务白跑）、字幕清屏、
+# 缓存重匹配 —— 日志里就是"字幕突然没了又开始重新预翻译"。
+TITLE_STABLE_TICKS = 8
 
 
 def _log(msg):
@@ -115,13 +122,27 @@ def _to_sec(m):
             + int(m.group(3)) + int(m.group(4)) / 1000.0)
 
 
+_LINECHARS_CACHE = {"sig": None, "val": 24}
+
+
 def _line_chars_pref(default=24):
+    """读 watch_overlay.json 的 line_chars。10Hz tick 高频调用，加 mtime
+    缓存：文件没变就直接返回上次结果，避免每秒十几次 json.load 读盘。"""
+    p = os.path.join(HERE, "watch_overlay.json")
     try:
-        d = json.load(open(os.path.join(HERE, "watch_overlay.json"),
-                           encoding="utf-8"))
-        return max(8, min(60, int(d.get("line_chars", default))))
-    except Exception:
+        sig = os.stat(p).st_mtime_ns
+    except OSError:
         return default
+    if _LINECHARS_CACHE["sig"] == sig:
+        return _LINECHARS_CACHE["val"]
+    try:
+        d = json.load(open(p, encoding="utf-8"))
+        v = max(8, min(60, int(d.get("line_chars", default))))
+    except Exception:
+        v = default
+    _LINECHARS_CACHE["sig"] = sig
+    _LINECHARS_CACHE["val"] = v
+    return v
 
 
 def _merge_two_lines(cues, line_chars=24):
@@ -872,7 +893,9 @@ def _auto_main(args):
     cur = {"srt": None, "cues": [], "starts": [], "idx": -2, "title": "",
            "status": None, "err_ts": 0.0, "warned_pos": False,
            "pos_logged": False, "sig": None, "seek_n": 0,
-           "status_lb": None, "status_ts": 0.0}
+           "status_lb": None, "status_ts": 0.0,
+           "title_cand": None, "title_cand_n": 0,
+           "resync_ts": 0.0, "storm_n": 0}
     _jump = _JumpDetector()
     # 自动预翻译的尝试记录：ntitle -> {"n": 次数, "ts": 上次时间}
     tried = {}
@@ -1056,12 +1079,41 @@ def _auto_main(args):
                                         "（可用 cache.bat 手动指定）")
 
             title = tracker.current_title()
+            # 标题防抖（见 TITLE_STABLE_TICKS）：已经有锁定标题时，新标题
+            # 必须连续稳定若干拍才确认换片；没稳之前按旧标题继续走。
+            # 首次拿到标题（cur["title"] 为空）不防抖，立刻接上。
+            # 空标题**不清候选计数** —— 空标题是 winsdk 元数据未就绪的常态
+            # 抖动，一次空读不该把累积中的确认窗口清零，否则真实换片
+            # 遇上标题闪烁会永远确认不下来。
+            if title and cur["title"] \
+                    and _norm_title(title) != cur["title"]:
+                if title == cur["title_cand"]:
+                    cur["title_cand_n"] += 1
+                else:
+                    cur["title_cand"], cur["title_cand_n"] = title, 1
+                if cur["title_cand_n"] < TITLE_STABLE_TICKS:
+                    title = cur["title"]  # 未稳定：本拍仍按旧标题走
+                                          # （预翻译进度/字幕都不中断）
+                else:
+                    _log(f"新标题稳定 {TITLE_STABLE_TICKS} 拍，确认换片: "
+                         f"{title[:40]!r}")
+                    cur["title_cand"], cur["title_cand_n"] = None, 0
+            elif title:
+                # 读到的就是当前标题 → 候选作废
+                cur["title_cand"], cur["title_cand_n"] = None, 0
             if not title:
                 # 标题瞬时读不到是**常态**：winsdk 的元数据没就绪时标题就是
                 # 空（smtc_tracker 因此不缓存空标题，每 2 秒重试）。已经有
                 # 字幕时绝不能清屏回去等 —— 那正是"看着看着字幕没了、
                 # 只剩一条提示"的来源。没字幕才提示并等下一拍。
                 if not cur["cues"]:
+                    # 空标题抖动期间若有预翻译正在跑，保持现状直接等下一拍 ——
+                    # 否则"等待视频播放"会覆盖掉"预翻译中 mm:ss"的进度显示，
+                    # 一闪一闪像死机。
+                    _st = (autocache.state_of(cur["title"])
+                           if autocache is not None and cur["title"] else None)
+                    if _st and _st.get("state") == "running":
+                        return
                     if tracker.has_session():
                         _status("已连上媒体会话，正在读取标题…")
                     else:
@@ -1186,14 +1238,21 @@ def _auto_main(args):
                         _log("SMTC 不上报时间线 → 启用本地时钟兜底"
                              "（Home 当前归零 / ←→ ±2s）")
                 _playing = bool(tracker.playing())
+                # 倍速：本地时钟按墙钟走，1.5x/2x 播放时每分钟漂几十秒。
+                # SMTC 虽不上报时间线，但倍速多数时候还在上报，乘上它。
+                try:
+                    _rate = max(0.25, float(tracker.rate() or 1.0))
+                except Exception:
+                    _rate = 1.0
                 if _playing:
                     if not clock["playing"]:
                         clock["t0"] = now
                         clock["playing"] = True
-                    pos = clock["base"] + (now - clock["t0"]) + clock["offset"]
+                    pos = clock["base"] + (now - clock["t0"]) * _rate \
+                        + clock["offset"]
                 else:
                     if clock["playing"]:
-                        clock["base"] += now - clock["t0"]
+                        clock["base"] += (now - clock["t0"]) * _rate
                         clock["playing"] = False
                     pos = clock["base"] + clock["offset"]
             else:
@@ -1204,14 +1263,33 @@ def _auto_main(args):
             # 进度拖动检测：跳变命中 → 清残留旧条目、强制按新位置重画。
             # 双通道：位置跳变（通用）+ SMTC 锚点级 seek 事件（更早半拍）。
             jumped = _jump.feed(pos)
-            n_seek = tracker.seek_serial()
+            try:
+                n_seek = tracker.seek_serial()
+            except Exception:
+                n_seek = cur["seek_n"]   # 位置源不支持锚点事件时只靠位置跳变
             if n_seek != cur["seek_n"]:
                 cur["seek_n"] = n_seek
                 jumped = True
             if jumped and pos is not None:
-                ov.clear()
-                cur["idx"] = -2
-                _log(f"检测到进度拖动 → 重新对齐 pos={pos:.1f}s")
+                # 重对齐限频（2026-10-18 实战修）：时间线不稳定源（多开
+                # 同播标签页 / 广告插播 / 直播）会让位置在几秒内跳好几次，
+                # 每次跳都 clear()+重画，观感就是"字幕乱跳、完全对不上"。
+                # 真人拖进度条不会 2 秒一次；2 秒窗口内的后续跳变只记
+                # 一条告警，不清屏。位置源修好后跳变本身会消失，这里是
+                # 给不可救药的源兜底。
+                _now = time.monotonic()
+                if _now - cur.get("resync_ts", 0.0) >= 2.0:
+                    cur["resync_ts"] = _now
+                    cur["storm_n"] = 0
+                    ov.clear()
+                    cur["idx"] = -2
+                    _log(f"检测到进度拖动 → 重新对齐 pos={pos:.1f}s")
+                else:
+                    cur["storm_n"] = cur.get("storm_n", 0) + 1
+                    if cur["storm_n"] == 3:
+                        _log("⚠ 短时间内多次位置跳变（同播标签页 / 广告"
+                             "插播 / 直播时间线），已抑制清屏；位置稳"
+                             "定 2s 后自动恢复精确对齐")
             if pos is None:
                 _status(f"字幕已就绪（{len(cur['cues'])} 条）"
                         f"　播放器未上报时间线；已启用本地时钟"

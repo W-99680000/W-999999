@@ -34,6 +34,7 @@ ctranslate2 的原生代码走 LoadLibrary 搜索路径，
 本模块的 enable_cuda_dlls() 做的就是这件事。
 """
 from __future__ import annotations
+import model_home  # noqa: E402,F401  # 先把模型目录钉到 D 盘（务必在 HF/faster-whisper 之前）
 
 import glob
 import os

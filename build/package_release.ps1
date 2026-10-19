@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     巴别塔计划 · 分发打包（portable zip，不含模型/缓存/日志）。
 
@@ -48,6 +48,8 @@ $rootNames = @(
     "smtc_tracker.py", "foreground.py", "model_registry.py",
     "model_registry.json", "hardware_detect.py", "model_manager.py",
     "startup_stats.py", "native_preload.py", "app.py", "admin_qt.py",
+    "model_home.py", "key_store.py", "subtitle_layout.py",
+    "qwen_asr_backend.py", "model_search.py", "subtitle_typeset.py",
     "start.bat", "stream.bat", "panel.bat", "watch.bat", "cache.bat",
     "admin.bat", "admin_qt.bat", "app.bat",
     "README.md", "requirements.txt", "LICENSE",
@@ -72,6 +74,7 @@ $dirs = @{
     "build"       = @("babel.spec", "build_exe.ps1", "package_release.ps1")
     "docs"        = @("DESKTOP.md", "QUALITY_ROADMAP.md", "RESEARCH_20261018_streaming_translation.md")
     "tools"       = @("doctor.py", "quality_report.py", "check_admin_html.py",
+                      "check_model_home.py",
                       "test_engine_control.py", "soak_test.py", "test_watchdog.py",
                       "test_watch_control.py", "test_overlay_control.py",
                       "check_qwen_terms.py")
@@ -100,21 +103,60 @@ $quick = @"
 巴别塔计划 · 快速开始
 =====================
 
-1) 安装 Python 3.10+（Windows 10/11）
-2) 在本目录打开 PowerShell：
-   pip install -r requirements.txt
-3) 安装入口（快捷方式，可选开机自启）：
-   powershell -ExecutionPolicy Bypass -File desktop\install.ps1
-   或直接双击 desktop\BabelPlan.vbs（无黑窗，托盘常驻）
-4) 双击桌面「巴别塔计划」→ 首页两个按钮：直播翻译 / 视频翻译
+1) 安装 Python 3.10+（Windows 10/11；安装时勾选 "Add Python to PATH"）
+2) 双击本目录的「安装.bat」：
+   - 自动 pip 安装依赖（requirements.txt）
+   - 创建桌面/开始菜单快捷方式（必要时重开终端让 PATH 生效）
+   也可手动：
+     pip install -r requirements.txt
+     powershell -ExecutionPolicy Bypass -File desktop\install.ps1
+3) 双击桌面「巴别塔计划」→ 首页两个按钮：直播翻译 / 视频翻译
 
+卸载：双击本目录的「卸载.bat」
 日志：%LOCALAPPDATA%\BabelPlan\app.log
-卸载：powershell -ExecutionPolicy Bypass -File desktop\install.ps1 -Uninstall
 
-说明：本包不含模型权重；首次用某模型会走模型仓库/HF 缓存。
-GPU 环境建议：pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+说明：本包不含模型权重；首次用某模型会走模型仓库（本地缓存统一在
+      项目 models\ 目录，不再写 C 盘）。GPU 环境建议：
+      pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
 "@
 Set-Content -LiteralPath (Join-Path $stage "快速开始.txt") -Value $quick -Encoding UTF8
+
+# ── 消费者双击安装/卸载 ─────────────────────────────────────
+$installBat = @"
+@echo off
+chcp 65001 >nul
+cd /d "%~dp0"
+where python >nul 2>nul
+if errorlevel 1 (
+  echo [错误] 没找到 python。请先安装 Python 3.10+ 并勾选 Add Python to PATH。
+  pause
+  exit /b 1
+)
+echo [1/2] 安装依赖（pip install -r requirements.txt）...
+python -m pip install -r requirements.txt
+if errorlevel 1 (
+  echo [错误] 依赖安装失败，请检查网络/Python 版本后重试。
+  pause
+  exit /b 1
+)
+echo [2/2] 创建桌面/开始菜单快捷方式...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0desktop\install.ps1"
+echo.
+echo 安装完成：双击桌面「巴别塔计划」开始使用。
+pause
+"@
+Set-Content -LiteralPath (Join-Path $stage "安装.bat") -Value $installBat -Encoding UTF8
+
+$uninstallBat = @"
+@echo off
+chcp 65001 >nul
+cd /d "%~dp0"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0desktop\install.ps1" -Uninstall
+echo.
+echo 已卸载快捷方式/开机自启；项目文件和日志保留。
+pause
+"@
+Set-Content -LiteralPath (Join-Path $stage "卸载.bat") -Value $uninstallBat -Encoding UTF8
 
 # ── 统计 / 压缩 ──────────────────────────────────────────────
 $files = Get-ChildItem -LiteralPath $stage -Recurse -File

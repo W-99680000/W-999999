@@ -29,6 +29,7 @@
 丢句问题从结构上消失，而窗口长度由 max_window 管住，缓冲天然有界。
 """
 from __future__ import annotations
+import model_home  # noqa: E402,F401  # 先把模型目录钉到 D 盘（务必在 HF/faster-whisper 之前）
 
 import re
 import threading

@@ -12,13 +12,14 @@
 下载源
 ======
   · faster-whisper  → HuggingFace `Systran/faster-whisper-*`
-                      落 ~/.cache/huggingface/hub（faster-whisper 自己会读）
+                      落 <项目>/models/hf_home/hub（HF_HOME 指向 D 盘，不再写 C 盘）
   · HY-MT GGUF      → HuggingFace 腾讯混元仓库，落项目 models/ 目录
                       （local_mt.MODEL_CANDIDATES 已认这里）
   · 网络环境在国内：默认走 HF_ENDPOINT 镜像（hf-mirror.com），可被环境变量覆盖。
   · **不走环境变量里的代理**（本机沙箱代理会改写本机行为，直连镜像最稳）。
 """
 from __future__ import annotations
+import model_home  # noqa: E402,F401  # 先把模型目录钉到 D 盘（务必在 HF/faster-whisper 之前）
 
 import json
 import os
@@ -65,6 +66,25 @@ _HYMT = {
                "mb": 7800, "vram": 3800},
 }
 
+# ── 二代/第三方本地 MT（llama-server，2026-10-19 接线）──────────
+# 与 _HYMT 分开：它们走 GGUF 内嵌 chat 模板（local_mt 的 gemma 分支 /
+# chat 端点），下载源也不同。file 只是"期望落地的文件名"，
+# 实际查找统一走 local_mt.resolve_model()。
+_MT_EXTRA = {
+    "hy-mt2-1.8b": {
+        "repo": "Tencent-Hunyuan/Hy-MT2-1.8B-GGUF",
+        "file": "Hy-MT2-1.8B-Q4_K_M.gguf",
+        "patterns": ["*Q4_K_M*.gguf"],
+        "mb": 1100, "vram": 1200, "name": "Hy-MT2 1.8B (GGUF)",
+    },
+    "translategemma-4b": {
+        "repo": "mradermacher/translategemma-4b-it-GGUF",
+        "file": "translategemma-4b-it-Q4_K_M.gguf",
+        "patterns": ["*Q4_K_M*.gguf"],
+        "mb": 2500, "vram": 3500, "name": "TranslateGemma 4B",
+    },
+}
+
 
 def _now() -> float:
     return time.time()
@@ -93,7 +113,7 @@ def _save_state(s: dict) -> None:
 # ── 安装状态 ─────────────────────────────────────────────────
 def whisper_installed(size: str) -> str | None:
     """faster-whisper 某档位的本地缓存目录；没装返回 None。"""
-    base = os.environ.get("HF_HOME") or os.path.expanduser("~/.cache/huggingface")
+    base = model_home.hf_home()
     hub = os.path.join(base, "hub", f"models--Systran--faster-whisper-{size}")
     if os.path.isdir(hub):
         snap = os.path.join(hub, "snapshots")
@@ -119,6 +139,20 @@ def hymt_installed(size: str) -> str | None:
         pass
     p = os.path.join(MODELS_DIR, name)
     return p if os.path.isfile(p) else None
+
+
+def mt_extra_installed(key: str) -> str | None:
+    """二代/第三方 MT 的 gguf 路径（走 local_mt 的统一解析）。"""
+    try:
+        from local_mt import resolve_model
+        p = resolve_model(f"local:{key}")
+        if p:
+            return p
+    except Exception:
+        pass
+    meta = _MT_EXTRA.get(key) or {}
+    p = os.path.join(MODELS_DIR, meta.get("file", ""))
+    return p if meta and os.path.isfile(p) else None
 
 
 def catalog() -> list[dict]:
@@ -150,6 +184,17 @@ def catalog() -> list[dict]:
             "status": "installed" if p else "downloadable",
             "path": p, "source": f"HF:{meta['repo']}",
             "note": "本地翻译（llama.cpp），零网络延迟、隐私不出机",
+        })
+    # 本地 MT（二代/第三方，llama-server chat 模板）
+    for key, meta in _MT_EXTRA.items():
+        p = mt_extra_installed(key)
+        out.append({
+            "id": f"local:{key}",
+            "name": meta["name"],
+            "group": "mt", "size_mb": meta["mb"], "vram_mb": meta["vram"],
+            "status": "installed" if p else "downloadable",
+            "path": p, "source": f"HF:{meta['repo']}",
+            "note": "本地翻译（llama.cpp chat 模板），零网络延迟",
         })
     # 远端（来自注册表，只读展示）
     try:
@@ -401,7 +446,7 @@ class DownloadJob:
 
 
 def _wip_dir(repo: str) -> str:
-    base = os.environ.get("HF_HOME") or os.path.expanduser("~/.cache/huggingface")
+    base = model_home.hf_home()
     return os.path.join(base, "hub",
                         "models--" + repo.replace("/", "--"))
 

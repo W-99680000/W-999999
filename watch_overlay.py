@@ -64,6 +64,7 @@ WS_POPUP、纯 Win32 CreateWindowExW 都不行。
     from watch_overlay import QtOverlay
 """
 from __future__ import annotations
+import model_home  # noqa: E402,F401  # 先把模型目录钉到 D 盘（务必在 HF/faster-whisper 之前）
 
 import json
 import os

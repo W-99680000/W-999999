@@ -1,4 +1,18 @@
-# live-subtitle　外文视频实时翻译字幕
+# 巴别塔计划（Babel Plan）· live-subtitle
+
+> **让每个人都能免费看懂外语视频。**
+>
+> 语言不该是信息的高墙。这个项目把「听懂外语视频」变成一件不需要付费、不需要上传视频、
+> 不需要依赖字幕组的事：实时识别 + 翻译 + 整片预翻译 + 中文字幕浮窗/ASS，全部在你自己机器上跑。
+> 它想做的事很朴素：**让更多人看到更开阔的世界、更真实的信息**。
+>
+> **开源与改造**：MIT License。代码、文档、脚本全部开放，任何人可以自由使用、复制、修改、
+> 分发、商用，或改成自己的版本，不需要额外授权。
+>
+> **边界**：工具本身不提供、不内置、不推荐任何影视资源、盗版源或下载地址；
+> 请只处理你合法访问、合法拥有的内容和公开素材。
+
+## live-subtitle　外文视频实时翻译字幕
 
 看外文视频，**既没字幕也没翻译**时，给你实时中文字幕。
 
@@ -155,6 +169,14 @@ WASAPI 环回只在系统音频引擎真在出声时才回传数据。
   不来）。新增 `native_preload.py`，在 Qt 之前用 ctypes 预载 c10.dll。
 - **环境体检**：`python tools/doctor.py`（解释器×依赖×CUDA DLL×GPU×
   模型缓存×端口×配置 JSON，一条命令回答"现在哪里坏了、怎么修"）。
+- **模型安装盘（2026-10-19）**：所有本地模型统一在 **D 盘项目内**，不再写 C 盘：
+  - `models/hf_home/hub/` —— faster-whisper 的 HuggingFace 缓存（HF_HOME）
+  - `models/whisper_cache/` —— 旧版 openai-whisper 的 `.pt`（历史遗留，已迁入归档）
+  - `models/Qwen3-ASR-*/`、`models/*.gguf` —— Qwen / HY-MT 权重
+  - `model_home.py` 在 import faster-whisper 之前设置 `HF_HOME/HUGGINGFACE_HUB_CACHE`；
+    `*.bat` 启动器也设同样的变量；`C:\Users\w\.cache\{huggingface,whisper,modelscope,torch}`
+    已改为指向 D 盘的 **junction**（旧路径/旧脚本照样能跑，实际写 D 盘）。
+  - 冒烟：`python tools/check_model_home.py --load-tiny`。
 
 ### GPU 上的识别成本（关键数字）
 
@@ -543,6 +565,55 @@ panel.bat
 缓存在 `pre_cache/`（按"来源 + 模型 + 目标语言"做键），`--force` 可重跑；
 翻译有断点续跑（中途 Ctrl+C，下次从断点继续）。
 
+### 识别后端：Qwen3-ASR（2026-10-19 起为视频翻译默认）
+
+视频翻译的识别模型从 faster-whisper large-v3 换成 **Qwen3-ASR-0.6B**
+（`--model qwen3-asr-0.6b`，注册表 `cache.asr` 已指向它）。同机 POC
+（`bench/eval_qwen3asr.py`）的实测：
+
+| 样本 | faster-whisper medium | Qwen3-ASR-0.6B |
+|---|---|---|
+| 中文 TTS 新闻腔 | CER 0.417 | **CER 0.000** |
+| 越南语 TTS 新闻腔 | WER 0.017 | **WER 0.000** |
+| 英语（JFK） | 持平 | 持平 |
+| 84s 越南语吵架（极端） | 复读 1.49% | 复读 7.26% ← 见下 |
+
+- whisper-medium 会把简体中文播报**转写成繁体**（那 0.417 全是简繁差异），
+  Qwen3-ASR 输出规范简体 —— 中文素材是免费的质量修复。
+- 后端在 `qwen_asr_backend.py`：把「VAD 切句 → 逐段转写 → 文本侧复读闸」
+  包成 faster-whisper 同款 `transcribe()`，下游 `iter_chunk_cues` 一行没改。
+- **为什么必须 VAD 前置**：LLM 系 ASR 不输出 nsp/logprob/compression_ratio，
+  原来的段级质量闸对它完全失效；整块长音频直接喂会复读（极端样本 7.26%）。
+  复读闸复用 `live_subtitle_v2.is_hallucination` + 相邻段同文判重。
+- **断句不依赖它的标点**：难样本上它退化成全小写无标点，切点来自 VAD 停顿
+  —— 这正是调研报告里 OptiSub（停顿驱动切分）路线的前提。
+- 语言检测在 `transcribe()` 返回前完成（先对首段做一次 LID）：调用方在
+  迭代前就要读 `info.language`，晚了会导致"只出原文不出译文"。
+- 换回 whisper：`--model large-v3`；升级 1.7B：
+  `python model_search.py install local:qwen3-asr-1.7b` 再
+  `--model qwen3-asr-1.7b`（3.4GB，4070 fp16 可跑）。
+
+### 模型库与检索（`model_registry.json` + `model_search.py`）
+
+`asr`/`mt` 池是"能选的接线项"；新增的 `catalog` 是**全量可检索目录**
+（识别/翻译/VAD/人声分离/强制对齐/说话人分离，含调研过但未接线的新模型，
+每条带 repo / 许可 / 参数量 / 发布月份）。
+
+```bash
+python model_search.py                     # 全库概览（按任务计数）
+python model_search.py 越南语 --task asr    # 中文关键词（自动映射成 vi/vietnamese）
+python model_search.py --task asr --lang vi --max-mb 2000
+python model_search.py --status catalog     # 只看未接线的观察项
+python model_search.py --online "vietnamese asr"     # 在线发现新模型
+python model_search.py install local:qwen3-asr-1.7b  # 搜到即装
+python model_search.py check                # 自检（不联网）
+```
+
+在线搜索走 HuggingFace 模型 API（免 key），国内网络自动回退
+`hf-mirror.com`；结果里 ★ 标记"本地已收录"。`wired:false` 的条目
+能查到但不能直接选 —— 界面必须标注，否则就是"选了没生效"。
+`model_registry.py check` 会核对池与目录不重复、条目字段齐全。
+
 ### 点播/缓存实时性修复（2026-10-18）
 
 **模块边界（重要）**：直播翻译（`start.bat` / `live_subtitle_v2.py`）负责
@@ -749,7 +820,11 @@ python gpu_setup.py                                 # 确认可用
 ```
 
 **模型下载**：首次运行会从 HuggingFace 下载 whisper 模型
-（medium 约 1.5GB、large-v3 约 3GB）。已经下过就有缓存，是秒级加载。
+（medium 约 1.5GB、large-v3 约 3GB），统一落在 **D 盘项目内**：
+`models/hf_home/hub/`（由 `model_home.py` / 启动脚本设置的 `HF_HOME` 决定）。
+已经下过就有缓存，是秒级加载；旧路径 `C:\Users\w\.cache\huggingface`
+已改成指向这里的 junction，不会再占 C 盘。
+检查：`python tools/check_model_home.py --load-tiny`。
 
 ---
 
@@ -1015,3 +1090,21 @@ MIT
   热重启引擎（直播加 --lang/--no-detect，视频预翻译加 --lang）。
 - 浮窗页「单行字幕长度」滑杆（8–60 字）可实时重排当前字幕，无需重启；
   预设：标准 24 / 双语 30 / 小说 20 / 极简 26。
+
+## 2026-10-19：识别故障修复 / ASS 排版 / 模型仓库补全
+
+- **视频翻译识别 0/1 修复**：根因是 `torch 2.13.0+cpu` + `load_qwen3_asr()`
+  用 ctranslate2 的 `gpu_available()` 判 CUDA（whisper 有 CUDA、torch 没有），
+  选中 `cuda` 后 `from_pretrained` 抛 AssertionError。已换 `torch==2.13.0+cu126`，
+  并把判据改成 `torch.cuda.is_available()`（无 CUDA 显式回退 CPU 并打印原因）。
+- **第三方排版**：新增 `subtitle_typeset.py`（pysubs2 1.9），出 `.ass`：
+  双语主/小字双样式、1920×1080 安全区、`WrapStyle=2`+`\fad(120,120)`、
+  每行 ≤24 视觉汉字且拉丁只在空格断。`pretranslate.py` 加
+  `--typeset ass|minimal|reading|none`（默认 ass），每次落盘同步重排，
+  缓存命中也补排。实测单条 0.019~0.024ms，整集 2242 条 43ms，
+  占翻译预算 0.006%~0.03%（`bench/bench_typeset.py` 可复跑）。
+- **模型仓库**：`Qwen3-ASR-1.7B` 已下载并可用（CUDA 实测 5 段/18s 用 5s）；
+  `Hy-MT2-1.8B`（Q4_K_M）与 `TranslateGemma-4B`（Q4_K_M）接线完成，
+  走 llama-server；TranslateGemma 需 `--no-jinja` + 官方结构化模板手工拼装。
+  catalog 补 5 条（whisper large-v3-turbo、Hy-MT2-7B/30B-A3B、
+  TranslateGemma-12B/27B）。`model_registry.py probe` 20/20 可用。

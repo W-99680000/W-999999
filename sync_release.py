@@ -42,6 +42,8 @@ ROOT_FILES = ["live_subtitle_v2.py", "overlay_qt.py", "streaming_asr.py",
               "watch.bat", "cache.bat",
               # ── 消费级桌面壳 / 环境自检 / 注册表 ─────────────
               "app.py", "native_preload.py",
+              "model_home.py", "key_store.py", "subtitle_layout.py",
+              "qwen_asr_backend.py", "model_search.py", "subtitle_typeset.py",
               "model_registry.py", "model_registry.json",
               "hardware_detect.py", "model_manager.py",
               "startup_stats.py", "device_placement.py", "device_pref.py"]

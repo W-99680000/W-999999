@@ -28,6 +28,7 @@
     python pretranslate.py 电影.mp4 --force            # 忽略缓存重跑
 """
 from __future__ import annotations
+import model_home  # noqa: E402,F401  # 先把模型目录钉到 D 盘（务必在 HF/faster-whisper 之前）
 
 import argparse
 import hashlib
@@ -145,11 +146,23 @@ def _fetch_bilibili(src):
     为什么不用 yt-dlp：实测它的 B 站提取器被风控（无 cookie 时连续
     "No video formats found"），而公开 API 只要带对 UA + Referer。
     只需要音频，fnval=16 要 DASH 列表，挑码率最高的一条音轨即可。
+
+    分 P（2026-10-18 实战修）：多 P 视频的 view API 顶层 cid/duration
+    永远是 **P1** 的。用户看 P2（如 KPL 总决赛"第二局"）时，反查到
+    的 URL 带不带 ?p=2 都好，旧代码下下来的都是 P1 的音频 —— 字幕
+    文件名对、内容全错，观感就是"视频和字幕根本不在一个时间轴上"。
+    现在解析 URL 的 p 参数，用 pages[p-1] 的 cid/时长/分P标题；
+    音频缓存键也从 {bvid}.m4a 变为 {bvid}_p{N}.m4a（P1 保持旧名，
+    不作废已有缓存）。
     """
     m = re.search(r"(BV[0-9A-Za-z]+)", src or "")
     if not m:
         return None
     bvid = m.group(1)
+    pnum = 1
+    mp = re.search(r"[?&]p=(\d+)", src or "")
+    if mp:
+        pnum = max(1, int(mp.group(1)))
     hdr = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                          "AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
            "Referer": "https://www.bilibili.com"}
@@ -166,7 +179,25 @@ def _fetch_bilibili(src):
         dur = float(d.get("duration") or 0)
         if not cid:
             return None
-        out = os.path.join(URL_DIR, f"{bvid}.m4a")
+        pages = d.get("pages") or []
+        if pnum > 1 or len(pages) > 1:
+            pg = pages[pnum - 1] if 1 <= pnum <= len(pages) else None
+            if pnum > 1:
+                if pg is None:
+                    print(f"  B 站：BV {bvid} 没有 P{pnum}"
+                          f"（共 {len(pages)} P），按 P1 处理")
+                    pg = pages[0] if pages else None
+                    pnum = 1
+            if pg:
+                cid = pg.get("cid") or cid
+                dur = float(pg.get("duration") or 0) or dur
+                part = (pg.get("part") or "").strip()
+                # P>1 用分P标题命名字幕（SMTC 播分P时上报的就是它）；
+                # P1 用 BV 主标题（保持与历史缓存/匹配规则兼容）
+                if pnum > 1:
+                    title = part or f"{d.get('title') or bvid} P{pnum}"
+        cache_key = bvid if pnum == 1 else f"{bvid}_p{pnum}"
+        out = os.path.join(URL_DIR, f"{cache_key}.m4a")
         if not (os.path.isfile(out) and os.path.getsize(out) > 0):
             p = _get("https://api.bilibili.com/x/player/playurl"
                      f"?bvid={bvid}&cid={cid}&fnval=16&fnver=0&fourk=0")
@@ -178,7 +209,8 @@ def _fetch_bilibili(src):
             if not au:
                 return None
             os.makedirs(URL_DIR, exist_ok=True)
-            print(f"  下载音频：{title}（{dur/60:.1f} 分钟，B 站 API）")
+            print(f"  下载音频：{title}（{dur/60:.1f} 分钟，B 站 API"
+                  f"{'，P' + str(pnum) if pnum > 1 else ''}）")
             r = _ur.Request(au, headers=hdr)
             with _ur.urlopen(r, timeout=30) as resp, open(out, "wb") as f:
                 while True:
@@ -187,7 +219,7 @@ def _fetch_bilibili(src):
                         break
                     f.write(chunk)
         else:
-            print(f"  音频已缓存：{bvid}.m4a")
+            print(f"  音频已缓存：{cache_key}.m4a")
         if not os.path.getsize(out):
             return None
         return (out, title, "url:" + src,
@@ -249,7 +281,7 @@ def _hf_model_cached(name):
     if not name or os.path.isdir(str(name)):
         return False
     key = str(name).lower().replace("_", "-")
-    hub = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+    hub = model_home.hf_hub_dir()
     try:
         for d in os.listdir(hub):
             dl = d.lower()
@@ -264,7 +296,14 @@ def load_asr(model_name):
     """加载识别模型（一次，之后所有块共用）。
 
     为什么拆出来：分块流水要在一次运行里转写很多块，模型只该加载一次。
+
+    qwen3-asr* / local:qwen3-asr* 走 qwen_asr_backend（faster-whisper
+    兼容包装：VAD 切句 → 逐段转写 → 复读闸，POC 结论的上线形态）。
     """
+    if str(model_name).lower().replace("_", "-").startswith(
+            ("qwen3-asr", "local:qwen3-asr")):
+        from qwen_asr_backend import load_qwen3_asr
+        return load_qwen3_asr(model_name)
     from faster_whisper import WhisperModel
     device, ctype = "cpu", "int8"
     try:
@@ -381,6 +420,14 @@ class Cue:
         self.start, self.end, self.text = float(start), float(end), text
 
 
+def _is_term_word(word_text):
+    """这个词是否句末。中文标点直接判；英文句点要求"字母+."，且
+    前一字符是小写字母 —— "game." 判句末，"U.S."/"3.5" 不判。"""
+    t = (word_text or "").rstrip()
+    return t.endswith(TERM_PUNCT) or bool(
+        t.endswith(".") and len(t) >= 2 and t[-2].islower())
+
+
 def _seg_sentences(seg):
     """把一条 whisper 段按词级时间戳切成句子（标点断句）。"""
     words = [w for w in (getattr(seg, "words", None) or [])]
@@ -390,7 +437,7 @@ def _seg_sentences(seg):
     sents, buf = [], []
     for w in words:
         buf.append(w)
-        if (w.word or "").rstrip().endswith(TERM_PUNCT):
+        if _is_term_word(w.word):
             sents.append(buf)
             buf = []
     if buf:
@@ -408,9 +455,17 @@ def _seg_sentences(seg):
     return out
 
 
-def _split_long(start, end, text):
-    """单句过长：交给 subtitle_layout 按标点/空格/字符边界切，避免断字。"""
-    parts = _split_cue_layout(start, end, "", text)
+def _split_long(start, end, text, max_chars=None, max_dur=None):
+    """单句过长：交给 subtitle_layout 按标点/空格/字符边界切，避免断字。
+
+    max_chars/max_dur：显示上限。默认用 subtitle_layout 的紧上限（24
+    字/5.5s，预切）；shape 层传放宽上限（42 字/8s），只拆真正超长的
+    —— 语义合并（_try_merge）凑出的整句不回拆，交给 MT 整句翻，碎片
+    译文质量远低于整句。None 表示该维度不限。
+    """
+    mc = max_chars if max_chars else 10 ** 9
+    md = max_dur if max_dur else 10 ** 9
+    parts = _split_cue_layout(start, end, "", text, max_chars=mc, max_dur=md)
     return [(a, b, src) for a, b, _zh, src in parts if src]
 
 
@@ -436,8 +491,14 @@ def _mk_pseudo_seg(words, mark=""):
                            text=txt, words=ws)
 
 
-def split_batched_segments(segs, gap=0.75, max_seg=8.0, min_run=1.5):
-    """批推理的粗 segment → 按词间静音 gap 重切（无标点也能切出句子感）。"""
+def split_batched_segments(segs, gap=0.45, max_seg=6.0, min_run=0.9):
+    """批推理的粗 segment → 按词间静音 gap 重切（无标点也能切出句子感）。
+
+    参数按中文解说语速（5-7 字/秒）实测：停顿 0.45s 就值得考虑切
+    （0.75s 的旧值会十几秒不切、最后被 _split_long 硬劈）；句末标点
+    （。）阈值 0.9s。切得碎没关系 —— _try_merge 会按语义把半句
+    优先接回去，"细切 + 语义合并"比"粗切 + 硬拆"自然得多。
+    """
     out = []
     for seg in segs:
         words = list(getattr(seg, "words", None) or [])
@@ -452,8 +513,8 @@ def split_batched_segments(segs, gap=0.75, max_seg=8.0, min_run=1.5):
             gap_t = float(w.start) - float(cur[-1].end)
             dur = float(cur[-1].end) - float(cur[0].start)
             if (gap_t >= gap and dur >= min_run) or dur >= max_seg:
-                # 停顿 ≥1.2s 视为句末，否则按句中断开补逗号
-                mark = "。" if gap_t >= 1.2 else "，"
+                # 停顿 ≥0.9s 视为句末，否则按句中断开补逗号
+                mark = "。" if gap_t >= 0.9 else "，"
                 ps = _mk_pseudo_seg(cur, mark=mark)
                 if ps is not None:
                     out.append(ps)
@@ -467,10 +528,22 @@ def split_batched_segments(segs, gap=0.75, max_seg=8.0, min_run=1.5):
 
 
 def shape_batched_cues(cues):
-    """把 build_cues 之后仍然过长的 cue 按 MAX_CUE_DUR/MAX_CUE_CHARS 再切。"""
+    """把 build_cues 之后仍然过长的 cue 按放宽上限再切。
+
+    关键：只拆真正超长（>42 字 / >8s）的，其余原样保留 —— build_cues
+    里 _try_merge 已经按语义把半句接成整句，这里若再用 24/5.5 的紧
+    上限回切，整句会被重新切碎，碎片译文质量远低于整句（live 路线的
+    教训）。"细切 + 语义合并"才是对的顺序。
+    """
     out = []
     for c in cues:
-        for st, en, txt in _split_long(c.start, c.end, c.text):
+        dur = c.end - c.start
+        n = len(re.sub(r"\s+", "", c.text or ""))
+        if dur <= 8.0 and n <= 42:
+            out.append(c)
+            continue
+        for st, en, txt in _split_long(c.start, c.end, c.text,
+                                       max_chars=42, max_dur=8.0):
             out.append(Cue(st, en, txt))
     _min_duration_fixup(out)
     return out
@@ -535,20 +608,37 @@ def _min_duration_fixup(cues):
             c.end = min(c.start + 1.2, nxt)
 
 
+def _ends_term(text):
+    return (text or "").rstrip().endswith(TERM_PUNCT)
+
+
 def _try_merge(cur, pst, pen, ptxt):
-    """build_cues / iter_chunk_cues 共用的"并入当前 cue"规则。"""
-    if cur is not None \
-            and pen - cur.start <= MAX_CUE_DUR \
-            and len(cur.text) + len(ptxt) <= MAX_CUE_CHARS:
-        cur.end = pen
-        # 句间是否补空格：CJK 规范是不加（"。"后直接接下一句），
-        # 拉丁系必须加（"?Mày" → "? Mày"），否则词黏在一起
-        need_sp = bool(cur.text and ptxt) and not (
-            re.search(r"[぀-ヿ一-鿿]$", cur.text)
-            or re.match(r"[぀-ヿ一-鿿]", ptxt))
-        cur.text = cur.text + (" " if need_sp else "") + ptxt
-        return cur
-    return None
+    """build_cues / iter_chunk_cues 共用的"并入当前 cue"规则。
+
+    语义感知（断句自然感的关键）：
+    · 当前 cue 已是完整句（。！？…!? 结尾）→ **不再向后黏**。
+      完整短句独立显示本来就是字幕规范（"好。""来了。"）。
+    · 当前 cue 是悬空半句（逗号结尾 / 无标点截断）→ 放宽上限
+      （dur×1.45 / chars×1.4）优先把语义半句接上 —— 否则观众会看到
+      "我们看这波团战，" 这种挂着半条就换屏的破句。
+    """
+    if cur is None:
+        return None
+    term = _ends_term(cur.text)
+    if term:
+        return None
+    max_dur = MAX_CUE_DUR * 1.6
+    max_chars = MAX_CUE_CHARS * 1.4
+    if pen - cur.start > max_dur or len(cur.text) + len(ptxt) > max_chars:
+        return None
+    cur.end = pen
+    # 句间是否补空格：CJK 规范是不加（"。"后直接接下一句），
+    # 拉丁系必须加（"?Mày" → "? Mày"），否则词黏在一起
+    need_sp = bool(cur.text and ptxt) and not (
+        re.search(r"[぀-ヿ一-鿿]$", cur.text)
+        or re.match(r"[぀-ヿ一-鿿]", ptxt))
+    cur.text = cur.text + (" " if need_sp else "") + ptxt
+    return cur
 
 
 def transcribe_batched(pipe, audio, lang=None, prompt=None, tag="",
@@ -630,19 +720,25 @@ def iter_chunk_cues(model, audio, lang=None, prompt=None, tag="",
 # 后一块译前做一次"缝合"：上块末 cue 不是完整句（无终止标点）、与
 # 本块首 cue 几乎贴在一起、合并不超长 → 合成一条**整句**重译。
 
-def _should_stitch(prev, nxt, max_gap=0.4):
-    """prev（上块末 cue）与 nxt（本块首 cue）是否该缝合成一句。"""
+def _should_stitch(prev, nxt):
+    """prev（上块末 cue）与 nxt（本块首 cue）是否该缝合成一句。
+
+    语义感知：prev 是悬空半句（无句末标点）→ 放宽间隙与上限优先缝
+    （解说语流块间停 0.5~0.6s 很常见，0.4 的旧值会漏缝）；prev 已是
+    完整句 → 不缝。与 _try_merge 的规则保持一致。
+    """
     if prev is None or nxt is None:
         return False
+    max_gap = 0.4 if _ends_term(prev.text) else 0.7
     if nxt.start - prev.end > max_gap:      # 间隙大 = 真两句
         return False
     if nxt.start < prev.start - 0.1:        # 时间倒挂，异常，不碰
         return False
-    if prev.text.rstrip().endswith(TERM_PUNCT):
+    if _ends_term(prev.text):
         return False                        # 上块末已是完整句
     dur = nxt.end - prev.start
     chars = len(prev.text) + len(nxt.text)
-    return dur <= MAX_CUE_DUR + 2.0 and chars <= MAX_CUE_CHARS * 1.6
+    return dur <= MAX_CUE_DUR * 1.6 and chars <= MAX_CUE_CHARS * 1.4
 
 
 def stitch_boundary(cues, part, done):
@@ -668,11 +764,31 @@ def stitch_boundary(cues, part, done):
 # 翻译（复用 live 路线的 Translator / translate_batch）
 # ══════════════════════════════════════════════════════════
 
-def make_translator(dst, src_hint=None, mt_local=False, terms=None):
+def _mt_model_from_registry():
+    """视频模式该用哪个本地 gguf：优先取注册表 cache.mt 的本地项。
+
+    为什么需要：界面上选 `local:hy-mt2-1.8b` 后，`modes.cache.mt` 就是这个
+    id；但如果不把它翻译成 gguf 路径，`local_mt.from_args()` 会按候选表
+    取**第一个**存在的文件（hh-translate-base）—— 现象是"选了没生效"。
+    """
+    try:
+        import model_registry as R
+        mid = R.resolve("cache").get("mt") or ""
+        if mid.startswith("local:") or mid.startswith("offline:"):
+            from local_mt import resolve_model
+            return resolve_model(mid)
+    except Exception:
+        pass
+    return None
+
+
+def make_translator(dst, src_hint=None, mt_local=False, terms=None,
+                    mt_model=None):
     import live_subtitle_v2 as M
     if mt_local and not M.LOCAL_MT:
         from local_mt import from_args as _local_from_args
-        lm = _local_from_args(terms=terms or [])
+        _m = mt_model or _mt_model_from_registry()
+        lm = _local_from_args(model=_m, terms=terms or [])
         if lm is not None:
             M.LOCAL_MT.append(lm)
     tr = M.Translator("auto", dst)
@@ -876,6 +992,20 @@ def process(src, args):
             and meta.get("complete"):
         print("  缓存命中（同一来源 + 同一模型 + 同一目标语言），直接复用。")
         print(f"  想重跑加 --force")
+        # 缓存命中也要补排版：老缓存里可能根本没有 .ass，
+        # 或者之前用的是别的样式 —— 不补的话"改了样式没生效"。
+        _style = getattr(args, "typeset", "ass") or "none"
+        if _style != "none":
+            try:
+                import subtitle_typeset as _T
+                if _T.available():
+                    _o = _T.srt_to_ass(srt_path,
+                                       os.path.splitext(srt_path)[0] + ".ass",
+                                       style=_style)
+                    if _o:
+                        print(f"  排版：{os.path.basename(_o)}")
+            except Exception as _e:
+                print(f"  排版跳过（{type(_e).__name__}: {_e}）")
         return srt_path
 
     # ── 解码（一次；分块只是切这段数组，不重复解容器）──
@@ -900,7 +1030,9 @@ def process(src, args):
     model = load_asr(args.model)
     _asr_pipe = None
     _asr_batch = int(getattr(args, "asr_batch", 0) or 0)
-    if _asr_batch > 0:
+    if _asr_batch > 0 and not getattr(model, "is_qwen3_backend", False):
+        # BatchedInferencePipeline 是 ctranslate2 专属 —— qwen 后端
+        # 自带按 VAD 段逐段调用，批推理这条加速路对它没有意义。
         try:
             from faster_whisper import BatchedInferencePipeline
             _asr_pipe = BatchedInferencePipeline(model=model)
@@ -917,6 +1049,32 @@ def process(src, args):
     print("            每凑够一批就立刻落盘，观看端可边看边等")
     t0 = time.time()
 
+    _ts_stat = {"calls": 0, "ms": 0.0, "path": ""}
+
+    def _typeset(_p):
+        """第三方排版（pysubs2 → .ass）。纯 CPU，跑在翻译落盘之后。
+
+        为什么放在 _flush 里：srt 是边译边长，ASS 也得跟着长，否则
+        播放器看到的样式字幕永远只有开头一段。每次重排 <1ms/条。
+        """
+        style = getattr(args, "typeset", "ass") or "none"
+        if style == "none":
+            return
+        try:
+            import subtitle_typeset as _T
+            if not _T.available():
+                return
+            t1 = time.time()
+            out = _T.srt_to_ass(_p, os.path.splitext(_p)[0] + ".ass",
+                                style=style)
+            if out:
+                _ts_stat["calls"] += 1
+                _ts_stat["ms"] += (time.time() - t1) * 1000
+                _ts_stat["path"] = out
+        except Exception as _e:
+            if _ts_stat["calls"] == 0:
+                print(f"  排版跳过（{type(_e).__name__}: {_e}）")
+
     def _flush(_p=srt_path, _c=cues, _d=done):
         # 每译完一批就重写 srt —— 这就是"先翻译一部分就显示"
         _min_duration_fixup(_c)          # 幂等，中间态也没有一闪而过的短条
@@ -926,6 +1084,7 @@ def process(src, args):
         except Exception:
             pass
         write_srt(_p, _c, _d)
+        _typeset(_p)
 
     try:
       for k, (a, b) in enumerate(cuts, 1):
@@ -991,7 +1150,9 @@ def process(src, args):
                       f"（置信 {info_box.get('language_probability', 0):.2f}）")
                 tr = make_translator(args.to, src_hint=info_box["language"],
                                      mt_local=args.mt_local,
-                                     terms=_load_terms(args))
+                                     terms=_load_terms(args),
+                                     mt_model=getattr(args, "mt_local_model",
+                                                      None))
             # 本块第一批 4 条就翻（首屏再压几秒），之后按 mt_batch 走
             batch_gate = 4 if not got_flushed else args.mt_batch
             if tr is not None and len(buf) >= batch_gate:
@@ -1004,7 +1165,9 @@ def process(src, args):
                   f"（置信 {info_box.get('language_probability', 0):.2f}）")
             tr = make_translator(args.to, src_hint=info_box["language"],
                                  mt_local=args.mt_local,
-                                 terms=_load_terms(args))
+                                 terms=_load_terms(args),
+                                 mt_model=getattr(args, "mt_local_model",
+                                                  None))
         if not got_any and not buf:
             print(f"  第 {k} 块没有识别到语音")
             continue
@@ -1058,6 +1221,12 @@ def process(src, args):
     print(f"  完成：{srt_path}")
     print(f"  字幕 {len(cues)} 条，译文 {zh_n} 条，"
           f"总用时 {time.time()-t0:.0f}s")
+    if _ts_stat["path"]:
+        # 排版开销单独报：这是"加排版会不会拖慢翻译"的现场答案
+        print(f"  排版：{os.path.basename(_ts_stat['path'])}"
+              f"（重排 {_ts_stat['calls']} 次，累计 "
+              f"{_ts_stat['ms']:.0f}ms，均摊 "
+              f"{_ts_stat['ms']/max(1, _ts_stat['calls']):.1f}ms/次）")
     print(f"  播放器加载它即可（mpv/PotPlayer 对同名 srt 会自动加载）")
     return srt_path
 
@@ -1092,6 +1261,9 @@ def build_parser():
                     help="一次调用合并翻译的条数（默认 8；失败自动退回逐条）")
     ap.add_argument("--mt-local", action="store_true",
                     help="用本地 HY-MT 翻译（完全离线）")
+    ap.add_argument("--mt-local-model", default=None,
+                    help="本地译器 gguf：路径，或注册表 id（local:hy-mt2-1.8b、"
+                         "local:translategemma-4b…）。不给则取注册表 cache.mt")
     ap.add_argument("--cps-max", type=float, default=20.0,
                     help="字幕 CPS 上限（字符/秒；0=关）。超标的 cue 用相邻"
                          "静音间隙延长显示（切句不降 CPS，压缩译文留后续）")
@@ -1101,6 +1273,10 @@ def build_parser():
     ap.add_argument("--terms", action="append", default=[],
                     help="术语：'源词=译法' 或术语表文件（仅 --mt-local 生效）")
     ap.add_argument("--force", action="store_true", help="忽略缓存重跑")
+    ap.add_argument("--typeset", default="ass",
+                    choices=["ass", "minimal", "reading", "none"],
+                    help="第三方排版（pysubs2 → .ass）：ass=双语（默认）、"
+                         "minimal=单语极简、reading=大字号底框、none=不排")
     ap.add_argument("--no-registry", action="store_true",
                     help="不用 model_registry.json 里的默认模型，"
                          "回到本文件里写死的默认值")

@@ -109,6 +109,50 @@ MODEL_FAMILIES = {
     "hy7": lambda body: SOT + body + EX0,
 }
 
+# 走 /v1/chat/completions 的家族（模板由 llama-server 按 GGUF 内嵌
+# tokenizer.chat_template 自动应用，不再手拼 token 标记）：
+#   hymt2  Hy-MT2 系列（hunyuan_v1_dense，token 体系与 hy18/hy7 都不同，
+#          官方提示词文本与 TPL_ZH 一致，直接复用）
+#   gemma  TranslateGemma / Gemma3-it（start_turn/end_turn 体系）
+CHAT_FAMILIES = {"hymt2", "gemma"}
+
+#: TranslateGemma 模板里要用的语言名（模板内部自己查表，这里我们拼文本）
+_LANG_EN = {
+    "zh": "Chinese", "zh-CN": "Chinese", "zh-TW": "Traditional Chinese",
+    "en": "English", "vi": "Vietnamese", "ja": "Japanese", "ko": "Korean",
+    "th": "Thai", "id": "Indonesian", "ms": "Malay", "ru": "Russian",
+    "fr": "French", "de": "German", "es": "Spanish", "pt": "Portuguese",
+    "it": "Italian", "ar": "Arabic", "hi": "Hindi", "tr": "Turkish",
+}
+
+
+def _guess_lang_code(text):
+    """粗判源语言（只给 Gemma 模板的提示头用，判错不影响可读性）。
+    CJK → zh / 日文假名 → ja / 韩文 → ko / 越南语声调符号 → vi / 西里尔 → ru。
+    """
+    import re as _re
+    if _re.search(r"[\u3040-\u30ff]", text):
+        return "ja"
+    if _re.search(r"[\uac00-\ud7af]", text):
+        return "ko"
+    if _re.search(r"[\u4e00-\u9fff]", text):
+        return "zh"
+    if _re.search(r"[\u0400-\u04ff]", text):
+        return "ru"
+    if _re.search(r"[ăâđêôơưĂÂĐÊÔƠƯ]", text) or _re.search(
+            r"[àáảãạằắẳẵặầấẩẫậèéẻẽẹềếểễệ]", text):
+        return "vi"
+    return "en"
+
+
+def _read_gguf_str(f, vt):
+    """读一项字符串型 GGUF 元数据值；非字符串返回 None。"""
+    if vt == 8:
+        n = struct.unpack("<Q", f.read(8))[0]
+        return f.read(n).decode("utf-8", "replace")
+    _skip_gguf_value(f, vt)
+    return None
+
 
 def _skip_gguf_value(f, vt):
     """跳过一项 GGUF 元数据值（只为找 bos_token_id，别的不需要）。"""
@@ -131,11 +175,14 @@ def _skip_gguf_value(f, vt):
 
 
 def detect_family(path):
-    """判断模型是 1.8B 一代还是 7B 一代。
+    """判断模型家族，决定用哪套提示词包装。
 
-    看 **bos token id** —— 两代之间最明确的区别（120000 vs 127958）。
-    读不到就按文件大小兜底（7B 的 Q4 约 4.4GB，1.8B 约 1.1GB）。
+    优先读 **general.architecture / general.name**（Hy-MT2、TranslateGemma
+    这类新模型靠它识别）；读不到再退回 bos token id（hy18/hy7 两代的
+    区别是 120000 vs 127958），最后按文件大小兜底。
     """
+    arch = name = None
+    bos = None
     try:
         with open(path, "rb") as f:
             if f.read(4) != b"GGUF":
@@ -148,11 +195,26 @@ def detect_family(path):
                 key = f.read(n).decode("utf-8", "replace")
                 vt = struct.unpack("<I", f.read(4))[0]
                 if key == "tokenizer.ggml.bos_token_id" and vt == 4:
-                    v = struct.unpack("<I", f.read(4))[0]
-                    return "hy7" if v > 126000 else "hy18"
-                _skip_gguf_value(f, vt)
+                    bos = struct.unpack("<I", f.read(4))[0]
+                elif key in ("general.architecture", "general.name",
+                             "general.basename"):
+                    v = _read_gguf_str(f, vt)
+                    if v:
+                        if key == "general.architecture":
+                            arch = v.lower()
+                        else:
+                            name = (name or "") + " " + v.lower()
+                else:
+                    _skip_gguf_value(f, vt)
     except Exception:
         pass
+    if arch and "gemma" in arch:
+        return "gemma"
+    ident = f"{arch or ''} {name or ''}"
+    if "hy-mt2" in ident or "hymt2" in ident or "hunyuan_v1" in ident:
+        return "hymt2"
+    if bos is not None:
+        return "hy7" if bos > 126000 else "hy18"
     try:
         return "hy7" if os.path.getsize(path) > 3_000_000_000 else "hy18"
     except Exception:
@@ -206,6 +268,26 @@ def find_model():
     return None
 
 
+def resolve_model(model):
+    """把多种写法统一成 gguf 实际路径。
+
+    支持：① 已经是存在的文件路径 → 原样返回
+          ② 注册表 id（local:hy-mt2-1.8b / local:hh-translate-base / ...）
+          ③ 名字片段（"hy-mt2"、"translategemma"、"base"）
+    按候选表 basename 包含匹配；找不到返回 None（调用方报错，别静默换模型）。
+    """
+    if not model:
+        return find_model()
+    m = str(model)
+    if os.path.isfile(m):
+        return m
+    key = m.split(":", 1)[-1].lower().replace("hh-translate-", "")
+    for p in MODEL_CANDIDATES:
+        if p and os.path.isfile(p) and key in os.path.basename(p).lower():
+            return p
+    return None
+
+
 def available():
     """本地翻译是否可用（二进制 + 模型都在）。返回 (ok, 原因)。"""
     if find_binary() is None:
@@ -221,13 +303,16 @@ class LocalMT:
     def __init__(self, model=None, port=8145, n_ctx=1024, n_gpu_layers=99,
                  prompt_template=None, start_timeout=180, target="中文",
                  params=None, terms=None):
-        self.model = model or find_model()
+        self.model = resolve_model(model)
         self.bin = find_binary()
         self.port = int(port)
         self.n_ctx = int(n_ctx)
         self.ngl = int(n_gpu_layers)
         self.tpl = prompt_template or TPL_ZH
         self.target = target or "中文"
+        # 源语言码（Gemma 模板头用）。调用方可 set_src() 覆盖；
+        # 不设就按文本粗判（见 _guess_lang_code）。
+        self.src = None
         self.params = dict(OFFICIAL_PARAMS)
         if params:
             self.params.update(params)
@@ -248,6 +333,11 @@ class LocalMT:
     def base(self):
         return f"http://127.0.0.1:{self.port}"
 
+    def set_src(self, code):
+        """设置源语言码（"vi"/"en"/…）。Gemma 模板头用它。"""
+        self.src = (str(code).strip().lower() if code else None)
+        return self
+
     def start(self):
         if not self.ok:
             return False
@@ -256,6 +346,11 @@ class LocalMT:
         args = [self.bin, "--model", self.model, "-ngl", str(self.ngl),
                 "-c", str(self.n_ctx), "--port", str(self.port),
                 "--host", "127.0.0.1"]
+        if self.family == "gemma":
+            # gemma3 的内嵌 chat_template 要求结构化 content，llama-server
+            # 在 init 期会渲染一条假消息做校验 → jinja 抛异常 → 进程退出。
+            # 我们本来就自己拼模板走 /completion，不需要它渲染。
+            args.append("--no-jinja")
         t0 = time.time()
         self.proc = subprocess.Popen(
             args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -304,26 +399,91 @@ class LocalMT:
             prompt = body
         else:
             prompt = self.tpl.format(target=self.target, src=text)
-        payload = {"prompt": MODEL_FAMILIES[self.family](prompt),
-                   "n_predict": max(64, 6 * len(text)),
-                   "stream": False}
-        payload.update(self.params)
-        body = json.dumps(payload, ensure_ascii=False).encode()
-        req = urllib.request.Request(self.base + "/completion", data=body,
-                                    headers={"Content-Type": "application/json"})
         t0 = time.time()
         try:
-            with urllib.request.urlopen(req, timeout=60) as r:
-                j = json.loads(r.read().decode("utf-8", "replace"))
+            if self.family == "gemma":
+                # TranslateGemma 的官方模板要求结构化 content（llama-server
+                # 的 chat 端点在 init 期就会拿不到 mapping 而报
+                # "User role must provide `content`..."）。它本质上就是
+                # 一段固定文本，自己拼完走 /completion 最稳。
+                out = self._gemma(prompt, text)
+            elif self.family in CHAT_FAMILIES:
+                out = self._chat(prompt)
+            else:
+                payload = {"prompt": MODEL_FAMILIES[self.family](prompt),
+                           "n_predict": max(64, 6 * len(text)),
+                           "stream": False}
+                payload.update(self.params)
+                body = json.dumps(payload, ensure_ascii=False).encode()
+                req = urllib.request.Request(
+                    self.base + "/completion", data=body,
+                    headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    j = json.loads(r.read().decode("utf-8", "replace"))
+                out = (j.get("content") or "").strip()
         except Exception as e:
             self.fails += 1
             self.last_err = f"{type(e).__name__}: {str(e)[:100]}"
             return ""
         self.calls += 1
         self.t_last = time.time() - t0
-        out = (j.get("content") or "").strip()
         # 只取第一行（模型偶尔会续写）
         return out.split("\n")[0].strip()
+
+    def _gemma(self, prompt, raw_text):
+        """TranslateGemma 官方模板（从 GGUF 的 chat_template 原文复刻）。
+
+        模板要点：单轮 user + 严格格式头 + `<end_of_turn>` + 生成提示。
+        源语言码走 self.src（调用方可用 set_src 改；默认按文本猜）。
+        """
+        src_code = self.src or _guess_lang_code(raw_text)
+        src_name = _LANG_EN.get(src_code, src_code)
+        dst_code = "zh-CN" if str(self.target).startswith("中文") or \
+            str(self.target).lower() in ("zh", "zh-cn") else "en"
+        dst_name = _LANG_EN.get(dst_code, dst_code)
+        head = (f"You are a professional {src_name} ({src_code}) to "
+                f"{dst_name} ({dst_code}) translator. Your goal is to "
+                f"accurately convey the meaning and nuances of the original "
+                f"{src_name} text while adhering to {dst_name} grammar, "
+                f"vocabulary, and cultural sensitivities.\n")
+        body = (f"Produce only the {dst_name} translation, without any "
+                f"additional explanations or commentary. Please translate "
+                f"the following {src_name} text into {dst_name}:\n\n\n"
+                f"{raw_text}")
+        full = (f"<start_of_turn>user\n{head}{body}<end_of_turn>\n"
+                f"<start_of_turn>model\n")
+        payload = {"prompt": full,
+                   "n_predict": max(64, 6 * len(raw_text)),
+                   "stream": False, "temperature": 0.2, "top_p": 0.9,
+                   "top_k": 40, "repeat_penalty": 1.05}
+        body_json = json.dumps(payload, ensure_ascii=False).encode()
+        req = urllib.request.Request(self.base + "/completion",
+                                     data=body_json,
+                                     headers={"Content-Type":
+                                              "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            j = json.loads(r.read().decode("utf-8", "replace"))
+        return (j.get("content") or "").strip()
+
+    def _chat(self, prompt):
+        """/v1/chat/completions 路径（CHAT_FAMILIES 专用）。"""
+        payload = {"messages": [{"role": "user", "content": prompt}],
+                   "stream": False,
+                   "max_tokens": max(64, 6 * len(prompt) // 4),
+                   # 翻译任务要稳定输出：低采样。Hy-MT2 官方推荐参数
+                   # 与一代相同（temperature 0.7 / top_p 0.6 / top_k 20）
+                   "temperature": self.params.get("temperature", 0.7),
+                   "top_p": self.params.get("top_p", 0.6),
+                   "top_k": self.params.get("top_k", 20),
+                   "repeat_penalty": self.params.get("repeat_penalty", 1.05)}
+        body = json.dumps(payload, ensure_ascii=False).encode()
+        req = urllib.request.Request(self.base + "/v1/chat/completions",
+                                     data=body,
+                                     headers={"Content-Type":
+                                              "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            j = json.loads(r.read().decode("utf-8", "replace"))
+        return (j["choices"][0]["message"].get("content") or "").strip()
 
     def status(self):
         if not self.ok:

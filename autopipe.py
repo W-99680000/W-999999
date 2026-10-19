@@ -25,6 +25,7 @@ ensure_async() 立刻返回，工作在线程里做；结果塞进一个事件�
 """
 
 from __future__ import annotations
+import model_home  # noqa: E402,F401  # 先把模型目录钉到 D 盘（务必在 HF/faster-whisper 之前）
 
 import os
 import queue
@@ -46,29 +47,73 @@ def _py_exe():
     return sys.executable or "python"
 
 
+def _bilibili_view(url):
+    """B 站 view API 一次拿全：主标题、总时长、各分 P 的
+    (cid, part, duration)。非 B 站链接/失败返回 None。
+    消歧和下载共用它 —— 一次请求把"这是哪部片/哪一集/多长"全问清。"""
+    import json as _json
+    import urllib.request as _ur
+    m = re.search(r"(BV[0-9A-Za-z]+)", url or "")
+    if not m:
+        return None
+    try:
+        req = _ur.Request(
+            "https://api.bilibili.com/x/web-interface/view?bvid="
+            + m.group(1),
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; "
+                                   "Win64; x64) AppleWebKit/537.36 "
+                                   "Chrome/120.0 Safari/537.36",
+                     "Referer": "https://www.bilibili.com"})
+        d = (_json.loads(_ur.urlopen(req, timeout=8).read().decode())
+             .get("data") or {})
+        if not d:
+            return None
+        return {"bvid": m.group(1),
+                "title": d.get("title") or "",
+                "duration": float(d.get("duration") or 0),
+                "pages": [{"p": i + 1,
+                           "part": (pg.get("part") or "").strip(),
+                           "duration": float(pg.get("duration") or 0)}
+                          for i, pg in enumerate(d.get("pages") or [])]}
+    except Exception:
+        return None
+
+
+def _url_page(url):
+    """URL 里的 p= 分 P 号（缺省 = P1）。"""
+    m = re.search(r"[?&]p=(\d+)", url or "")
+    return max(1, int(m.group(1))) if m else 1
+
+
+def _with_page(url, p):
+    """给 URL 强制写上 p= 参数（消歧后纠正"拿错分 P"用）。"""
+    p = max(1, int(p))
+    if _url_page(url) == p:
+        return url
+    if re.search(r"[?&]p=\d+", url or ""):
+        return re.sub(r"([?&])p=\d+", lambda m: f"{m.group(1)}p={p}", url)
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}p={p}"
+
+
 def probe_duration(url):
     """探一个网址的总时长（秒），探不到返回 None。
 
     只服务于"哪个候选才是正在播的那个"这一件事，所以必须快：
     B 站直接问它的公开 API（一次请求，几十毫秒），其他站点才动用 yt-dlp。
+
+    分 P 感知（2026-10-18 修）：带 p= 的 URL 必须报**那一 P** 的时长。
+    旧代码不管 p 参数一律返回 P1 时长 —— 同一 BV 的 P1/P2 时长只要
+    相近，消歧形同虚设，"第二局"就可能拿成第一局的字幕。
     """
-    import json as _json
-    import urllib.request as _ur
-    m = re.search(r"(BV[0-9A-Za-z]+)", url or "")
-    if m:
-        try:
-            req = _ur.Request(
-                "https://api.bilibili.com/x/web-interface/view?bvid="
-                + m.group(1),
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; "
-                                       "Win64; x64) AppleWebKit/537.36 "
-                                       "Chrome/120.0 Safari/537.36",
-                         "Referer": "https://www.bilibili.com"})
-            d = _json.loads(_ur.urlopen(req, timeout=8).read().decode())
-            dur = float(((d.get("data") or {}).get("duration")) or 0)
-            return dur or None
-        except Exception:
-            return None
+    v = _bilibili_view(url)
+    if v is not None:
+        p = _url_page(url)
+        if p > 1:
+            pgs = v["pages"]
+            if 1 <= p <= len(pgs):
+                return pgs[p - 1]["duration"] or None
+        return v["duration"] or None
     try:
         import yt_dlp
         with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True,
@@ -117,8 +162,53 @@ def run_pretranslate(src, dst="zh", on_progress=None, on_target=None,
     tail = []
     # 预翻译的进度是**回车覆盖**写的（"\r识别 46%"），按行读会全挤成
     # 一整行，所以这里两种换行都切开。
-    for raw in proc.stdout:
-        for line in (raw or "").replace("\r", "\n").split("\n"):
+    #
+    # 静默看门狗：原来的 `for raw in proc.stdout` 是纯阻塞读 —— 子进程
+    # 一旦挂死（网络栈卡住/解码器死锁/驱动问题），这个工作线程就永远
+    # 堵在管道上，任务永远"running"，浮窗永远"预翻译中"，而且占着
+    # 显存不放。改成读线程 + 队列：超过 SILENCE_LIMIT 秒没有任何输出
+    # 且进程还活着 → 直接杀掉，让上层按失败走（有冷却重试兜底）。
+    silence_limit = float(os.environ.get("BABEL_PRETRANS_SILENCE", "180"))
+    line_q = queue.Queue()
+
+    def _reader():
+        try:
+            for raw in proc.stdout:
+                line_q.put(raw)
+        except Exception:
+            pass
+        finally:
+            line_q.put(None)             # EOF 哨兵
+
+    threading.Thread(target=_reader, daemon=True).start()
+    last_line_at = time.time()
+    killed_silence = False
+    while True:
+        try:
+            raw = line_q.get(timeout=1.0)
+        except queue.Empty:
+            raw = ""
+        if raw is None:                  # 子进程 stdout 关闭 = 进程退出
+            break
+        if raw:
+            last_line_at = time.time()
+        elif proc.poll() is not None:
+            # 进程已退但读线程还没把尾部送完 —— 继续取，直到 EOF
+            continue
+        if proc.poll() is None \
+                and time.time() - last_line_at > silence_limit:
+            killed_silence = True
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            if on_progress:
+                on_progress(f"子进程 {int(silence_limit)}s 无输出，"
+                            "已按卡死处理（kill）")
+            break
+        if not raw:
+            continue
+        for line in raw.replace("\r", "\n").split("\n"):
             line = line.strip()
             if not line:
                 continue
@@ -136,7 +226,15 @@ def run_pretranslate(src, dst="zh", on_progress=None, on_target=None,
                     r"|未译出|已出字幕到|分块流水"
                     r"|\[download\].*?\d+%|下载.*?\d+%", line):
                 on_progress(line)
-    proc.wait()
+    try:
+        proc.wait(timeout=10)
+    except Exception:
+        pass
+
+    if killed_silence:
+        if on_progress:
+            on_progress("预翻译失败：子进程无响应被终止")
+        return None
 
     if target and os.path.isfile(target) and proc.returncode == 0:
         return target
@@ -255,26 +353,87 @@ class AutoCache:
         self._q.put(ev)
 
     # ── 工作线程 ──
-    def _pick_candidate(self, nt, cands, expect):
-        """多个候选网址时，用"时长"挑出真正在播的那个。
+    def _pick_candidate(self, nt, cands, expect, smtc_title=""):
+        """多个候选网址时挑出真正在播的那个。
 
         为什么需要：实测同一标题在历史里对应多个网址（B 站推荐位自动
         连播边换 URL 边沿用旧标题）。只按最近访问取，就会取错片子 ——
-        拿错网址去预翻译，字幕自然全不对。时长是唯一稳定判据。
+        拿错网址去预翻译，字幕自然全不对。
+
+        三层判据（2026-10-18 实战修，KPL 多 P 合集翻车后重写）：
+        ① 分 P 标题匹配（最强）：多 P 合集的各分 P 有自己的名字
+           （"第一局/第二局"…），SMTC 在播分 P 时上报的就是分 P 标题。
+           命中 → 锁定该 P，URL 不带 p= 也补上。
+        ② 分 P 时长匹配：SMTC 报的时长对上哪一 P 就是哪一 P
+           （只在"恰有一 P 吻合"时才敢补 p，防 P1/P2 时长相近时瞎猜）。
+        ③ 整条 URL 时长匹配（原逻辑，但 probe_duration 已分 P 感知；
+           命中者里带 p= 的优先 —— 那是分 P 级证据，更硬）。
+        全对不上 → 最近访问兜底 + 多 P 合集明确告警（拿错分 P 的字幕
+        一定全错，不能让用户以为"翻译质量差"）。
         """
-        if len(cands) == 1:
+        if len(cands) == 1 and not (smtc_title or expect):
             return cands[0]["url"]
-        if not expect:
-            return cands[0]["url"]
-        tol = max(3.0, 0.03 * float(expect))
-        self._set_running(nt, "有多个候选，按时长核对…", "resolve")
+        from browser_history import norm_title as _nt
+        view = None
         for c in cands[:4]:
-            d = probe_duration(c["url"])
-            self.log(f"[autopipe] 候选时长 {d}（期望 {expect:.0f}s）"
-                     f" {c['url'][:56]}")
-            if d and abs(d - float(expect)) <= tol:
-                return c["url"]
-        self.log("[autopipe] 没有候选时长对得上，退回最近访问那个")
+            view = _bilibili_view(c["url"])
+            if view:
+                break
+        # ① 分 P 标题匹配（单候选也做：历史里只有合集卡片 URL 时，
+        #   唯一候选也可能指向错误的分 P，照样按标题把它纠正过来）
+        if view and view["pages"] and smtc_title:
+            st = _nt(smtc_title)
+            for pg in view["pages"]:
+                pt = _nt(pg["part"])
+                if pt and (pt in st or st in pt):
+                    want = pg["p"]
+                    if want == 1:
+                        break          # P1 就是默认行为，无需纠正
+                    self.log(f"[autopipe] 分P标题命中: P{want} "
+                             f"{pg['part'][:32]!r} → 补/选 p={want}")
+                    for c in cands:
+                        if _url_page(c["url"]) == want:
+                            return c["url"]
+                    return _with_page(cands[0]["url"], want)
+        # ②③ 时长匹配
+        if expect:
+            tol = max(3.0, 0.03 * float(expect))
+            self._set_running(nt, "有多个候选，按时长核对…", "resolve")
+            hits = []
+            for c in cands[:4]:
+                d = probe_duration(c["url"])
+                self.log(f"[autopipe] 候选时长 {d}（期望 {expect:.0f}s）"
+                         f" {c['url'][:56]}")
+                if d and abs(d - float(expect)) <= tol:
+                    hits.append(c["url"])
+            if hits:
+                for u in hits:            # 带 p= 的命中优先（分P级证据）
+                    if _url_page(u) > 1:
+                        return u
+            # 多 P 合集按分 P 时长找"唯一吻合"的那一 P —— 命中的整
+            # URL 没带 p 时补上；一个都没命中时也走这里（B 站对多 P
+            # 合集报的顶层时长是**各分 P 总和**，整 URL 时长永远对不上
+            # 在播的分 P，这是 2026-10-18 KPL 案例的直接死因）。
+            if view and len(view.get("pages") or []) > 1:
+                fit = [pg for pg in view["pages"]
+                       if pg["duration"]
+                       and abs(pg["duration"] - float(expect)) <= tol]
+                if len(fit) == 1 and fit[0]["p"] > 1:
+                    self.log(f"[autopipe] 分P P{fit[0]['p']} 时长唯一吻合"
+                             f"（{fit[0]['duration']/60:.1f} 分钟）"
+                             f" → 补 p={fit[0]['p']}")
+                    base = hits[0] if hits else cands[0]["url"]
+                    return _with_page(base, fit[0]["p"])
+                if not hits and len(fit) != 1:
+                    self.log("[autopipe] 多P合集中没有唯一吻合的分P，"
+                             "退回最近访问")
+            if hits:
+                return hits[0]
+            self.log("[autopipe] 没有候选时长对得上，退回最近访问那个")
+        if view and len(view.get("pages") or []) > 1:
+            self.log(f"[autopipe] ⚠ 这是 {len(view['pages'])} P 的合集"
+                     f"（{view['title'][:36]!r}），选错分 P 字幕会全错；"
+                     f"若字幕不对，可用 cache.bat 手动指定分 P 网址")
         return cands[0]["url"]
 
     def _worker(self, nt, title, dst, url, dur_provider=None):
@@ -339,7 +498,8 @@ class AutoCache:
                 if cands[0].get("relaxed"):
                     self.log(f"[autopipe] {title!r} 严格档未中，"
                              f"用放宽档候选 {cands[0]['url'][:56]}")
-                url = self._pick_candidate(nt, cands, expect)
+                url = self._pick_candidate(nt, cands, expect,
+                                           smtc_title=title)
             # 预计耗时：实测约 0.16x 音频时长（识别 8.7x 实时 + 翻译）
             est = ""
             if expect:

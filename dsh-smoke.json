@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "name": "live-subtitle 冒烟",
+  "defaults": {
+    "timeoutMs": 180000
+  },
+  "checks": [
+    {
+      "id": "model_home",
+      "type": "command",
+      "title": "模型路径全在 D 盘 + 可离线加载",
+      "command": "python -X utf8 tools/check_model_home.py --load-tiny",
+      "expect": {
+        "exitCode": 0,
+        "stdoutContains": [
+          "OK: 模型全部从 D 盘解析"
+        ]
+      }
+    },
+    {
+      "id": "print_models_live",
+      "type": "command",
+      "title": "实时模块模型解析",
+      "command": "python -X utf8 live_subtitle_v2.py --print-models",
+      "expect": {
+        "exitCode": 0,
+        "stdoutContains": [
+          "large-v3",
+          "base"
+        ]
+      }
+    },
+    {
+      "id": "print_models_cache",
+      "type": "command",
+      "title": "视频翻译模型解析",
+      "command": "python -X utf8 pretranslate.py --print-models samples/tts_zh.wav",
+      "expect": {
+        "exitCode": 0,
+        "stdoutContains": [
+          "qwen3-asr-0.6b"
+        ]
+      }
+    },
+    {
+      "id": "hf_medium_dir",
+      "type": "file",
+      "title": "HF medium 缓存在 D 盘",
+      "path": "models/hf_home/hub/models--Systran--faster-whisper-medium",
+      "expect": {
+        "exists": true
+      }
+    },
+    {
+      "id": "model_home_module",
+      "type": "file",
+      "title": "model_home 已接线",
+      "path": "model_home.py",
+      "expect": {
+        "exists": true,
+        "contains": "HUGGINGFACE_HUB_CACHE"
+      }
+    },
+    {
+      "id": "bat_env",
+      "type": "file",
+      "title": "启动器设置 HF_HOME",
+      "path": "start.bat",
+      "expect": {
+        "exists": true,
+        "contains": "HF_HOME=%~dp0models\\hf_home"
+      }
+    },
+    {
+      "id": "doctor",
+      "type": "command",
+      "title": "环境体检（缓存/GPU/端口）",
+      "command": "python -X utf8 tools/doctor.py",
+      "expect": {
+        "exitCode": 0,
+        "stdoutContains": [
+          "faster-whisper 缓存"
+        ]
+      }
+    }
+  ]
+}

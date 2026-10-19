@@ -102,6 +102,10 @@ class SmtcTracker:
         倍速：外推必须乘 playback_rate —— 1.5x/2x 倍速看视频时按 1.0x
         推算，字幕每分钟能漂出几十秒。Chrome/Edge 会经 SMTC 上报倍速；
         读不到（老系统 / 播放器不报）就按 1.0 处理。
+
+        上限：上报时刻可能非常陈旧（夸克只在 seek 时刷新），外推不能
+        越过总时长 —— 否则片尾之后字幕还在往前走，bisect 一直命中
+        最后一条 cue 赖在屏上。有时长就钳到时长。
         """
         with self._lock:
             if self._pos is None:
@@ -111,8 +115,15 @@ class SmtcTracker:
                 now = datetime.now(timezone.utc)
                 if ts.tzinfo is None:
                     ts = ts.replace(tzinfo=timezone.utc)
-                return max(0.0, pos + (now - ts).total_seconds() * self._rate)
+                pos = max(0.0, pos + (now - ts).total_seconds() * self._rate)
+            if self._dur and self._dur > 0:
+                pos = min(pos, self._dur)
             return pos
+
+    def rate(self):
+        """当前播放倍速（读不到按 1.0）。本地时钟兜底外推时要用。"""
+        with self._lock:
+            return self._rate
 
     def playing(self):
         with self._lock:
@@ -153,7 +164,7 @@ class SmtcTracker:
 
     # ── seek 检测 ──
     @staticmethod
-    def _anchor_jumped(old, new, playing, threshold=1.5):
+    def _anchor_jumped(old, new, playing, threshold=1.5, rate=1.0):
         """新旧两个时间线锚点 (pos, ts) 是否构成一次"拖动进度条"。
 
         判据：把旧锚点外推到新锚点的时刻（播放中才外推，暂停时位置
@@ -161,6 +172,11 @@ class SmtcTracker:
         进度条（或切了集），不是正常播放能走到的范围。
         ts 是 datetime（UTC 或 naive），允许为 None（不能外推时只看
         位置差）。
+
+        外推必须乘倍速：2x 播放时两个上报点之间的真实位移是
+        2×墙钟间隔。不乘的话，只要播放器的时间线刷新间隔超过
+        threshold/rate（2x 时仅 0.75s），每次正常刷新都会被误判成
+        seek —— 浮窗被反复清空重画，字幕一闪一闪。
         """
         if old is None or new is None:
             return False
@@ -173,7 +189,8 @@ class SmtcTracker:
             try:
                 a = o_ts if o_ts.tzinfo else o_ts.replace(tzinfo=timezone.utc)
                 b = n_ts if n_ts.tzinfo else n_ts.replace(tzinfo=timezone.utc)
-                extrap = o_pos + max(0.0, (b - a).total_seconds())
+                extrap = o_pos + max(0.0, (b - a).total_seconds()) \
+                    * max(0.25, float(rate or 1.0))
             except Exception:
                 extrap = o_pos
         return abs(n_pos - extrap) > threshold
@@ -189,7 +206,8 @@ class SmtcTracker:
             return self._seek_at
 
     # ── 内部 ──
-    def _set(self, pos, ts, playing, title, source, alive=True, dur=None):
+    def _set(self, pos, ts, playing, title, source, alive=True, dur=None,
+             rate=None):
         with self._lock:
             self._pos = None if pos is None else (pos, ts)
             self._playing = playing
@@ -197,6 +215,8 @@ class SmtcTracker:
             self._source = source
             self._alive = alive
             self._dur = dur
+            if rate is not None:
+                self._rate = rate
 
     def _run(self):
         loop = asyncio.new_event_loop()
@@ -213,11 +233,22 @@ class SmtcTracker:
 
     async def _poll_loop(self):
         mgr = await _Mgr.request_async()
+        err_ts = 0.0
         while not self._stop.is_set():
             try:
                 await self._tick(mgr)
-            except Exception:
-                pass
+            except Exception as e:
+                # 不能裸吞：轮询线程一出错就永远静默，字幕停了没人知道
+                # 为什么。限频记一行（30s 一条，不刷爆 watch.log）。
+                now = time.monotonic()
+                if now - err_ts > 30.0:
+                    err_ts = now
+                    if self._log:
+                        try:
+                            self._log(f"[smtc] 轮询异常: "
+                                      f"{type(e).__name__}: {e}")
+                        except Exception:
+                            pass
             await asyncio.sleep(self.poll)
 
     # ── 会话识别（稳定键）───────────────────────────────────────
@@ -377,23 +408,45 @@ class SmtcTracker:
         else:
             self._challenger_key = cand["key"]
             self._chall_streak = 1
-        chosen = next((i for i in infos if i["key"] == self._session_key),
-                      cand)
+        # 同键会话消歧（2026-10-18 实战修）：**同应用同标题**的多开会话
+        # （两个夸克标签页放同一个视频，或正片页 + 预览页）稳定键相同，
+        # 旧代码每拍取 infos 里第一个 —— get_sessions() 顺序一抖，位置
+        # 就在两个会话间来回跳（实测 700s↔52s 反复横跳，每次都被当 seek
+        # 清屏重画）。消歧规则：优先"时间线在前进的"，其次"在播的"，
+        # 再按"离上次已知位置最近"——正片每拍都贴着自己的轨迹，预览页
+        # 永远差得远，一旦锁定就不会再抖。
+        same = [i for i in infos if i["key"] == self._session_key]
+        if len(same) == 1:
+            chosen = same[0]
+        elif not same:
+            chosen = cand
+        else:
+            with self._lock:
+                last_pos = self._pos[0] if self._pos else None
+
+            def _tie(i):
+                dist = 1e9
+                if i["pos"] is not None and last_pos is not None:
+                    dist = abs(i["pos"] - last_pos)
+                return (not i["advancing"], not i["playing"], dist)
+
+            same.sort(key=_tie)
+            chosen = same[0]
         self._session = chosen["s"]
         # ④ 锚点级 seek 检测：同一部片的新锚点跳变 → 用户拖了进度条
         if chosen["pos"] is not None and chosen["ts"] is not None:
             with self._lock:
                 old_anchor = self._anchor
             if self._anchor_jumped(old_anchor, (chosen["pos"], chosen["ts"]),
-                                   chosen["playing"]):
+                                   chosen["playing"], rate=chosen["rate"]):
                 with self._lock:
                     self._seek_n += 1
                     self._seek_at = time.monotonic()
             with self._lock:
                 self._anchor = (chosen["pos"], chosen["ts"])
-        self._rate = chosen["rate"]
         self._set(chosen["pos"], chosen["ts"], chosen["playing"],
-                  chosen["title"], chosen["aumid"], dur=chosen["dur"])
+                  chosen["title"], chosen["aumid"], dur=chosen["dur"],
+                  rate=chosen["rate"])
 
 
 if __name__ == "__main__":

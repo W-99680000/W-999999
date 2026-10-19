@@ -40,6 +40,8 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+sys.path.insert(0, ROOT)
+import model_home  # noqa: E402,F401  # HF_HOME 必须在 huggingface_hub 之前钉到 D 盘
 
 # 运行时真正会用到的第三方模块（按功能分组，便于报错说清"哪个功能没了"）
 GROUPS = {
@@ -71,6 +73,7 @@ print(json.dumps({"exe": sys.executable, "py": sys.version.split()[0],
 
 def candidates() -> list[str]:
     try:
+        sys.path.insert(0, ROOT)
         sys.path.insert(0, os.path.join(ROOT, "babel_admin"))
         import dlls  # type: ignore
         return dlls.candidates()
@@ -128,8 +131,8 @@ def check_host() -> dict:
             out["nvidia_smi"] = [x.strip() for x in line[0].split(",")]
     except Exception:
         pass
-    # HF faster-whisper 模型缓存
-    hub = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+    # HF faster-whisper 模型缓存（HF_HOME 由 model_home 指向 D 盘）
+    hub = model_home.hf_hub_dir()
     if os.path.isdir(hub):
         size = 0
         for d in os.listdir(hub):
