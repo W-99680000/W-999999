@@ -11,6 +11,9 @@
 >
 > **边界**：工具本身不提供、不内置、不推荐任何影视资源、盗版源或下载地址；
 > 请只处理你合法访问、合法拥有的内容和公开素材。
+>
+> **下载安装包（Windows）**：[GitHub Releases](https://github.com/W-99680000/W-999999/releases/latest)
+> · 解压后双击 `安装.bat` 即可。
 
 ## live-subtitle　外文视频实时翻译字幕
 
