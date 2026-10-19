@@ -11,6 +11,7 @@ PyQt5>=5.15                  # 透明置顶浮窗
 argostranslate>=1.9          # 离线翻译（注意：没有 vi->zh 直连包）
 winsdk>=1.0.0b10 ; sys_platform == "win32"   # SMTC 系统媒体会话（watch_player 自动同步/常驻模式用）
 yt-dlp>=2024.1             # 网页视频拉音频（pretranslate，B 站有官方 API 兜底）
+imageio-ffmpeg>=0.6        # YouTube 等 HLS/m3u8 下载需要 ffmpeg（自带静态二进制；PyAV 只负责解码）
 PyAV>=11                   # 本地视频免 ffmpeg 解码（pretranslate）
 jieba>=0.42                # 中文词边界（字幕断句/断行；未装也能跑）
 pysubs2>=1.9               # 第三方排版：ASS/SSA 样式字幕（subtitle_typeset.py）

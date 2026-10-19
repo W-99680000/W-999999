@@ -21,9 +21,9 @@
     "loopback": {
       "label": "直播翻译",
       "goal": "低延迟：音频播出来才存在，等不起",
-      "asr": "local:faster-whisper-large-v3",
+      "asr": "local:qwen3-asr-0.6b",
       "asr_stream": null,
-      "mt": "local:hy-mt2-1.8b",
+      "mt": "local:hh-translate-medium",
       "params": {
         "max_batch": 2.0,
         "max_wait": 1.2,
@@ -41,7 +41,7 @@
       "goal": "高准确：整片先识别后翻译，首句零延迟",
       "asr": "local:qwen3-asr-0.6b",
       "asr_stream": null,
-      "mt": "local:hh-translate-medium",
+      "mt": "local:hy-mt2-1.8b",
       "params": {
         "mt_batch": 8,
         "force": false

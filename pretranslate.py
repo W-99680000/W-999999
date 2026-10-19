@@ -35,6 +35,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 import time
 
@@ -85,6 +86,18 @@ def _md5_head_tail(path, n=1 << 20):
     return h.hexdigest()[:16]
 
 
+def _ffmpeg_dir():
+    """找 ffmpeg 所在目录：PATH 优先，其次 imageio-ffmpeg 自带的静态包。"""
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return os.path.dirname(exe)
+    try:
+        import imageio_ffmpeg
+        return os.path.dirname(imageio_ffmpeg.get_ffmpeg_exe())
+    except Exception:
+        return None
+
+
 def resolve_source(src):
     """返回 (音频路径, 展示名, 缓存键, srt输出路径, 时长提示秒)。
 
@@ -119,6 +132,12 @@ def resolve_source(src):
     title = info.get("title") or "video"
     vid = info.get("id") or hashlib.md5(src.encode()).hexdigest()[:12]
     dur = float(info.get("duration") or 0)
+    if info.get("is_live"):
+        # 直播是无限长的：整片预翻译会永远下不完，也不是这个模块该干的事。
+        # 直接给出可执行的下一步，别让用户对着"预翻译失败"猜。
+        print("  ！这是直播流：整片预翻译不适用。"
+              "请切到「直播翻译」模式（实时抓系统播放的声音）。", flush=True)
+        raise SystemExit(2)
     # 已下载过就直接用（按 id 找，不管扩展名）
     for ext in ("m4a", "webm", "opus", "mp3", "aac", "mp4"):
         p = os.path.join(URL_DIR, f"{vid}.{ext}")
@@ -129,7 +148,17 @@ def resolve_source(src):
     print(f"  下载音频：{title}（{dur/60:.0f} 分钟）")
     out_tmpl = os.path.join(URL_DIR, f"{vid}.%(ext)s")
     dl_opts = {"quiet": True, "no_warnings": True, "noplaylist": True,
-               "format": "bestaudio/best", "outtmpl": out_tmpl}
+               "format": "bestaudio/best", "outtmpl": out_tmpl,
+               # HLS 优先用 yt-dlp 自带下载器：它跟随 Python/系统代理；
+               # ffmpeg 是独立进程，不会自动走系统代理，直连 googlevideo
+               # 在代理环境会报 "Error number -138"。ffmpeg_location 仍保留，
+               # 供需要转封装/合并的格式使用。
+               "hls_prefer_native": True}
+    # YouTube 等站的 HLS（m3u8）下载需要 ffmpeg；PyAV 只负责本地解码。
+    # imageio-ffmpeg 自带静态 ffmpeg，装了就自动用，不用用户配 PATH。
+    ff_dir = _ffmpeg_dir()
+    if ff_dir:
+        dl_opts["ffmpeg_location"] = ff_dir
     with yt_dlp.YoutubeDL(dl_opts) as y:
         y.download([src])
     for ext in ("m4a", "webm", "opus", "mp3", "aac", "mp4"):

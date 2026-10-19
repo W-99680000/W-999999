@@ -829,6 +829,12 @@ python gpu_setup.py                                 # 确认可用
 已改成指向这里的 junction，不会再占 C 盘。
 检查：`python tools/check_model_home.py --load-tiny`。
 
+**网页视频下载（YouTube / B 站等）**：
+- m3u8/HLS 下载需要 ffmpeg；`requirements.txt` 已包含 `imageio-ffmpeg`，
+  `pretranslate.py` 会自动定位（也认 PATH 里的 ffmpeg）。
+- **YouTube 直播是无限流**：不要用「视频翻译 / 整片预翻译」，请切「直播翻译」
+  模式（实时抓系统播放的声音）。视频翻译只处理有限时长的点播视频。
+
 ---
 
 ## 自检

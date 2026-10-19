@@ -25,7 +25,7 @@
       "expect": {
         "exitCode": 0,
         "stdoutContains": [
-          "large-v3",
+          "识别 --model",
           "base"
         ]
       }
@@ -80,6 +80,18 @@
         "exitCode": 0,
         "stdoutContains": [
           "faster-whisper 缓存"
+        ]
+      }
+    },
+    {
+      "id": "ffmpeg",
+      "type": "command",
+      "title": "HLS 下载所需的 ffmpeg 可用",
+      "command": "python -X utf8 -c \"from pretranslate import _ffmpeg_dir; p=_ffmpeg_dir(); assert p, 'ffmpeg missing'; print('ffmpeg_dir=' + p)\"",
+      "expect": {
+        "exitCode": 0,
+        "stdoutContains": [
+          "ffmpeg_dir="
         ]
       }
     }
